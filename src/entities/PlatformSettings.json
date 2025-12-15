@@ -1,0 +1,33 @@
+{
+  "name": "PlatformSettings",
+  "type": "object",
+  "properties": {
+    "setting_key": {
+      "type": "string",
+      "description": "Setting identifier"
+    },
+    "setting_value": {
+      "type": "string",
+      "description": "Setting value"
+    },
+    "setting_type": {
+      "type": "string",
+      "enum": [
+        "text",
+        "boolean",
+        "number",
+        "json"
+      ],
+      "default": "text",
+      "description": "Type of setting"
+    },
+    "description": {
+      "type": "string",
+      "description": "What this setting controls"
+    }
+  },
+  "required": [
+    "setting_key",
+    "setting_value"
+  ]
+}

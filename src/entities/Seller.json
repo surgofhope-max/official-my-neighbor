@@ -1,0 +1,91 @@
+{
+  "name": "Seller",
+  "type": "object",
+  "properties": {
+    "business_name": {
+      "type": "string",
+      "description": "Business or seller name"
+    },
+    "contact_phone": {
+      "type": "string",
+      "description": "Contact phone number"
+    },
+    "contact_email": {
+      "type": "string",
+      "description": "Contact email"
+    },
+    "pickup_address": {
+      "type": "string",
+      "description": "Physical pickup location address"
+    },
+    "pickup_city": {
+      "type": "string",
+      "description": "City for pickup"
+    },
+    "pickup_state": {
+      "type": "string",
+      "default": "Arizona",
+      "description": "State for pickup"
+    },
+    "pickup_zip": {
+      "type": "string",
+      "description": "ZIP code for pickup"
+    },
+    "pickup_notes": {
+      "type": "string",
+      "description": "Additional pickup instructions"
+    },
+    "stripe_account_id": {
+      "type": "string",
+      "description": "Stripe Connect account ID"
+    },
+    "stripe_connected": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether Stripe account is connected"
+    },
+    "stripe_connected_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When Stripe was connected"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "approved",
+        "declined",
+        "suspended"
+      ],
+      "default": "pending",
+      "description": "Seller approval status"
+    },
+    "status_reason": {
+      "type": "string",
+      "description": "Reason for decline or suspension"
+    },
+    "profile_image_url": {
+      "type": "string",
+      "description": "Seller profile/logo image"
+    },
+    "bio": {
+      "type": "string",
+      "description": "Seller bio/description"
+    },
+    "total_sales": {
+      "type": "number",
+      "default": 0,
+      "description": "Total number of completed sales"
+    },
+    "total_revenue": {
+      "type": "number",
+      "default": 0,
+      "description": "Total revenue (tracking only)"
+    }
+  },
+  "required": [
+    "business_name",
+    "contact_email",
+    "pickup_address"
+  ]
+}

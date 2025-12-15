@@ -1,0 +1,92 @@
+{
+  "name": "Order",
+  "type": "object",
+  "properties": {
+    "buyer_id": {
+      "type": "string",
+      "description": "ID of buyer"
+    },
+    "buyer_name": {
+      "type": "string",
+      "description": "Buyer name"
+    },
+    "buyer_phone": {
+      "type": "string",
+      "description": "Buyer phone"
+    },
+    "buyer_email": {
+      "type": "string",
+      "description": "Buyer email"
+    },
+    "seller_id": {
+      "type": "string",
+      "description": "ID of seller"
+    },
+    "product_id": {
+      "type": "string",
+      "description": "ID of product purchased"
+    },
+    "show_id": {
+      "type": "string",
+      "description": "ID of show where purchase was made"
+    },
+    "product_title": {
+      "type": "string",
+      "description": "Product title snapshot"
+    },
+    "product_image_url": {
+      "type": "string",
+      "description": "Product image snapshot"
+    },
+    "price": {
+      "type": "number",
+      "description": "Price paid"
+    },
+    "stripe_payment_intent_id": {
+      "type": "string",
+      "description": "Stripe PaymentIntent ID"
+    },
+    "stripe_charge_id": {
+      "type": "string",
+      "description": "Stripe Charge ID"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "paid",
+        "picked_up",
+        "cancelled",
+        "refunded"
+      ],
+      "default": "paid",
+      "description": "Order status"
+    },
+    "pickup_code": {
+      "type": "string",
+      "description": "Unique pickup code/QR"
+    },
+    "pickup_location": {
+      "type": "string",
+      "description": "Pickup location"
+    },
+    "pickup_notes": {
+      "type": "string",
+      "description": "Pickup instructions"
+    },
+    "picked_up_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When item was picked up"
+    },
+    "picked_up_by": {
+      "type": "string",
+      "description": "Who marked as picked up"
+    }
+  },
+  "required": [
+    "buyer_id",
+    "seller_id",
+    "product_id",
+    "price"
+  ]
+}

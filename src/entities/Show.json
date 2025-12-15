@@ -1,0 +1,84 @@
+{
+  "name": "Show",
+  "type": "object",
+  "properties": {
+    "seller_id": {
+      "type": "string",
+      "description": "ID of the seller hosting this show"
+    },
+    "title": {
+      "type": "string",
+      "description": "Show title"
+    },
+    "description": {
+      "type": "string",
+      "description": "Show description"
+    },
+    "scheduled_start": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Scheduled start time"
+    },
+    "actual_start": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Actual start time"
+    },
+    "ended_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When show ended"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "scheduled",
+        "live",
+        "ended",
+        "cancelled"
+      ],
+      "default": "scheduled",
+      "description": "Show status"
+    },
+    "pickup_location": {
+      "type": "string",
+      "description": "Pickup location for items from this show"
+    },
+    "featured_product_id": {
+      "type": "string",
+      "description": "Currently featured product ID"
+    },
+    "stream_url": {
+      "type": "string",
+      "description": "OwnCast or stream URL"
+    },
+    "stream_key": {
+      "type": "string",
+      "description": "Stream key for broadcasting"
+    },
+    "thumbnail_url": {
+      "type": "string",
+      "description": "Show thumbnail image"
+    },
+    "viewer_count": {
+      "type": "integer",
+      "default": 0,
+      "description": "Current viewer count"
+    },
+    "total_views": {
+      "type": "integer",
+      "default": 0,
+      "description": "Total views"
+    },
+    "total_sales": {
+      "type": "integer",
+      "default": 0,
+      "description": "Total sales during this show"
+    }
+  },
+  "required": [
+    "seller_id",
+    "title",
+    "scheduled_start"
+  ]
+}

@@ -1,0 +1,80 @@
+{
+  "name": "Product",
+  "type": "object",
+  "properties": {
+    "seller_id": {
+      "type": "string",
+      "description": "ID of the seller who owns this product"
+    },
+    "title": {
+      "type": "string",
+      "description": "Product title"
+    },
+    "description": {
+      "type": "string",
+      "description": "Product description"
+    },
+    "price": {
+      "type": "number",
+      "description": "Price in USD"
+    },
+    "quantity": {
+      "type": "integer",
+      "default": 1,
+      "description": "Available quantity"
+    },
+    "image_urls": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Product images"
+    },
+    "pickup_notes": {
+      "type": "string",
+      "description": "Special pickup instructions for this item"
+    },
+    "is_live_item": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether this is available for live shows"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "available",
+        "featured",
+        "locked",
+        "sold"
+      ],
+      "default": "available",
+      "description": "Current product status"
+    },
+    "locked_by": {
+      "type": "string",
+      "description": "User ID who has locked this item"
+    },
+    "locked_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When item was locked"
+    },
+    "featured_in_show_id": {
+      "type": "string",
+      "description": "ID of show where this is currently featured"
+    },
+    "stripe_product_id": {
+      "type": "string",
+      "description": "Stripe product ID"
+    },
+    "stripe_price_id": {
+      "type": "string",
+      "description": "Stripe price ID"
+    }
+  },
+  "required": [
+    "seller_id",
+    "title",
+    "price"
+  ]
+}

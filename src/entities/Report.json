@@ -1,0 +1,65 @@
+{
+  "name": "Report",
+  "type": "object",
+  "properties": {
+    "reporter_id": {
+      "type": "string",
+      "description": "User ID who filed the report"
+    },
+    "reporter_email": {
+      "type": "string",
+      "description": "Reporter email"
+    },
+    "order_id": {
+      "type": "string",
+      "description": "Related order ID"
+    },
+    "seller_id": {
+      "type": "string",
+      "description": "Seller being reported"
+    },
+    "report_type": {
+      "type": "string",
+      "enum": [
+        "did_not_receive",
+        "item_not_as_described",
+        "seller_unresponsive",
+        "other"
+      ],
+      "description": "Type of report"
+    },
+    "description": {
+      "type": "string",
+      "description": "Detailed description"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "investigating",
+        "resolved",
+        "dismissed"
+      ],
+      "default": "pending",
+      "description": "Report status"
+    },
+    "admin_notes": {
+      "type": "string",
+      "description": "Internal admin notes"
+    },
+    "resolved_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When resolved"
+    },
+    "resolved_by": {
+      "type": "string",
+      "description": "Admin who resolved"
+    }
+  },
+  "required": [
+    "reporter_id",
+    "report_type",
+    "description"
+  ]
+}

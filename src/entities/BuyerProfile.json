@@ -1,0 +1,42 @@
+{
+  "name": "BuyerProfile",
+  "type": "object",
+  "properties": {
+    "user_id": {
+      "type": "string",
+      "description": "Associated user ID"
+    },
+    "full_name": {
+      "type": "string",
+      "description": "Full name"
+    },
+    "phone": {
+      "type": "string",
+      "description": "Phone number"
+    },
+    "email": {
+      "type": "string",
+      "description": "Email address"
+    },
+    "profile_image_url": {
+      "type": "string",
+      "description": "Profile image"
+    },
+    "total_orders": {
+      "type": "integer",
+      "default": 0,
+      "description": "Total orders placed"
+    },
+    "total_spent": {
+      "type": "number",
+      "default": 0,
+      "description": "Total amount spent"
+    }
+  },
+  "required": [
+    "user_id",
+    "full_name",
+    "phone",
+    "email"
+  ]
+}
