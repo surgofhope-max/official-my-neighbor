@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from "react";
-import { supabaseApi as base44 } from "@/api/supabaseClient";
+import { supabase } from "@/lib/supabase/supabaseClient";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
+import { isSuperAdmin } from "@/lib/auth/routeGuards";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -40,52 +41,78 @@ export default function SellerSafetyAgreement() {
 
   const loadUser = async () => {
     try {
-      // Check if user is authenticated first
-      const isAuthenticated = await base44.auth.isAuthenticated();
-      
-      if (!isAuthenticated) {
-        // Not logged in - redirect to login, then come back here
-        console.log("🔐 User not authenticated - redirecting to login");
-        base44.auth.redirectToLogin(createPageUrl("SellerSafetyAgreement"));
+      const { data: { session } } = await supabase.auth.getSession();
+
+      if (!session) {
+        navigate(createPageUrl("Login"), { replace: true });
         return;
       }
-      
-      const currentUser = await base44.auth.me();
+
+      const currentUser = session.user;
+      const userMeta = currentUser.user_metadata || {};
       setUser(currentUser);
 
-      // If already agreed, redirect based on completion status
-      // CRITICAL: Do NOT redirect if onboarding_reset is true - force re-agreement
-      if (currentUser.seller_safety_agreed && currentUser.seller_onboarding_reset !== true) {
-        // Check if seller entity exists (Legacy/Sync fix)
-        const existingSellers = await base44.entities.Seller.filter({ created_by: currentUser.email });
-        const hasSellerEntity = existingSellers.length > 0;
-
-        if (currentUser.seller_onboarding_completed || hasSellerEntity) {
-          console.log("✅ Safety agreed & Onboarding complete - redirecting to Dashboard");
-          navigate(createPageUrl("SellerDashboard"), { replace: true });
-        } else {
-          // Check if steps are done (Auto-repair logic mirror)
-          const completedSteps = currentUser.seller_onboarding_steps_completed || [];
-          if (completedSteps.length >= 9) {
-             console.log("✅ Safety agreed & Steps complete (flag missing) - redirecting to Dashboard");
-             navigate(createPageUrl("SellerDashboard"), { replace: true });
-          } else {
-             console.log("⚠️ Safety agreed but Onboarding incomplete - redirecting to Onboarding");
-             navigate(createPageUrl("SellerOnboarding"), { replace: true });
-          }
-        }
+      // 🔐 SUPER_ADMIN BYPASS: Skip all onboarding/safety checks
+      if (isSuperAdmin(currentUser)) {
+        console.log("🔑 SUPER_ADMIN detected — bypassing safety agreement, redirecting to AdminDashboard");
+        navigate(createPageUrl("AdminDashboard"), { replace: true });
         return;
       }
-      } catch (error) {
+
+      // 🔒 HARD STOP: Application already submitted — block re-entry
+      // Check both seller_onboarding_completed AND seller_application_status
+      if (
+        userMeta.seller_onboarding_completed === true ||
+        userMeta.seller_application_status === "pending" ||
+        userMeta.seller_application_status === "approved" ||
+        userMeta.seller_application_status === "declined"
+      ) {
+        console.log("⏳ Seller application already submitted — blocking safety agreement re-entry");
+        console.log("   Status:", userMeta.seller_application_status);
+        console.log("   Onboarding completed:", userMeta.seller_onboarding_completed);
+        
+        // Approved sellers go to dashboard
+        if (userMeta.seller_approved === true) {
+          navigate(createPageUrl("SellerDashboard"), { replace: true });
+          return;
+        }
+        
+        // Others go to BuyerProfile with appropriate status
+        navigate(createPageUrl("BuyerProfile"), {
+          replace: true,
+          state: { sellerStatus: userMeta.seller_application_status || "pending" }
+        });
+        return;
+      }
+
+      // Check if seller safety agreement already accepted
+      if (currentUser.seller_safety_agreed && currentUser.seller_onboarding_reset !== true) {
+        // Check for existing seller profile via Supabase
+        const { data: sellerProfile, error } = await supabase
+          .from("sellers")
+          .select("id, status")
+          .eq("user_id", currentUser.id)
+          .single();
+
+        if (error && error.code !== "PGRST116") {
+          throw error;
+        }
+
+        if (sellerProfile) {
+          navigate(createPageUrl("SellerDashboard"), { replace: true });
+          return;
+        }
+
+        // No seller yet, continue onboarding
+        navigate(createPageUrl("SellerOnboarding"), { replace: true });
+        return;
+      }
+
+    } catch (error) {
       console.error("Error loading user:", error);
-      // Only redirect to login if strictly necessary (e.g. 401)
-      // Avoid redirect loop if it's just a network cancellation
-      if (error?.response?.status === 401) {
-        base44.auth.redirectToLogin(createPageUrl("SellerSafetyAgreement"));
-      }
-      return;
-      }
-    setLoading(false);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const allAgreed = Object.values(agreements).every(v => v === true);
@@ -95,26 +122,43 @@ export default function SellerSafetyAgreement() {
 
     setSubmitting(true);
     try {
-      const now = new Date().toISOString();
-      
-      await base44.auth.updateMe({
-        seller_safety_agreed: true,
-        seller_safety_agreed_at: now,
-        seller_status: "pending",
-        // Clear the onboarding reset flag once agreement is accepted
-        seller_onboarding_reset: false,
-        seller_onboarding_reset_at: null,
-        seller_onboarding_reset_by: null
+      const { error } = await supabase.auth.updateUser({
+        data: {
+          seller_safety_agreed: true,
+          seller_safety_agreed_at: new Date().toISOString(),
+
+          // Reset onboarding state to ensure fresh start
+          seller_onboarding_completed: false,
+          seller_onboarding_steps_completed: [],
+          seller_onboarding_steps_remaining: [
+            "phone",
+            "guidelines",
+            "category",
+            "subcategory",
+            "type",
+            "revenue",
+            "channels",
+            "address",
+            "payment"
+          ],
+
+          seller_onboarding_reset: false
+        }
       });
+
+      if (error) {
+        throw error;
+      }
 
       // Redirect to seller onboarding steps
       navigate(createPageUrl("SellerOnboarding"), { replace: true });
-      } catch (error) {
+    } catch (error) {
       console.error("Error saving agreement:", error);
       alert("Failed to save agreement. Please try again.");
-      }
+    } finally {
       setSubmitting(false);
-      };
+    }
+  };
 
   if (loading) {
     return (

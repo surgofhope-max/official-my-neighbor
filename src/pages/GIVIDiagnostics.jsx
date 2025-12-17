@@ -194,8 +194,6 @@ export default function GIVIDiagnostics() {
         full_name: userRecord.full_name || "Buyer",
         email: userRecord.email,
         phone: "",
-        total_orders: 0,
-        total_spent: 0
       });
 
       alert("✅ BuyerProfile created successfully! Rerun diagnostics.");

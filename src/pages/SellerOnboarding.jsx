@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from "react";
-import { supabaseApi as base44 } from "@/api/supabaseClient";
+import { supabase } from "@/lib/supabase/supabaseClient";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
+import { isSuperAdmin } from "@/lib/auth/routeGuards";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -111,53 +112,103 @@ export default function SellerOnboarding() {
 
   const loadUser = async () => {
     try {
-      const currentUser = await base44.auth.me();
+      const { data: { session } } = await supabase.auth.getSession();
       
-      // Check if seller entity exists (Legacy/Sync fix)
-      const existingSellers = await base44.entities.Seller.filter({ created_by: currentUser.email });
-      const hasSellerEntity = existingSellers.length > 0;
-
-      // Redirect if already completed (prevent loop)
-      if ((currentUser?.seller_onboarding_completed || hasSellerEntity) && currentUser.role !== "admin") {
-        console.log("✅ Onboarding already complete - redirecting to Dashboard");
-        navigate(createPageUrl("SellerDashboard"), { replace: true });
+      if (!session) {
+        navigate(createPageUrl("Login"), { replace: true });
         return;
       }
 
-      setUser(currentUser);
-      
-      // Pre-fill form data from user
-      if (currentUser) {
-        setPhoneData(prev => ({ ...prev, number: currentUser.phone_number || "" }));
-        setGuidelines({
-          honor: currentUser.seller_guideline_honor_purchases || false,
-          counterfeit: currentUser.seller_guideline_no_counterfeit || false,
-          accurate: currentUser.seller_guideline_accurate_descriptions || false,
-          ship: currentUser.seller_guideline_ship_safely || false,
-          minor: currentUser.seller_guideline_minor_preapproval || false
-        });
-        setCategory(currentUser.seller_main_category || "");
-        setSubcategory(currentUser.seller_subcategory || "");
-        setSellerType(currentUser.seller_type || "individual");
-        setRevenueRange(currentUser.seller_revenue_range || "");
-        setChannels(currentUser.seller_sales_channels || []);
-        setAddress({
-          fullName: currentUser.seller_return_full_name || "",
-          line1: currentUser.seller_return_address_1 || "",
-          line2: currentUser.seller_return_address_2 || "",
-          city: currentUser.seller_return_city || "",
-          state: currentUser.seller_return_state || "",
-          zip: currentUser.seller_return_zip || "",
-          country: currentUser.seller_return_country || "US"
-        });
-        setPayment({
-          zip: currentUser.payment_billing_zip || "",
-          country: currentUser.payment_billing_country || "US"
-        });
+      const currentUser = session.user;
+      const userMeta = currentUser.user_metadata || {};
+
+      // 🔐 SUPER_ADMIN BYPASS: Skip all onboarding, go directly to AdminDashboard
+      if (isSuperAdmin(currentUser)) {
+        console.log("🔑 SUPER_ADMIN detected — bypassing onboarding, redirecting to AdminDashboard");
+        navigate(createPageUrl("AdminDashboard"), { replace: true });
+        return;
       }
+
+      // 🔒 HARD STOP: Application already submitted — block re-entry
+      // Check both seller_onboarding_completed AND seller_application_status
+      if (
+        userMeta.seller_onboarding_completed === true ||
+        userMeta.seller_application_status === "pending" ||
+        userMeta.seller_application_status === "approved" ||
+        userMeta.seller_application_status === "declined"
+      ) {
+        // Only allow re-entry if approved (they'd go to SellerDashboard)
+        // or if admin wants to reset
+        if (userMeta.seller_approved === true || userMeta.role === "admin") {
+          // Approved sellers should go to dashboard
+          if (userMeta.seller_approved === true) {
+            navigate(createPageUrl("SellerDashboard"), { replace: true });
+            return;
+          }
+        } else {
+          console.log("⏳ Seller application already submitted — blocking re-onboarding");
+          console.log("   Status:", userMeta.seller_application_status);
+          console.log("   Onboarding completed:", userMeta.seller_onboarding_completed);
+
+          navigate(createPageUrl("BuyerProfile"), {
+            replace: true,
+            state: {
+              sellerStatus: userMeta.seller_application_status || "pending"
+            }
+          });
+
+          return;
+        }
+      }
+      
+      // Check if seller entity exists
+      const { data: sellerProfile } = await supabase
+        .from("sellers")
+        .select("id")
+        .eq("user_id", currentUser.id)
+        .single();
+
+      const hasSellerEntity = !!sellerProfile;
+
+      // Redirect if already completed (prevent loop)
+      if ((userMeta.seller_onboarding_completed || hasSellerEntity) && userMeta.role !== "admin") {
+        console.log("✅ Onboarding already complete - redirecting to BuyerProfile");
+        navigate(createPageUrl("BuyerProfile"), { replace: true });
+        return;
+      }
+
+      setUser({ ...currentUser, ...userMeta });
+      
+      // Pre-fill form data from user metadata
+      setPhoneData(prev => ({ ...prev, number: userMeta.phone_number || "" }));
+      setGuidelines({
+        honor: userMeta.seller_guideline_honor_purchases || false,
+        counterfeit: userMeta.seller_guideline_no_counterfeit || false,
+        accurate: userMeta.seller_guideline_accurate_descriptions || false,
+        ship: userMeta.seller_guideline_ship_safely || false,
+        minor: userMeta.seller_guideline_minor_preapproval || false
+      });
+      setCategory(userMeta.seller_main_category || "");
+      setSubcategory(userMeta.seller_subcategory || "");
+      setSellerType(userMeta.seller_type || "individual");
+      setRevenueRange(userMeta.seller_revenue_range || "");
+      setChannels(userMeta.seller_sales_channels || []);
+      setAddress({
+        fullName: userMeta.seller_return_full_name || "",
+        line1: userMeta.seller_return_address_1 || "",
+        line2: userMeta.seller_return_address_2 || "",
+        city: userMeta.seller_return_city || "",
+        state: userMeta.seller_return_state || "",
+        zip: userMeta.seller_return_zip || "",
+        country: userMeta.seller_return_country || "US"
+      });
+      setPayment({
+        zip: userMeta.payment_billing_zip || "",
+        country: userMeta.payment_billing_country || "US"
+      });
     } catch (error) {
       console.error("Error loading user:", error);
-      base44.auth.redirectToLogin();
+      navigate(createPageUrl("Login"), { replace: true });
     } finally {
       setLoading(false);
     }
@@ -174,17 +225,21 @@ export default function SellerOnboarding() {
       remainingSteps.delete(stepId);
     }
 
+    // Only update step progress - do NOT mark onboarding as complete here
+    // Completion is handled by the final confirmation button
     const updates = {
       seller_onboarding_steps_completed: Array.from(completedSteps),
       seller_onboarding_steps_remaining: Array.from(remainingSteps)
     };
 
-    // If all steps completed
-    if (remainingSteps.size === 0) {
-      updates.seller_onboarding_completed = true;
+    const { error } = await supabase.auth.updateUser({
+      data: updates
+    });
+
+    if (error) {
+      throw error;
     }
 
-    await base44.auth.updateMe(updates);
     await loadUser(); // Refresh user state
   };
 
@@ -193,11 +248,18 @@ export default function SellerOnboarding() {
     setSubmitting(true);
     try {
       // Mock verification
-      await base44.auth.updateMe({
-        phone_number: phoneData.number,
-        phone_verified: true,
-        phone_verified_at: new Date().toISOString()
+      const { error } = await supabase.auth.updateUser({
+        data: {
+          phone_number: phoneData.number,
+          phone_verified: true,
+          phone_verified_at: new Date().toISOString()
+        }
       });
+
+      if (error) {
+        throw error;
+      }
+
       await updateStepStatus("phone", true);
       setActiveStep(null);
     } catch (error) {
@@ -210,14 +272,21 @@ export default function SellerOnboarding() {
     if (!Object.values(guidelines).every(v => v)) return alert("Please accept all guidelines");
     setSubmitting(true);
     try {
-      await base44.auth.updateMe({
-        seller_guideline_honor_purchases: guidelines.honor,
-        seller_guideline_no_counterfeit: guidelines.counterfeit,
-        seller_guideline_accurate_descriptions: guidelines.accurate,
-        seller_guideline_ship_safely: guidelines.ship,
-        seller_guideline_minor_preapproval: guidelines.minor,
-        seller_guidelines_accepted_at: new Date().toISOString()
+      const { error } = await supabase.auth.updateUser({
+        data: {
+          seller_guideline_honor_purchases: guidelines.honor,
+          seller_guideline_no_counterfeit: guidelines.counterfeit,
+          seller_guideline_accurate_descriptions: guidelines.accurate,
+          seller_guideline_ship_safely: guidelines.ship,
+          seller_guideline_minor_preapproval: guidelines.minor,
+          seller_guidelines_accepted_at: new Date().toISOString()
+        }
       });
+
+      if (error) {
+        throw error;
+      }
+
       await updateStepStatus("guidelines", true);
       setActiveStep(null);
     } catch (error) {
@@ -229,7 +298,14 @@ export default function SellerOnboarding() {
   const handleGenericSubmit = async (fieldData, stepId) => {
     setSubmitting(true);
     try {
-      await base44.auth.updateMe(fieldData);
+      const { error } = await supabase.auth.updateUser({
+        data: fieldData
+      });
+
+      if (error) {
+        throw error;
+      }
+
       await updateStepStatus(stepId, true);
       setActiveStep(null);
     } catch (error) {
@@ -329,22 +405,120 @@ export default function SellerOnboarding() {
           disabled={!allComplete}
           onClick={async () => {
             // Force update completion flag to ensure consistency and prevent loops
+            console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            console.log("🔘 COMPLETION BUTTON CLICKED");
+            console.log("   allComplete:", allComplete);
+            console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            
             if (allComplete) {
               setSubmitting(true); // Show loading state
               try {
-                // 1. Update the user record
-                await base44.auth.updateMe({ 
-                  seller_onboarding_completed: true,
-                  // Also ensure completed steps are synced if needed
-                  seller_onboarding_steps_remaining: [] 
-                });
+                console.log("📝 Step 1: Updating user_metadata...");
                 
-                // 2. Artificial delay to allow backend propagation and local cache update
+                // 1. Update the user record - THIS is the ONLY place onboarding is marked complete
+                const { error } = await supabase.auth.updateUser({
+                  data: {
+                    // Onboarding lifecycle
+                    seller_onboarding_completed: true,
+                    seller_onboarding_completed_at: new Date().toISOString(),
+
+                    // 🔒 CRITICAL: lock application state
+                    seller_application_status: "pending",
+
+                    // cleanup
+                    seller_onboarding_steps_remaining: []
+                  }
+                });
+
+                if (error) {
+                  console.error("❌ user_metadata update FAILED:", error);
+                  throw error;
+                }
+                
+                console.log("✅ Step 1 Complete: user_metadata updated successfully");
+                console.log("   seller_onboarding_completed: true");
+                console.log("   seller_application_status: pending");
+
+                // 2. Create seller row in database so AdminSellers can see the application
+                // Get fresh user data with all metadata
+                console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                console.log("📝 SELLER INSERT BLOCK - STARTING");
+                console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                
+                const { data: { user: currentUser } } = await supabase.auth.getUser();
+                console.log("   Current User ID:", currentUser?.id);
+                console.log("   Current User Email:", currentUser?.email);
+                
+                const userMeta = currentUser?.user_metadata || {};
+                console.log("   User Metadata Keys:", Object.keys(userMeta));
+
+                // Check if seller already exists (guard against duplicates)
+                const { data: existingSeller, error: checkError } = await supabase
+                  .from("sellers")
+                  .select("id")
+                  .eq("user_id", currentUser.id)
+                  .single();
+
+                console.log("   Existing Seller Check:", existingSeller ? "FOUND" : "NOT FOUND");
+                if (checkError && checkError.code !== "PGRST116") {
+                  console.error("   Seller Check Error:", checkError);
+                }
+
+                if (!existingSeller) {
+                  // Create seller row with pending status
+                  // Note: created_at is handled automatically by Supabase
+                  const sellerData = {
+                    user_id: currentUser.id,
+                    created_by: currentUser.email,
+                    status: "pending",
+                    business_name: userMeta.seller_return_full_name || currentUser.email.split("@")[0],
+                    contact_email: currentUser.email,
+                    contact_phone: userMeta.phone_number || null,
+                    pickup_address: userMeta.seller_return_address_1 || null,
+                    pickup_city: userMeta.seller_return_city || null,
+                    pickup_state: userMeta.seller_return_state || null,
+                    pickup_zip: userMeta.seller_return_zip || null
+                  };
+
+                  console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                  console.log("📤 INSERT ATTEMPT START");
+                  console.log("   Seller Data:", JSON.stringify(sellerData, null, 2));
+                  console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+                  const { data: insertedSeller, error: insertError } = await supabase
+                    .from("sellers")
+                    .insert(sellerData)
+                    .select()
+                    .single();
+
+                  if (insertError) {
+                    console.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                    console.error("❌ INSERT FAILED");
+                    console.error("   Error Code:", insertError.code);
+                    console.error("   Error Message:", insertError.message);
+                    console.error("   Error Details:", insertError.details);
+                    console.error("   Error Hint:", insertError.hint);
+                    console.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                    // Don't block onboarding completion - admin can create manually if needed
+                  } else {
+                    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                    console.log("✅ INSERT SUCCESS");
+                    console.log("   Seller ID:", insertedSeller?.id);
+                    console.log("   User ID:", insertedSeller?.user_id);
+                    console.log("   Business Name:", insertedSeller?.business_name);
+                    console.log("   Status:", insertedSeller?.status);
+                    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                  }
+                } else {
+                  console.log("ℹ️ Seller row already exists (ID:", existingSeller.id, "), skipping creation");
+                }
+                
+                // 3. Artificial delay to allow backend propagation and local cache update
                 await new Promise(resolve => setTimeout(resolve, 1000));
                 
-                // 3. Redirect to dashboard
-                console.log("✅ Onboarding complete, redirecting to dashboard...");
-                navigate(createPageUrl("SellerDashboard"), { replace: true });
+                // 4. Redirect to BuyerProfile (seller profile creation happens there)
+                console.log("✅ Onboarding complete, redirecting to BuyerProfile...");
+                navigate(createPageUrl("BuyerProfile"), { replace: true });
               } catch (error) {
                 console.error("Error completing onboarding:", error);
                 alert("Failed to complete setup. Please try again.");
@@ -367,7 +541,10 @@ export default function SellerOnboarding() {
         <Button
           variant="ghost"
           className="w-full text-gray-500 hover:text-red-600"
-          onClick={() => base44.auth.logout()}
+          onClick={async () => {
+            await supabase.auth.signOut();
+            navigate(createPageUrl("Login"), { replace: true });
+          }}
         >
           <LogOut className="w-4 h-4 mr-2" /> Log Out
         </Button>

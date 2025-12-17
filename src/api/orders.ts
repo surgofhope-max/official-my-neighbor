@@ -232,6 +232,35 @@ export async function getOrderById(
 }
 
 /**
+ * Get all orders (for admin dashboard).
+ *
+ * @returns Array of all orders, sorted by created_date DESC
+ *
+ * This function:
+ * - Never throws
+ * - Returns [] on any error
+ * - Intended for admin use only
+ */
+export async function getAllOrders(): Promise<Order[]> {
+  try {
+    const { data, error } = await supabase
+      .from("orders")
+      .select("*")
+      .order("created_date", { ascending: false });
+
+    if (error) {
+      console.warn("Failed to fetch all orders:", error.message);
+      return [];
+    }
+
+    return (data as Order[]) ?? [];
+  } catch (err) {
+    console.warn("Unexpected error fetching all orders:", err);
+    return [];
+  }
+}
+
+/**
  * Create a new order (demo mode - sets status to "paid").
  *
  * @param input - The order data to create

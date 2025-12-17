@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { supabaseApi as base44 } from "@/api/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { isSuperAdmin } from "@/lib/auth/routeGuards";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -54,24 +55,36 @@ export default function SellerShows() {
     try {
       const currentUser = await base44.auth.me();
       setUser(currentUser);
-      console.log("👤 SellerShows - Current user:", currentUser.email, "Role:", currentUser.role);
+      const userRole = currentUser.user_metadata?.role || currentUser.role;
+      console.log("👤 SellerShows - Current user:", currentUser.email, "Role:", userRole);
+
+      // 🔐 SUPER_ADMIN BYPASS: Skip ALL checks
+      if (isSuperAdmin(currentUser)) {
+        console.log("🔑 SUPER_ADMIN detected — bypassing all checks in SellerShows");
+        // Load seller if exists, but don't require it
+        const sellers = await base44.entities.Seller.filter({ created_by: currentUser.email });
+        if (sellers.length > 0) {
+          setSeller(sellers[0]);
+        }
+        return;
+      }
 
       // CRITICAL: Check for onboarding reset - must complete full onboarding again
-      if (currentUser.role !== "admin" && currentUser.seller_onboarding_reset === true) {
+      if (userRole !== "admin" && currentUser.seller_onboarding_reset === true) {
         console.log("🔄 Seller onboarding reset detected - redirecting to full onboarding");
         navigate(createPageUrl("SellerSafetyAgreement"), { replace: true });
         return;
       }
 
       // Check for seller safety agreement
-      if (currentUser.role !== "admin" && currentUser.seller_safety_agreed !== true) {
+      if (userRole !== "admin" && currentUser.seller_safety_agreed !== true) {
         console.log("🛡️ Seller safety agreement required - redirecting");
         navigate(createPageUrl("SellerSafetyAgreement"), { replace: true });
         return;
       }
 
       // Check for seller onboarding completion
-      if (currentUser.role !== "admin" && !currentUser.seller_onboarding_completed) {
+      if (userRole !== "admin" && !currentUser.seller_onboarding_completed) {
         console.log("📋 Seller onboarding incomplete - redirecting");
         navigate(createPageUrl("SellerOnboarding"), { replace: true });
         return;
@@ -80,7 +93,7 @@ export default function SellerShows() {
       // Check if admin is impersonating
       const impersonatingSellerId = sessionStorage.getItem('admin_impersonate_seller_id');
 
-      if (impersonatingSellerId && currentUser.role === "admin") {
+      if (impersonatingSellerId && userRole === "admin") {
         const allSellers = await base44.entities.Seller.list();
         const impersonatedSeller = allSellers.find(s => s.id === impersonatingSellerId);
 
@@ -97,7 +110,7 @@ export default function SellerShows() {
         setSeller(sellerProfile);
         console.log("🏪 SellerShows - Loaded seller:", sellerProfile.business_name, "ID:", sellerProfile.id);
 
-        if (currentUser.role !== "admin" && sellerProfile.status !== "approved") {
+        if (userRole !== "admin" && sellerProfile.status !== "approved") {
           alert("Your seller application is pending approval. You will be redirected to the marketplace.");
           navigate(createPageUrl("Marketplace"));
           return;

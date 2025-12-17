@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
-import { supabaseApi as base44 } from "@/api/supabaseClient";
+import { supabase } from "@/lib/supabase/supabaseClient";
+import { useSupabaseAuth } from "@/lib/auth/SupabaseAuthProvider";
 import { getUnreadNotificationCount } from "@/api/notifications";
 import { getUnreadMessageCount } from "@/api/messages";
 import { getEffectiveUserContext } from "@/lib/auth/effectiveUser";
 import { getSellerByUserId, getSellerById } from "@/api/sellers";
-import { canAccessRoute, getUnauthorizedRedirect } from "@/lib/auth/routeGuards";
+import { canAccessRoute, getUnauthorizedRedirect, isSuperAdmin } from "@/lib/auth/routeGuards";
 import {
   Video,
   ShoppingBag,
@@ -33,31 +34,46 @@ import ImpersonationBanner from "./components/admin/ImpersonationBanner";
 export default function Layout({ children, currentPageName }) {
   const location = useLocation();
   const navigate = useNavigate();
-  const [user, setUser] = useState(null);
+  
+  // Use SupabaseAuthProvider as single source of truth for user state
+  const { user, isLoadingAuth } = useSupabaseAuth();
+  
   const [seller, setSeller] = useState(null);
-  const [loading, setLoading] = useState(false); // FALSE by default - show visitor UI immediately
-  const [authChecked, setAuthChecked] = useState(false); // Track if we've checked auth
   const [unreadCount, setUnreadCount] = useState(0);
   const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
 
   // Pages where header should be shown
-  const pagesWithHeader = ['Marketplace', 'SellerDashboard', 'BuyerProfile'];
+  const pagesWithHeader = ['Marketplace', 'SellerDashboard', 'BuyerProfile', 'AdminDashboard'];
   const shouldShowHeader = pagesWithHeader.includes(currentPageName);
 
   // Check if admin is impersonating
   const impersonatingSellerId = sessionStorage.getItem('admin_impersonate_seller_id');
   const isImpersonating = !!impersonatingSellerId;
 
+  // Load seller data and counts when user changes (from SupabaseAuthProvider)
   useEffect(() => {
-    // Non-blocking auth check - visitor UI shows immediately
-    loadUser();
-  }, []);
+    if (isLoadingAuth) return; // Wait for auth check to complete
+    
+    if (user) {
+      console.log("👤 User loaded:", user.email, "Role:", user.user_metadata?.role);
+      loadSellerData(user);
+      loadUnreadCount(user);
+      loadUnreadNotificationCount(user);
+    } else {
+      console.log("👤 No user logged in - visitor UI visible");
+      setSeller(null);
+      setUnreadCount(0);
+      setUnreadNotificationCount(0);
+    }
+  }, [user, isLoadingAuth]);
 
   // Listen for impersonation changes
   useEffect(() => {
+    if (!user) return;
+    
     const handleStorageChange = () => {
-      console.log("🔄 Impersonation state changed - reloading user");
-      loadUser();
+      console.log("🔄 Impersonation state changed - reloading seller");
+      loadSellerData(user);
     };
 
     // Poll for sessionStorage changes (since storage event doesn't fire for same-tab changes)
@@ -69,7 +85,7 @@ export default function Layout({ children, currentPageName }) {
     }, 500);
 
     return () => clearInterval(interval);
-  }, [impersonatingSellerId]);
+  }, [impersonatingSellerId, user]);
 
   useEffect(() => {
     // CRITICAL: Don't redirect on LiveShow page - wait for params to resolve
@@ -83,7 +99,7 @@ export default function Layout({ children, currentPageName }) {
   // Route protection - check access after auth is verified
   useEffect(() => {
     // Wait for auth check to complete
-    if (!authChecked) return;
+    if (isLoadingAuth) return;
 
     // Check if current route is accessible
     const hasAccess = canAccessRoute(currentPageName, user, seller);
@@ -93,37 +109,11 @@ export default function Layout({ children, currentPageName }) {
       const redirectTo = getUnauthorizedRedirect(currentPageName, user);
       navigate(createPageUrl(redirectTo), { replace: true });
     }
-  }, [authChecked, currentPageName, user, seller, navigate]);
+  }, [isLoadingAuth, currentPageName, user, seller, navigate]);
 
   useEffect(() => {
     window.scrollTo(0, 0);
   }, [location.pathname]);
-
-  const loadUser = async () => {
-    // CRITICAL: Don't block rendering - visitor UI shows immediately
-    try {
-      const currentUser = await base44.auth.me();
-      if (!currentUser) {
-        console.log("👤 No user logged in - visitor UI already visible");
-        setUser(null);
-        setAuthChecked(true);
-        return;
-      }
-      setUser(currentUser);
-      setAuthChecked(true);
-      console.log("👤 User loaded:", currentUser.email, "Role:", currentUser.role);
-      
-      // Load seller data in background (non-blocking)
-      loadSellerData(currentUser);
-      loadUnreadCount();
-      loadUnreadNotificationCount();
-    } catch (error) {
-      // User not logged in - this is expected for anonymous visitors
-      console.log("👤 No authenticated user - visitor UI already visible");
-      setUser(null);
-      setAuthChecked(true);
-    }
-  };
 
   const loadSellerData = async (currentUser) => {
     try {
@@ -152,9 +142,8 @@ export default function Layout({ children, currentPageName }) {
     }
   };
 
-  const loadUnreadCount = async () => {
+  const loadUnreadCount = async (currentUser) => {
     try {
-      const currentUser = await base44.auth.me();
       if (!currentUser) {
         setUnreadCount(0);
         return;
@@ -187,9 +176,12 @@ export default function Layout({ children, currentPageName }) {
     }
   };
 
-  const loadUnreadNotificationCount = async () => {
+  const loadUnreadNotificationCount = async (currentUser) => {
     try {
-      const currentUser = await base44.auth.me();
+      if (!currentUser) {
+        setUnreadNotificationCount(0);
+        return;
+      }
       const { effectiveUserId } = getEffectiveUserContext(currentUser);
       const count = await getUnreadNotificationCount(effectiveUserId);
       setUnreadNotificationCount(count);
@@ -209,49 +201,60 @@ export default function Layout({ children, currentPageName }) {
     location.pathname.toLowerCase().includes('nearme') ||
     location.pathname.toLowerCase().includes('near-me');
 
+  // Poll for unread messages every 30 seconds (skip on LiveShow)
   useEffect(() => {
-    if (isLiveShowPage) {
-      console.log("🎬 Live Show page - skipping unread message polling to reduce load");
+    if (isLiveShowPage || !user) {
       return;
     }
 
     const interval = setInterval(() => {
-      loadUnreadCount();
+      loadUnreadCount(user);
     }, 30000);
 
     return () => clearInterval(interval);
-  }, [isLiveShowPage]);
+  }, [isLiveShowPage, user]);
 
   // Poll for unread notifications every 30 seconds (skip on LiveShow)
   useEffect(() => {
-    if (isLiveShowPage) {
+    if (isLiveShowPage || !user) {
       return;
     }
 
-    // Initial load
-    loadUnreadNotificationCount();
-
     const interval = setInterval(() => {
-      loadUnreadNotificationCount();
+      loadUnreadNotificationCount(user);
     }, 30000);
 
     return () => clearInterval(interval);
-  }, [isLiveShowPage]);
+  }, [isLiveShowPage, user]);
 
   const handleLogout = async () => {
-    await base44.auth.logout(createPageUrl("Marketplace"));
+    await supabase.auth.signOut();
+    navigate(createPageUrl("Marketplace"), { replace: true });
   };
 
   const handleUserClick = () => {
-    if (user?.role === "admin") {
+    const userRole = user?.user_metadata?.role || user?.role;
+
+    // 1. SUPER_ADMIN → AdminDashboard
+    if (isSuperAdmin(user)) {
+      navigate(createPageUrl("AdminDashboard"));
+      return;
+    }
+
+    // 2. Admin → AdminDashboard (admins manage platform, not sell)
+    if (userRole === "admin") {
+      navigate(createPageUrl("AdminDashboard"));
+      return;
+    }
+
+    // 3. Approved Seller → SellerDashboard
+    if (seller && seller.status === "approved") {
       navigate(createPageUrl("SellerDashboard"));
+      return;
     }
-    else if (seller && seller.status === "approved") {
-      navigate(createPageUrl("SellerDashboard"));
-    }
-    else {
-      navigate(createPageUrl("BuyerProfile"));
-    }
+
+    // 4. Everyone else → BuyerProfile
+    navigate(createPageUrl("BuyerProfile"));
   };
 
   const handleLogoClick = () => {
@@ -259,8 +262,12 @@ export default function Layout({ children, currentPageName }) {
     navigate(createPageUrl("Marketplace"));
   };
 
-  const isApprovedSeller = user?.role === "admin" || (seller && seller.status === "approved");
-  const isPendingSeller = seller && seller.status === "pending";
+  // Role extraction for display and routing decisions
+  const userRole = user?.user_metadata?.role || user?.role;
+  // isApprovedSeller is TRUE only when a seller profile exists AND is approved
+  // Admins and Super Admins are NOT sellers — they have separate access paths
+  const isApprovedSeller = seller && seller.status === "approved";
+  const isPendingSeller = !isSuperAdmin(user) && seller && seller.status === "pending";
 
   const sellerNav = [
     { title: "Marketplace", url: createPageUrl("Marketplace"), icon: ShoppingBag },
@@ -276,6 +283,13 @@ export default function Layout({ children, currentPageName }) {
     { title: "Profile", url: createPageUrl("BuyerProfile"), icon: User },
   ];
 
+  // Admin navigation - platform management only (V1)
+  const adminNav = [
+    { title: "Marketplace", url: createPageUrl("Marketplace"), icon: ShoppingBag },
+    { title: "Dashboard", url: createPageUrl("AdminDashboard"), icon: LayoutDashboard },
+    { title: "Sellers", url: createPageUrl("AdminSellers"), icon: Store },
+  ];
+
   // Non-logged-in visitor navigation - ONLY these 4 items, NO Profile/Orders
   const visitorNav = [
     { title: "Login", url: "#login", icon: User, isLogin: true },
@@ -284,9 +298,19 @@ export default function Layout({ children, currentPageName }) {
     { title: "Marketplace", url: createPageUrl("Marketplace"), icon: ShoppingBag, isMarketplace: true },
   ];
 
-  // CRITICAL: user === null means NOT logged in, show visitorNav
-  // user !== null means logged in, show buyer or seller nav
-  const navigation = user === null ? visitorNav : (isApprovedSeller ? sellerNav : buyerNav);
+  // Navigation selection priority:
+  // 1. Not logged in → visitorNav
+  // 2. Admin or Super Admin → adminNav (platform management)
+  // 3. Approved Seller → sellerNav
+  // 4. Everyone else → buyerNav
+  const isAdminUser = userRole === "admin" || isSuperAdmin(user);
+  const navigation = user === null
+    ? visitorNav
+    : isAdminUser
+      ? adminNav
+      : isApprovedSeller
+        ? sellerNav
+        : buyerNav;
 
   console.log("🔍 Layout Detection:", {
     currentPageName,
@@ -411,7 +435,7 @@ export default function Layout({ children, currentPageName }) {
                       )}
                     </Button>
                   )}
-                  {!user && !loading && (
+                  {!user && !isLoadingAuth && (
                     <Button
                       onClick={() => navigate("/Login")}
                       className="bg-gradient-to-r from-purple-600 to-blue-500 text-white font-semibold"
@@ -420,25 +444,35 @@ export default function Layout({ children, currentPageName }) {
                     </Button>
                   )}
                   {user ? (
-                    <button
-                      onClick={handleUserClick}
-                      className="hidden sm:flex items-center gap-3 hover:bg-gray-100 rounded-lg px-3 py-2 transition-colors cursor-pointer"
-                    >
-                      <Avatar className="w-9 h-9">
-                        <AvatarImage src={seller?.profile_image_url} />
-                        <AvatarFallback className="bg-gradient-to-r from-purple-600 to-blue-500 text-white">
-                          {isImpersonating && seller ? seller.business_name[0] : (user.full_name?.[0] || user.email[0].toUpperCase())}
-                        </AvatarFallback>
-                      </Avatar>
-                      <div className="hidden lg:block text-left">
-                        <p className="text-sm font-medium text-gray-900">
-                          {isImpersonating && seller ? seller.business_name : (user.full_name || user.email)}
-                        </p>
-                        <p className="text-xs text-gray-500">
-                          {isImpersonating ? "Seller" : (user.role === "admin" ? "Admin" : isApprovedSeller ? seller.business_name : "Buyer")}
-                        </p>
-                      </div>
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={handleUserClick}
+                        className="hidden sm:flex items-center gap-3 hover:bg-gray-100 rounded-lg px-3 py-2 transition-colors cursor-pointer"
+                      >
+                        <Avatar className="w-9 h-9">
+                          <AvatarImage src={seller?.profile_image_url} />
+                          <AvatarFallback className="bg-gradient-to-r from-purple-600 to-blue-500 text-white">
+                            {isImpersonating && seller ? seller.business_name[0] : (user.full_name?.[0] || user.email[0].toUpperCase())}
+                          </AvatarFallback>
+                        </Avatar>
+                        <div className="hidden lg:block text-left">
+                          <p className="text-sm font-medium text-gray-900">
+                            {isImpersonating && seller ? seller.business_name : (user.full_name || user.email)}
+                          </p>
+                          <p className="text-xs text-gray-500">
+                            {isImpersonating ? "Seller" : (isSuperAdmin(user) ? "Super Admin" : userRole === "admin" ? "Admin" : isApprovedSeller ? seller?.business_name || "Seller" : "Buyer")}
+                          </p>
+                        </div>
+                      </button>
+                      <button
+                        onClick={handleLogout}
+                        className="hidden sm:flex items-center gap-2 hover:bg-red-50 text-gray-600 hover:text-red-600 rounded-lg px-3 py-2 transition-colors cursor-pointer"
+                        title="Logout"
+                      >
+                        <LogOut className="w-5 h-5" />
+                        <span className="hidden lg:inline text-sm font-medium">Logout</span>
+                      </button>
+                    </div>
                   ) : (
                     <Button
                       onClick={() => navigate("/Login")}

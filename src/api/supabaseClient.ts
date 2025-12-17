@@ -90,9 +90,13 @@ export const supabaseApi = {
 
   /**
    * App logs namespace placeholder
+   * Safe no-op until logging is wired.
    */
   appLogs: {
-    logUserInApp: notImplemented("appLogs.logUserInApp"),
+    logUserInApp: (..._args: unknown[]): Promise<void> => {
+      // No-op: logging not wired yet
+      return Promise.resolve();
+    },
   },
 };
 

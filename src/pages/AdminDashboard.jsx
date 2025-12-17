@@ -1,6 +1,7 @@
 import React, { useState, useRef } from "react";
 import { supabaseApi as base44 } from "@/api/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { getAllSellers } from "@/api/sellers";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -60,7 +61,7 @@ export default function AdminDashboard() {
 
   const { data: sellers = [] } = useQuery({
     queryKey: ['all-sellers'],
-    queryFn: () => base44.entities.Seller.list('-created_date')
+    queryFn: () => getAllSellers()
   });
 
   const { data: shows = [] } = useQuery({

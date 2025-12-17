@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from "react";
 import { supabaseApi as base44 } from "@/api/supabaseClient";
+import { supabase } from "@/lib/supabase/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { isSuperAdmin } from "@/lib/auth/routeGuards";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -72,11 +74,19 @@ export default function BuyerProfile() {
   const loadUser = async () => {
     try {
       const currentUser = await base44.auth.me();
-      setUser(currentUser);
+      
+      // Also get user_metadata from Supabase session for seller application status
+      const { data: { session } } = await supabase.auth.getSession();
+      const userMeta = session?.user?.user_metadata || {};
+      
+      // Merge user with metadata for easy access
+      setUser({ ...currentUser, user_metadata: userMeta });
 
       // Check for seller profile - BUT DO NOT auto-redirect
       // Users who are both buyers AND sellers should be able to access buyer routes freely
-      const sellers = await base44.entities.Seller.filter({ created_by: currentUser.email });
+      const sellers = base44.entities?.Seller
+        ? await base44.entities.Seller.filter({ created_by: currentUser.email })
+        : [];
       if (sellers.length > 0) {
         const sellerProfile = sellers[0];
         setSeller(sellerProfile);
@@ -94,22 +104,25 @@ export default function BuyerProfile() {
       }
 
       // If not an approved seller, proceed to load buyer profile
-      const profiles = await base44.entities.BuyerProfile.filter({ user_id: currentUser.id });
-      if (profiles.length > 0) {
-        setBuyerProfile(profiles[0]);
+      const { data: profile, error } = await supabase
+        .from("buyer_profiles")
+        .select("*")
+        .eq("user_id", currentUser.id)
+        .single();
+
+      if (error && error.code !== "PGRST116") {
+        throw error;
+      }
+
+      if (profile) {
+        setBuyerProfile(profile);
         setFormData({
-          full_name: profiles[0].full_name || currentUser.full_name || "",
-          phone: profiles[0].phone || "",
-          email: profiles[0].email || currentUser.email || "",
-          profile_image_url: profiles[0].profile_image_url || ""
+          full_name: profile.full_name || currentUser.full_name || "",
+          phone: profile.phone || "",
+          email: profile.email || currentUser.email || "",
+          profile_image_url: profile.profile_image_url || "",
         });
       } else {
-        setFormData({
-          full_name: currentUser.full_name || "",
-          phone: "",
-          email: currentUser.email || "",
-          profile_image_url: ""
-        });
         setShowEditor(true);
       }
     } catch (error) {
@@ -171,21 +184,40 @@ export default function BuyerProfile() {
   });
 
   const createProfileMutation = useMutation({
-    mutationFn: (data) => base44.entities.BuyerProfile.create({
-      ...data,
-      user_id: user.id,
-      total_orders: 0,
-      total_spent: 0
-    }),
+    mutationFn: async (data) => {
+    const { data: result, error } = await supabase
+      .from("buyer_profiles")
+      .upsert(
+        {
+          ...data,
+          user_id: user.id,
+        },
+        { onConflict: "user_id" }
+      )
+      .select()
+      .single();
+
+      if (error) throw error;
+      return result;
+    },
     onSuccess: (newProfile) => {
       setBuyerProfile(newProfile);
       setShowEditor(false);
-      queryClient.invalidateQueries({ queryKey: ['buyer-orders'] });
     },
   });
 
   const updateProfileMutation = useMutation({
-    mutationFn: ({ id, data }) => base44.entities.BuyerProfile.update(id, data),
+    mutationFn: async ({ id, data }) => {
+      const { data: result, error } = await supabase
+        .from("buyer_profiles")
+        .update(data)
+        .eq("id", id)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return result;
+    },
     onSuccess: (updatedProfile) => {
       setBuyerProfile(updatedProfile);
       setShowEditor(false);
@@ -193,27 +225,57 @@ export default function BuyerProfile() {
   });
 
   const handleSubmit = async (e) => {
+    console.log("BuyerProfile handleSubmit fired");
     e.preventDefault();
+
+    console.log("buyerProfile state:", buyerProfile);
+    console.log("formData:", formData);
+
     if (buyerProfile) {
-      updateProfileMutation.mutate({ id: buyerProfile.id, data: formData });
+      console.log("Calling updateProfileMutation");
+      await updateProfileMutation.mutateAsync({
+        id: buyerProfile.id,
+        data: formData,
+      });
     } else {
-      createProfileMutation.mutate(formData);
+      console.log("Calling createProfileMutation");
+      await createProfileMutation.mutateAsync(formData);
     }
   };
 
   const handleImageUpload = async (e) => {
     const file = e.target.files?.[0];
-    if (!file) return;
+    if (!file || !user?.id) return;
 
     setUploadingImage(true);
     try {
-      const { file_url } = await base44.integrations.Core.UploadFile({ file });
-      setFormData(prev => ({ ...prev, profile_image_url: file_url }));
+      const fileExt = file.name.split('.').pop();
+      const fileName = `${user.id}-${Date.now()}.${fileExt}`;
+      const filePath = fileName;
+
+      const { error: uploadError } = await supabase.storage
+        .from("profile-images")
+        .upload(filePath, file, {
+          cacheControl: "3600",
+          upsert: true,
+        });
+
+      if (uploadError) throw uploadError;
+
+      const { data } = supabase.storage
+        .from("profile-images")
+        .getPublicUrl(filePath);
+
+      setFormData(prev => ({
+        ...prev,
+        profile_image_url: data.publicUrl,
+      }));
     } catch (error) {
       console.error("Error uploading image:", error);
       alert("Failed to upload image. Please try again.");
+    } finally {
+      setUploadingImage(false);
     }
-    setUploadingImage(false);
   };
 
   const handleDeleteAccount = async () => {
@@ -254,7 +316,8 @@ export default function BuyerProfile() {
       }
 
       // Logout and redirect
-      await base44.auth.logout(createPageUrl("Marketplace"));
+      await supabase.auth.signOut();
+      navigate(createPageUrl("Marketplace"), { replace: true });
     } catch (error) {
       console.error("Error deleting account:", error);
       alert("Failed to delete account. Please try again or contact support.");
@@ -303,10 +366,40 @@ export default function BuyerProfile() {
     }
   ];
 
-  // CRITICAL: Determine whether to show "Become a Seller" CTA
-  const shouldShowSellerCTA = !seller; // Only show if user has NO seller profile at all
-  const isPendingSeller = seller && seller.status === "pending";
-  const isDeclinedSeller = seller && seller.status === "declined";
+  // CRITICAL: Determine seller application state for UI
+  const userMeta = user?.user_metadata || {};
+  
+  // 🔐 SUPER_ADMIN BYPASS: Hide all application banners
+  const userIsSuperAdmin = isSuperAdmin(user);
+  
+  // Check application status from user_metadata (primary source)
+  const metaApplicationStatus = userMeta.seller_application_status;
+  const metaOnboardingCompleted = userMeta.seller_onboarding_completed === true;
+  
+  // Check seller table status (fallback / authoritative for approval)
+  const sellerTableStatus = seller?.status;
+  
+  // Determine effective application status (seller table takes precedence when approved)
+  // SUPER_ADMIN: treat as approved for all UI purposes
+  const isSellerApproved = userIsSuperAdmin || sellerTableStatus === "approved" || metaApplicationStatus === "approved";
+  const isSellerApplicationPending = 
+    !userIsSuperAdmin && (
+      (metaOnboardingCompleted && metaApplicationStatus === "pending") ||
+      sellerTableStatus === "pending"
+    );
+  const isSellerDeclined = !userIsSuperAdmin && (metaApplicationStatus === "declined" || sellerTableStatus === "declined");
+  const isSellerSuspended = !userIsSuperAdmin && (metaApplicationStatus === "suspended" || sellerTableStatus === "suspended");
+  
+  // Hide "Become a Seller" CTA if:
+  // - SUPER_ADMIN (they have full access already)
+  // - Seller profile exists (any status)
+  // - Application is pending
+  // - Application is approved
+  const shouldShowSellerCTA = !userIsSuperAdmin && !seller && !isSellerApplicationPending && !isSellerApproved;
+  
+  // Legacy compatibility
+  const isPendingSeller = !userIsSuperAdmin && seller && seller.status === "pending";
+  const isDeclinedSeller = !userIsSuperAdmin && seller && seller.status === "declined";
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-purple-50 to-blue-50 py-6 px-4 sm:px-6 lg:px-8">
@@ -315,6 +408,66 @@ export default function BuyerProfile() {
         <div className="flex items-center justify-between">
           <h1 className="text-3xl font-bold text-gray-900">My Profile</h1>
         </div>
+
+        {/* Seller Application Status Banners */}
+        {isSellerApplicationPending && !isSellerApproved && (
+          <Alert className="border-amber-300 bg-amber-50">
+            <AlertCircle className="h-5 w-5 text-amber-600" />
+            <div className="ml-2">
+              <h4 className="font-semibold text-amber-800">Seller Application Submitted</h4>
+              <AlertDescription className="text-amber-700">
+                Your application is under review. You'll be notified once it's approved.
+              </AlertDescription>
+            </div>
+          </Alert>
+        )}
+
+        {isSellerApproved && seller && (
+          <Alert className="border-green-300 bg-green-50">
+            <CheckCircle className="h-5 w-5 text-green-600" />
+            <div className="ml-2 flex-1">
+              <h4 className="font-semibold text-green-800">Seller Account Active</h4>
+              <AlertDescription className="text-green-700">
+                Your seller account is active. Access your Seller Dashboard to manage products and shows.
+              </AlertDescription>
+            </div>
+            <Button 
+              variant="outline" 
+              className="border-green-400 text-green-700 hover:bg-green-100"
+              onClick={() => navigate(createPageUrl("SellerDashboard"))}
+            >
+              Go to Seller Dashboard
+            </Button>
+          </Alert>
+        )}
+
+        {isSellerDeclined && (
+          <Alert className="border-red-300 bg-red-50">
+            <AlertCircle className="h-5 w-5 text-red-600" />
+            <div className="ml-2">
+              <h4 className="font-semibold text-red-800">Seller Application Not Approved</h4>
+              <AlertDescription className="text-red-700">
+                {userMeta.seller_decline_reason || seller?.status_reason
+                  ? `Reason: ${userMeta.seller_decline_reason || seller?.status_reason}`
+                  : "Your seller application was not approved at this time. Please contact support for more information."}
+              </AlertDescription>
+            </div>
+          </Alert>
+        )}
+
+        {isSellerSuspended && (
+          <Alert className="border-orange-300 bg-orange-50">
+            <AlertCircle className="h-5 w-5 text-orange-600" />
+            <div className="ml-2">
+              <h4 className="font-semibold text-orange-800">Seller Account Suspended</h4>
+              <AlertDescription className="text-orange-700">
+                {userMeta.seller_suspend_reason || seller?.status_reason
+                  ? `Reason: ${userMeta.seller_suspend_reason || seller?.status_reason}`
+                  : "Your seller account has been suspended. Please contact support for more information."}
+              </AlertDescription>
+            </div>
+          </Alert>
+        )}
 
         {/* Profile Card */}
         <Card className="border-0 shadow-xl overflow-hidden">
@@ -365,7 +518,10 @@ export default function BuyerProfile() {
                 <Button
                   variant="outline"
                   className="border-red-300 text-red-600 hover:bg-red-50"
-                  onClick={() => base44.auth.logout(createPageUrl("Marketplace"))}
+                  onClick={async () => {
+                    await supabase.auth.signOut();
+                    navigate(createPageUrl("Marketplace"), { replace: true });
+                  }}
                 >
                   <LogOut className="w-4 h-4 mr-2" />
                   Logout

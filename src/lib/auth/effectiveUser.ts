@@ -44,7 +44,31 @@ function safeGetSessionStorage(key: string): string | null {
 }
 
 /**
- * Safely determine if the user has admin role.
+ * Get user role from metadata.
+ * Checks multiple locations for role: user_metadata, app_metadata, and direct property.
+ */
+function getUserRole(user: User | null): string | null {
+  if (!user) return null;
+  try {
+    return user.user_metadata?.role 
+      || user.app_metadata?.role 
+      || (user as unknown as { role?: string }).role 
+      || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Safely determine if the user has super_admin role.
+ * SUPER_ADMIN has full system authority.
+ */
+export function isSuperAdminUser(user: User | null): boolean {
+  return getUserRole(user) === "super_admin";
+}
+
+/**
+ * Safely determine if the user has admin role (includes super_admin).
  * Checks user_metadata.role and app_metadata.role.
  * Returns false if role cannot be determined.
  */
@@ -53,29 +77,9 @@ function isAdminUser(user: User | null): boolean {
     return false;
   }
 
-  try {
-    // Check user_metadata first (common location)
-    const userMetadataRole = user.user_metadata?.role;
-    if (userMetadataRole === "admin") {
-      return true;
-    }
-
-    // Check app_metadata (alternative location)
-    const appMetadataRole = user.app_metadata?.role;
-    if (appMetadataRole === "admin") {
-      return true;
-    }
-
-    // Check direct role property if it exists
-    const directRole = (user as unknown as { role?: string }).role;
-    if (directRole === "admin") {
-      return true;
-    }
-
-    return false;
-  } catch {
-    return false;
-  }
+  const role = getUserRole(user);
+  // super_admin implicitly includes admin privileges
+  return role === "admin" || role === "super_admin";
 }
 
 /**

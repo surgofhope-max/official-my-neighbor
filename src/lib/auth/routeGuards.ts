@@ -14,6 +14,41 @@ export interface Seller {
 }
 
 /**
+ * Get user role from metadata.
+ * Checks multiple locations for role: user_metadata, app_metadata, and direct property.
+ */
+function getUserRole(user: User | null | undefined): string | null {
+  if (!user) return null;
+  return (user as any)?.user_metadata?.role 
+    || (user as any)?.app_metadata?.role 
+    || (user as any)?.role 
+    || null;
+}
+
+/**
+ * Check if user is a SUPER_ADMIN.
+ *
+ * SUPER_ADMIN has full system authority and bypasses ALL product gating:
+ * - viewer, buyer, seller restrictions
+ * - onboarding requirements
+ * - safety agreements
+ * - approval status checks
+ *
+ * @param user - The current user object (or null)
+ * @returns true if user is super_admin, false otherwise
+ *
+ * This function:
+ * - Never throws
+ * - Returns false for null/undefined user
+ * - Checks user_metadata.role for "super_admin"
+ */
+export function isSuperAdmin(user: User | null | undefined): boolean {
+  if (!user) return false;
+  const role = getUserRole(user);
+  return role === "super_admin";
+}
+
+/**
  * Check if user is authenticated.
  *
  * @param user - The current user object (or null)
@@ -37,6 +72,7 @@ export function requireAuth(user: User | null | undefined): boolean {
  * This function:
  * - Never throws
  * - Returns false if not authenticated
+ * - Returns true for super_admin (full bypass)
  * - Returns true for admin users (admin bypass)
  * - Returns true for approved sellers
  * - Returns false for pending/declined/suspended sellers
@@ -48,6 +84,11 @@ export function requireSeller(
   // Not authenticated
   if (!requireAuth(user)) {
     return false;
+  }
+
+  // SUPER_ADMIN bypass - full system authority
+  if (isSuperAdmin(user)) {
+    return true;
   }
 
   // Admin bypass - admins can access seller routes
@@ -65,23 +106,29 @@ export function requireSeller(
 }
 
 /**
- * Check if user is an admin.
+ * Check if user is an admin (or super_admin).
  *
  * @param user - The current user object (or null)
- * @returns true if user is an admin, false otherwise
+ * @returns true if user is an admin or super_admin, false otherwise
  *
  * This function:
  * - Never throws
  * - Returns false for null/undefined user
  * - Checks user.role or user.user_metadata.role
+ * - super_admin implicitly includes admin privileges
  */
 export function requireAdmin(user: User | null | undefined): boolean {
   if (!requireAuth(user)) {
     return false;
   }
 
+  // SUPER_ADMIN has all admin privileges
+  if (isSuperAdmin(user)) {
+    return true;
+  }
+
   // Check role in multiple locations (Supabase stores it in user_metadata)
-  const role = (user as any)?.role || (user as any)?.user_metadata?.role;
+  const role = getUserRole(user);
   return role === "admin";
 }
 
@@ -103,12 +150,18 @@ export function isAdmin(user: User | null | undefined): boolean {
  * This function:
  * - Never throws
  * - Provides centralized route access logic
+ * - SUPER_ADMIN can access ALL routes
  */
 export function canAccessRoute(
   routeName: string,
   user: User | null | undefined,
   seller: Seller | null | undefined
 ): boolean {
+  // SUPER_ADMIN bypass - can access ALL routes
+  if (isSuperAdmin(user)) {
+    return true;
+  }
+
   // Public routes - always accessible
   const publicRoutes = [
     "Marketplace",
@@ -163,6 +216,7 @@ export function canAccessRoute(
     "ManageUsers",
     "GIVIDiagnostics",
     "ShowVideoDebug",
+    "AdminReports",
   ];
 
   if (adminRoutes.includes(routeName)) {

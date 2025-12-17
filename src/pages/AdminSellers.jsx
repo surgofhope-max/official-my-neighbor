@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { supabaseApi as base44 } from "@/api/supabaseClient";
+import { supabase } from "@/lib/supabase/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -34,38 +34,64 @@ export default function AdminSellers() {
   const [actionType, setActionType] = useState("");
   const [statusReason, setStatusReason] = useState("");
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SELLERS LIST (SUPABASE READ)
+  // ═══════════════════════════════════════════════════════════════════════════
   const { data: sellers = [], isLoading } = useQuery({
     queryKey: ['all-sellers'],
-    queryFn: () => base44.entities.Seller.list('-created_date')
+    queryFn: async () => {
+      console.log("[ADMIN SELLERS][SUPABASE] Loading sellers...");
+      
+      const { data, error } = await supabase
+        .from("sellers")
+        .select("*")
+        .order("created_at", { ascending: false });
+
+      if (error) {
+        console.error("[ADMIN SELLERS][SUPABASE] Load failed:", error);
+        throw error;
+      }
+      
+      console.log("[ADMIN SELLERS][SUPABASE] Loaded", data?.length || 0, "sellers");
+      return data || [];
+    }
   });
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // UPDATE SELLER STATUS (ATOMIC EDGE FUNCTION)
+  // ═══════════════════════════════════════════════════════════════════════════
   const updateSellerMutation = useMutation({
-    mutationFn: async ({ id, data, sellerEmail }) => {
-      // 1. Update Seller entity
-      await base44.entities.Seller.update(id, data);
-      
-      // 2. CRITICAL: Sync User entity's seller_status field
-      // This ensures ManageUsers displays the correct badge
-      if (sellerEmail && data.status) {
-        try {
-          const allUsers = await base44.entities.User.list();
-          const targetUser = allUsers.find(u => u.email === sellerEmail);
-          if (targetUser) {
-            console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            console.log("🔄 SYNCING User.seller_status");
-            console.log("   User Email:", sellerEmail);
-            console.log("   User ID:", targetUser.id);
-            console.log("   New seller_status:", data.status);
-            console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            
-            await base44.entities.User.update(targetUser.id, {
-              seller_status: data.status
-            });
-          }
-        } catch (error) {
-          console.error("Failed to sync User.seller_status:", error);
+    mutationFn: async ({ id, data, sellerUserId }) => {
+      console.log("[ADMIN SELLERS] Updating seller status via Edge Function...");
+      console.log("   Seller ID:", id);
+      console.log("   New Status:", data.status);
+      console.log("   User ID:", sellerUserId);
+
+      // Single atomic Edge Function call handles:
+      // 1. sellers.status update
+      // 2. user_metadata sync
+      // 3. notification creation
+      const { data: response, error } = await supabase.functions.invoke("approve-seller", {
+        body: {
+          seller_id: id,
+          seller_user_id: sellerUserId,
+          new_status: data.status,
+          status_reason: data.status_reason || null
         }
+      });
+
+      if (error) {
+        console.error("[ADMIN SELLERS] Edge Function error:", error);
+        throw new Error(error.message || "Failed to update seller status");
       }
+
+      if (!response?.success) {
+        console.error("[ADMIN SELLERS] Edge Function returned failure:", response);
+        throw new Error(response?.error || "Unknown error updating seller status");
+      }
+
+      console.log("[ADMIN SELLERS] Edge Function success:", response.message);
+      return response;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['all-sellers'] });
@@ -75,21 +101,15 @@ export default function AdminSellers() {
       setSelectedSeller(null);
       setStatusReason("");
     },
-  });
-
-  const createAccessLogMutation = useMutation({
-    mutationFn: async (logData) => {
-      const user = await base44.auth.me();
-      return base44.entities.AdminAccessLog.create({
-        admin_id: user.id,
-        admin_email: user.email,
-        session_start: new Date().toISOString(),
-        ip_address: "browser",
-        ...logData
-      });
+    onError: (error) => {
+      console.error("[ADMIN SELLERS] Mutation error:", error);
+      alert(`Failed to update seller status: ${error.message}`);
     }
   });
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // HANDLERS
+  // ═══════════════════════════════════════════════════════════════════════════
   const handleStatusAction = (seller, status) => {
     if (seller.business_name === "Surge of Hope" || seller.created_by === "admin@surge.org") {
       alert("Cannot change status of the primary admin account (Surge of Hope LLC)");
@@ -104,7 +124,7 @@ export default function AdminSellers() {
       updateSellerMutation.mutate({ 
         id: seller.id, 
         data: { status, status_reason: null },
-        sellerEmail: seller.created_by
+        sellerUserId: seller.user_id
       });
     }
   };
@@ -117,18 +137,13 @@ export default function AdminSellers() {
           status: actionType,
           status_reason: statusReason.trim()
         },
-        sellerEmail: selectedSeller.created_by
+        sellerUserId: selectedSeller.user_id
       });
     }
   };
 
-  const handleViewData = async (seller) => {
-    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    console.log("🔍 View Data Button Clicked");
-    console.log("   Seller ID:", seller.id);
-    console.log("   Seller Name:", seller.business_name);
-    console.log("   Target URL:", `AdminSellerData?sellerid=${seller.id}`); // Changed sellerId to sellerid
-    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+  const handleViewData = (seller) => {
+    console.log("[ADMIN SELLERS][SUPABASE] View Data:", seller.id, seller.business_name);
     
     if (!seller?.id) {
       alert("Error: Seller ID is missing. Please contact support.");
@@ -136,47 +151,27 @@ export default function AdminSellers() {
       return;
     }
     
-    await createAccessLogMutation.mutateAsync({
-      seller_id: seller.id,
-      action_type: "view_data"
-    });
+    // Navigate directly without access logging (access log removed - was Base44 dependent)
+    navigate(createPageUrl(`AdminSellerData?sellerid=${seller.id}`));
+  };
+
+  const handleImpersonate = (seller) => {
+    console.log("[ADMIN SELLERS][SUPABASE] Impersonate:", seller.id, seller.business_name);
     
-    navigate(createPageUrl(`AdminSellerData?sellerid=${seller.id}`)); // Changed sellerId to sellerid
+    // Use seller.user_id directly (no Base44 BuyerProfile lookup)
+    const impersonatedUserId = seller.user_id || seller.created_by;
+    
+    sessionStorage.setItem('admin_impersonate_seller_id', seller.id);
+    sessionStorage.setItem('admin_impersonate_user_id', impersonatedUserId || '');
+    sessionStorage.setItem('admin_impersonate_user_email', seller.created_by || '');
+    sessionStorage.setItem('admin_impersonate_start', new Date().toISOString());
+    
+    navigate(createPageUrl("SellerDashboard"));
   };
 
-  const handleImpersonate = async (seller) => {
-    try {
-      // Get all buyer profiles to find the user ID associated with this seller's email
-      const allBuyers = await base44.entities.BuyerProfile.list();
-      const buyerProfile = allBuyers.find(b => b.email === seller.created_by);
-      
-      let impersonatedUserId = null;
-      if (buyerProfile) {
-        impersonatedUserId = buyerProfile.user_id;
-      } else {
-        // If no buyer profile, try to get from User entity (for sellers who haven't created buyer profile yet)
-        // Since we can't directly query User by email, we'll store the seller's created_by email
-        // and use it to identify the user
-        impersonatedUserId = seller.created_by; // fallback to email
-      }
-      
-      await createAccessLogMutation.mutateAsync({
-        seller_id: seller.id,
-        action_type: "impersonate_seller"
-      });
-      
-      sessionStorage.setItem('admin_impersonate_seller_id', seller.id);
-      sessionStorage.setItem('admin_impersonate_user_id', impersonatedUserId || '');
-      sessionStorage.setItem('admin_impersonate_user_email', seller.created_by);
-      sessionStorage.setItem('admin_impersonate_start', new Date().toISOString());
-      
-      navigate(createPageUrl("SellerDashboard"));
-    } catch (error) {
-      console.error("Error setting up impersonation:", error);
-      alert("Failed to impersonate seller. Please try again.");
-    }
-  };
-
+  // ═══════════════════════════════════════════════════════════════════════════
+  // FILTERS & UI HELPERS
+  // ═══════════════════════════════════════════════════════════════════════════
   const filteredSellers = sellers.filter(seller =>
     seller.business_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
     seller.contact_email?.toLowerCase().includes(searchTerm.toLowerCase())
@@ -189,6 +184,9 @@ export default function AdminSellers() {
     suspended: "bg-yellow-100 text-yellow-800 border-yellow-200"
   };
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // RENDER
+  // ═══════════════════════════════════════════════════════════════════════════
   return (
     <div className="min-h-screen p-4 sm:p-8 bg-gray-50">
       <div className="max-w-7xl mx-auto space-y-6">

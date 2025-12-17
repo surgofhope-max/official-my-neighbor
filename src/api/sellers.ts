@@ -106,6 +106,35 @@ export async function getSellerById(
   }
 }
 
+/**
+ * Get all sellers (for admin dashboard).
+ *
+ * @returns Array of all sellers, sorted by created_at DESC
+ *
+ * This function:
+ * - Never throws
+ * - Returns [] on any error
+ * - Intended for admin use only
+ */
+export async function getAllSellers(): Promise<Seller[]> {
+  try {
+    const { data, error } = await supabase
+      .from("sellers")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.warn("Failed to fetch all sellers:", error.message);
+      return [];
+    }
+
+    return (data as Seller[]) ?? [];
+  } catch (err) {
+    console.warn("Unexpected error fetching all sellers:", err);
+    return [];
+  }
+}
+
 
 
 

@@ -27,6 +27,7 @@ import BuyerSafetyAgreement from './pages/BuyerSafetyAgreement';
 import SellerSafetyAgreement from './pages/SellerSafetyAgreement';
 import SellerOnboarding from './pages/SellerOnboarding';
 import Login from './pages/Login';
+import Signup from './pages/Signup';
 import __Layout from './Layout.jsx';
 
 
@@ -60,6 +61,7 @@ export const PAGES = {
     "SellerSafetyAgreement": SellerSafetyAgreement,
     "SellerOnboarding": SellerOnboarding,
     "Login": Login,
+    "Signup": Signup,
 }
 
 export const pagesConfig = {

@@ -192,7 +192,7 @@ export default function Sellers() {
                 Join LiveMarket and start selling your products through live streams
               </p>
               <button
-                onClick={() => navigate(createPageUrl("SellerDashboard"))}
+                onClick={() => navigate(createPageUrl("SellerSafetyAgreement"))}
                 className="bg-gradient-to-r from-purple-600 to-blue-600 text-white px-6 py-3 rounded-lg font-semibold hover:from-purple-700 hover:to-blue-700 transition-all shadow-lg"
               >
                 Apply to Sell

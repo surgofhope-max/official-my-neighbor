@@ -1,6 +1,9 @@
 import React, { useState, useEffect, useRef } from "react";
 import { supabaseApi as base44 } from "@/api/supabaseClient";
+import { supabase } from "@/lib/supabase/supabaseClient";
+import { useSupabaseAuth } from "@/lib/auth/SupabaseAuthProvider";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { isSuperAdmin } from "@/lib/auth/routeGuards";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -54,6 +57,10 @@ import ModerationCenter from "../components/seller/ModerationCenter"; // Changed
 export default function SellerDashboard() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  
+  // Use SupabaseAuthProvider as single source of truth for auth
+  const { user: authUser, isLoadingAuth } = useSupabaseAuth();
+  
   const [user, setUser] = useState(null);
   const [seller, setSeller] = useState(null);
   const [isOnboarding, setIsOnboarding] = useState(false);
@@ -169,35 +176,99 @@ export default function SellerDashboard() {
 
   const isImpersonating = !!sessionStorage.getItem('admin_impersonate_seller_id');
 
+  // Load seller data when auth user changes
   useEffect(() => {
+    if (isLoadingAuth) return; // Wait for auth check to complete
+    
+    if (!authUser) {
+      // Not logged in - redirect to login
+      console.log("🔐 User not authenticated - redirecting to login");
+      navigate(createPageUrl("Login"), { replace: true });
+      return;
+    }
+    
     loadUser();
-  }, []);
+  }, [authUser, isLoadingAuth]);
 
   const loadUser = async () => {
     try {
-      // Check if user is authenticated first
-      const isAuthenticated = await base44.auth.isAuthenticated();
-      
-      if (!isAuthenticated) {
-        // Not logged in - redirect to seller safety agreement (which will handle login)
-        console.log("🔐 User not authenticated - redirecting to seller safety agreement");
-        navigate(createPageUrl("SellerSafetyAgreement"), { replace: true });
+      // Auth is already checked by useEffect - authUser is guaranteed to exist here
+      const currentUser = authUser;
+      setUser(currentUser);
+
+      // 🔐 SUPER_ADMIN BYPASS: Skip ALL checks — full system authority
+      if (isSuperAdmin(currentUser)) {
+        console.log("🔑 SUPER_ADMIN detected — bypassing ALL onboarding/safety/approval checks");
+        
+        // Load seller profile if exists, but don't require it
+        const { data: sellerProfile } = await supabase
+          .from("sellers")
+          .select("*")
+          .eq("user_id", currentUser.id)
+          .single();
+        
+        if (sellerProfile) {
+          setSeller(sellerProfile);
+          setFormData({
+            business_name: sellerProfile.business_name || "",
+            contact_phone: sellerProfile.contact_phone || "",
+            contact_email: sellerProfile.contact_email || currentUser.email,
+            pickup_address: sellerProfile.pickup_address || "",
+            pickup_city: sellerProfile.pickup_city || "",
+            pickup_state: sellerProfile.pickup_state || "Arizona",
+            pickup_zip: sellerProfile.pickup_zip || "",
+            pickup_notes: sellerProfile.pickup_notes || "",
+            bio: sellerProfile.bio || "",
+            profile_image_url: sellerProfile.profile_image_url || "",
+            background_image_url: sellerProfile.background_image_url || "",
+            show_contact_email: sellerProfile.show_contact_email !== false,
+            show_contact_phone: sellerProfile.show_contact_phone !== false,
+            show_pickup_address: sellerProfile.show_pickup_address !== false
+          });
+        } else {
+          // No seller profile — show creation form
+          setIsOnboarding(true);
+          setFormData({
+            business_name: "Surge of Hope",
+            contact_phone: "",
+            contact_email: currentUser.email,
+            pickup_address: "",
+            pickup_city: "Phoenix",
+            pickup_state: "Arizona",
+            pickup_zip: "",
+            pickup_notes: "",
+            bio: "Official Surge of Hope marketplace for live charity auctions and sales",
+            profile_image_url: "",
+            background_image_url: "",
+            show_contact_email: true,
+            show_contact_phone: true,
+            show_pickup_address: true
+          });
+        }
+        // SUPER_ADMIN: done loading, render dashboard
         return;
       }
       
-      const currentUser = await base44.auth.me();
-      setUser(currentUser);
-      
       // CRITICAL: Check for onboarding reset - must complete full onboarding again
-      if (currentUser.role !== "admin" && currentUser.seller_onboarding_reset === true) {
+      const userRole = currentUser.user_metadata?.role || currentUser.role;
+      if (userRole !== "admin" && currentUser.seller_onboarding_reset === true) {
         console.log("🔄 Seller onboarding reset detected - redirecting to full onboarding");
         navigate(createPageUrl("SellerSafetyAgreement"), { replace: true });
         return;
       }
 
       // Check if seller entity already exists (If so, they are effectively onboarded)
-      const existingSellers = await base44.entities.Seller.filter({ created_by: currentUser.email });
-      const hasSellerEntity = existingSellers.length > 0;
+      const { data: sellerProfile, error: sellerError } = await supabase
+        .from("sellers")
+        .select("*")
+        .eq("user_id", currentUser.id)
+        .single();
+
+      if (sellerError && sellerError.code !== "PGRST116") {
+        throw sellerError;
+      }
+
+      const hasSellerEntity = !!sellerProfile;
 
       // LOGGING FOR DEBUGGING
       console.log("🔍 SellerDashboard Check:", {
@@ -205,14 +276,14 @@ export default function SellerDashboard() {
         sellerOnboardingCompleted: currentUser.seller_onboarding_completed,
         sellerSafetyAgreed: currentUser.seller_safety_agreed,
         sellerReset: currentUser.seller_onboarding_reset,
-        role: currentUser.role
+        role: userRole
       });
-      if (existingSellers.length > 0) {
-        console.log("✅ Seller profile found:", existingSellers[0]);
+      if (sellerProfile) {
+        console.log("✅ Seller profile found:", sellerProfile);
       }
 
       // SAFETY & ONBOARDING CHECKS (Sequential to prevent race conditions)
-      if (currentUser.role !== "admin") {
+      if (userRole !== "admin") {
         // 1. Check Safety Agreement (Relaxed check)
         // CRITICAL: If seller entity exists, we assume they are safe/approved regardless of flag
         if (!currentUser.seller_safety_agreed && !hasSellerEntity) {
@@ -273,79 +344,74 @@ export default function SellerDashboard() {
         }
       }
       
-      // Normal flow - load seller by created_by
-      try {
-        const sellers = await base44.entities.Seller.filter({ created_by: currentUser.email });
-        if (sellers.length > 0) {
-          const sellerProfile = sellers[0];
-          setSeller(sellerProfile);
-          
-          if (currentUser.role !== "admin" && sellerProfile.status !== "approved") {
-            alert("Your seller application has been submitted and is pending admin approval. You'll be notified once approved.");
-            navigate(createPageUrl("Marketplace"));
-            return;
-          }
-          
+      // Normal flow - use the sellerProfile already fetched above
+      if (sellerProfile) {
+        setSeller(sellerProfile);
+        
+        if (currentUser.role !== "admin" && sellerProfile.status !== "approved") {
+          // Redirect to BuyerProfile with pending status - they'll see the banner there
+          navigate(createPageUrl("BuyerProfile"), {
+            replace: true,
+            state: { sellerStatus: sellerProfile.status }
+          });
+          return;
+        }
+        
+        setFormData({
+          business_name: sellerProfile.business_name || "",
+          contact_phone: sellerProfile.contact_phone || "",
+          contact_email: sellerProfile.contact_email || currentUser.email,
+          pickup_address: sellerProfile.pickup_address || "",
+          pickup_city: sellerProfile.pickup_city || "",
+          pickup_state: sellerProfile.pickup_state || "Arizona",
+          pickup_zip: sellerProfile.pickup_zip || "",
+          pickup_notes: sellerProfile.pickup_notes || "",
+          bio: sellerProfile.bio || "",
+          profile_image_url: sellerProfile.profile_image_url || "",
+          background_image_url: sellerProfile.background_image_url || "",
+          show_contact_email: sellerProfile.show_contact_email !== false,
+          show_contact_phone: sellerProfile.show_contact_phone !== false,
+          show_pickup_address: sellerProfile.show_pickup_address !== false
+        });
+      } else {
+        // User has completed "User Onboarding" (steps) but hasn't created "Seller Entity" yet.
+        // Show the Profile Creation Form.
+        if (currentUser.role === "admin") {
           setFormData({
-            business_name: sellerProfile.business_name || "",
-            contact_phone: sellerProfile.contact_phone || "",
-            contact_email: sellerProfile.contact_email || currentUser.email,
-            pickup_address: sellerProfile.pickup_address || "",
-            pickup_city: sellerProfile.pickup_city || "",
-            pickup_state: sellerProfile.pickup_state || "Arizona",
-            pickup_zip: sellerProfile.pickup_zip || "",
-            pickup_notes: sellerProfile.pickup_notes || "",
-            bio: sellerProfile.bio || "",
-            profile_image_url: sellerProfile.profile_image_url || "",
-            background_image_url: sellerProfile.background_image_url || "",
-            show_contact_email: sellerProfile.show_contact_email !== false,
-            show_contact_phone: sellerProfile.show_contact_phone !== false,
-            show_pickup_address: sellerProfile.show_pickup_address !== false
+            business_name: "Surge of Hope",
+            contact_phone: "",
+            contact_email: currentUser.email,
+            pickup_address: "",
+            pickup_city: "Phoenix",
+            pickup_state: "Arizona",
+            pickup_zip: "",
+            pickup_notes: "",
+            bio: "Official Surge of Hope marketplace for live charity auctions and sales",
+            profile_image_url: "",
+            background_image_url: "",
+            show_contact_email: true,
+            show_contact_phone: true,
+            show_pickup_address: true
           });
         } else {
-          // User has completed "User Onboarding" (steps) but hasn't created "Seller Entity" yet.
-          // Show the Profile Creation Form.
-          if (currentUser.role === "admin") {
-            setFormData({
-              business_name: "Surge of Hope",
-              contact_phone: "",
-              contact_email: currentUser.email,
-              pickup_address: "",
-              pickup_city: "Phoenix",
-              pickup_state: "Arizona",
-              pickup_zip: "",
-              pickup_notes: "",
-              bio: "Official Surge of Hope marketplace for live charity auctions and sales",
-              profile_image_url: "",
-              background_image_url: "",
-              show_contact_email: true,
-              show_contact_phone: true,
-              show_pickup_address: true
-            });
-          } else {
-            // Pre-fill from user onboarding data
-            setFormData({
-              business_name: currentUser.seller_return_full_name || "",
-              contact_phone: currentUser.phone_number || "",
-              contact_email: currentUser.email,
-              pickup_address: (currentUser.seller_return_address_1 || "") + (currentUser.seller_return_address_2 ? " " + currentUser.seller_return_address_2 : ""),
-              pickup_city: currentUser.seller_return_city || "",
-              pickup_state: currentUser.seller_return_state || "",
-              pickup_zip: currentUser.seller_return_zip || "",
-              pickup_notes: "",
-              bio: "",
-              profile_image_url: "",
-              background_image_url: "",
-              show_contact_email: true,
-              show_contact_phone: true,
-              show_pickup_address: true
-            });
-          }
-          setIsOnboarding(true);
+          // Pre-fill from user onboarding data
+          setFormData({
+            business_name: currentUser.seller_return_full_name || "",
+            contact_phone: currentUser.phone_number || "",
+            contact_email: currentUser.email,
+            pickup_address: (currentUser.seller_return_address_1 || "") + (currentUser.seller_return_address_2 ? " " + currentUser.seller_return_address_2 : ""),
+            pickup_city: currentUser.seller_return_city || "",
+            pickup_state: currentUser.seller_return_state || "",
+            pickup_zip: currentUser.seller_return_zip || "",
+            pickup_notes: "",
+            bio: "",
+            profile_image_url: "",
+            background_image_url: "",
+            show_contact_email: true,
+            show_contact_phone: true,
+            show_pickup_address: true
+          });
         }
-      } catch (err) {
-        console.error("Error fetching seller:", err);
-        // If fetch fails, assume new seller and show onboarding form
         setIsOnboarding(true);
       }
     } catch (error) {
@@ -356,6 +422,7 @@ export default function SellerDashboard() {
   const createSellerMutation = useMutation({
     mutationFn: (data) => base44.entities.Seller.create({
       ...data,
+      user_id: user.id, // CRITICAL: Link seller to Supabase auth user
       created_by: user.email, // Ensure created_by is set
       status: user?.role === "admin" ? "approved" : "pending"
     }),
