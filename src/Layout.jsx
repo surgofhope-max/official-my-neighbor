@@ -101,6 +101,9 @@ export default function Layout({ children, currentPageName }) {
     // Wait for auth check to complete
     if (isLoadingAuth) return;
 
+    // Allow HostConsole to handle its own access checks
+    if (currentPageName === "HostConsole") return;
+
     // Check if current route is accessible
     const hasAccess = canAccessRoute(currentPageName, user, seller);
 
@@ -114,6 +117,11 @@ export default function Layout({ children, currentPageName }) {
   useEffect(() => {
     window.scrollTo(0, 0);
   }, [location.pathname]);
+
+  // TEMP: Route navigation watcher
+  useEffect(() => {
+    console.log("🧭 ROUTE NOW:", window.location.pathname + window.location.search, "| currentPageName:", currentPageName);
+  }, [location.pathname, location.search, currentPageName]);
 
   const loadSellerData = async (currentUser) => {
     try {

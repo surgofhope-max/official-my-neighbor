@@ -24,7 +24,7 @@ export default function ProductForm({ product, onSave, onCancel, isSubmitting })
     is_live_item: product?.is_live_item || false,
     is_givey: product?.is_givey || false,
     category: product?.category || "",
-    image_urls: product?.image_urls || []
+    images: product?.images || []
   });
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef(null);
@@ -59,7 +59,7 @@ export default function ProductForm({ product, onSave, onCancel, isSubmitting })
 
     setFormData(prev => ({
       ...prev,
-      image_urls: [...prev.image_urls, ...urls]
+      images: [...prev.images, ...urls]
     }));
     setUploading(false);
   };
@@ -67,7 +67,7 @@ export default function ProductForm({ product, onSave, onCancel, isSubmitting })
   const removeImage = (index) => {
     setFormData(prev => ({
       ...prev,
-      image_urls: prev.image_urls.filter((_, i) => i !== index)
+      images: prev.images.filter((_, i) => i !== index)
     }));
   };
 
@@ -86,7 +86,7 @@ export default function ProductForm({ product, onSave, onCancel, isSubmitting })
       <div className="space-y-3">
         <Label>Product Images</Label>
         <div className="grid grid-cols-3 gap-3">
-          {formData.image_urls.map((url, index) => (
+          {formData.images.map((url, index) => (
             <div key={index} className="relative group">
               <img
                 src={url}

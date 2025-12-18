@@ -296,17 +296,9 @@ export default function SellerDashboard() {
         // CRITICAL: If seller entity exists, we UNCONDITIONALLY allow access
         // We do NOT check specific sub-fields like main_community, etc.
         if (!hasSellerEntity && !currentUser.seller_onboarding_completed) {
-          // Check for auto-repair (steps completed)
-          const completedSteps = currentUser.seller_onboarding_steps_completed || [];
-          if (completedSteps.length >= 9) {
-            console.log("🔧 Auto-repairing seller completion flag...");
-            base44.auth.updateMe({ seller_onboarding_completed: true }).catch(console.error);
-            currentUser.seller_onboarding_completed = true; 
-          } else {
-            console.log("📋 Seller onboarding incomplete - redirecting");
-            navigate(createPageUrl("SellerOnboarding"), { replace: true });
-            return;
-          }
+          console.log("📋 Seller onboarding incomplete - redirecting");
+          navigate(createPageUrl("SellerOnboarding"), { replace: true });
+          return;
         }
       }
       
@@ -550,7 +542,8 @@ export default function SellerDashboard() {
       }
 
       // Logout and redirect
-      await base44.auth.logout(createPageUrl("Marketplace"));
+      await supabase.auth.signOut();
+      navigate(createPageUrl("Marketplace"), { replace: true });
     } catch (error) {
       console.error("Error deleting account:", error);
       alert("Failed to delete account. Please try again or contact support.");
@@ -973,7 +966,10 @@ export default function SellerDashboard() {
               variant="outline"
               size="sm"
               className="border-red-300 text-red-600 hover:bg-red-50 h-auto py-2 px-2 flex flex-col items-center gap-1"
-              onClick={() => base44.auth.logout(createPageUrl("Marketplace"))}
+              onClick={async () => {
+                await supabase.auth.signOut();
+                navigate(createPageUrl("Marketplace"), { replace: true });
+              }}
             >
               <LogOut className="w-4 h-4" />
               <span className="text-[10px] leading-tight text-center">Logout</span>

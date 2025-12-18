@@ -1,7 +1,7 @@
 /**
  * Products API
  *
- * Provides read-only queries for product data.
+ * Provides queries and mutations for product data.
  */
 
 import { supabase } from "@/lib/supabase/supabaseClient";
@@ -16,22 +16,19 @@ export interface Product {
   original_price?: number;
   quantity: number;
   quantity_sold?: number;
-  image_url?: string;
-  images?: string[];
+  images?: any[] | null;
   category?: string;
-  box_number?: number;
   status: "active" | "sold_out" | "hidden" | "deleted";
-  is_givi?: boolean;
   givi_type?: string;
-  created_date?: string;
-  updated_date?: string;
+  created_at?: string;
+  updated_at?: string;
 }
 
 /**
  * Get all products for a specific show.
  *
  * @param showId - The show ID to filter by
- * @returns Array of products for the show, sorted by box_number
+ * @returns Array of products for the show, sorted by created_at
  *
  * This function:
  * - Never throws
@@ -50,7 +47,7 @@ export async function getProductsByShowId(
       .from("products")
       .select("*")
       .eq("show_id", showId)
-      .order("box_number", { ascending: true });
+      .order("created_at", { ascending: true });
 
     if (error) {
       console.warn("Failed to fetch products by show ID:", error.message);
@@ -68,7 +65,7 @@ export async function getProductsByShowId(
  * Get all products for a specific seller.
  *
  * @param sellerId - The seller ID to filter by
- * @returns Array of products for the seller, sorted by created_date DESC
+ * @returns Array of products for the seller, sorted by created_at DESC
  *
  * This function:
  * - Never throws
@@ -87,7 +84,7 @@ export async function getProductsBySellerId(
       .from("products")
       .select("*")
       .eq("seller_id", sellerId)
-      .order("created_date", { ascending: false });
+      .order("created_at", { ascending: false });
 
     if (error) {
       console.warn("Failed to fetch products by seller ID:", error.message);
@@ -152,7 +149,7 @@ export async function getAllProducts(): Promise<Product[]> {
     const { data, error } = await supabase
       .from("products")
       .select("*")
-      .order("created_date", { ascending: false });
+      .order("created_at", { ascending: false });
 
     if (error) {
       console.warn("Failed to fetch all products:", error.message);
@@ -190,7 +187,7 @@ export async function getActiveProductsByShowId(
       .select("*")
       .eq("show_id", showId)
       .eq("status", "active")
-      .order("box_number", { ascending: true });
+      .order("created_at", { ascending: true });
 
     if (error) {
       console.warn("Failed to fetch active products by show ID:", error.message);
@@ -204,9 +201,141 @@ export async function getActiveProductsByShowId(
   }
 }
 
+// ─────────────────────────────────────────────────────────────
+// WRITE OPERATIONS
+// ─────────────────────────────────────────────────────────────
 
+export interface CreateProductInput {
+  seller_id: string;
+  show_id?: string;
+  title: string;
+  description?: string;
+  price: number;
+  original_price?: number;
+  quantity: number;
+  images?: any[] | null;
+  category?: string;
+  givi_type?: string;
+  status?: "active" | "sold_out" | "hidden" | "deleted";
+}
 
+/**
+ * Create a new product.
+ *
+ * @param input - The product data to create
+ * @returns The created product, or null on error
+ *
+ * This function:
+ * - Never throws
+ * - Returns null on any error
+ */
+export async function createProduct(
+  input: CreateProductInput
+): Promise<Product | null> {
+  try {
+    const { data, error } = await supabase
+      .from("products")
+      .insert({
+        seller_id: input.seller_id,
+        show_id: input.show_id ?? null,
+        title: input.title,
+        description: input.description ?? null,
+        price: input.price,
+        original_price: input.original_price ?? null,
+        quantity: input.quantity,
+        images: input.images ?? [],
+        category: input.category ?? null,
+        givi_type: input.givi_type ?? null,
+        status: input.status ?? "active",
+      })
+      .select()
+      .single();
 
+    if (error) {
+      console.error("Failed to create product:", error.message);
+      return null;
+    }
+
+    return data as Product;
+  } catch (err) {
+    console.error("Unexpected error creating product:", err);
+    return null;
+  }
+}
+
+/**
+ * Update an existing product.
+ *
+ * @param productId - The product ID to update
+ * @param updates - Partial product fields to update
+ * @returns The updated product, or null on error
+ *
+ * This function:
+ * - Never throws
+ * - Returns null for null productId
+ * - Returns null on any error
+ */
+export async function updateProduct(
+  productId: string | null,
+  updates: Partial<Omit<Product, "id">>
+): Promise<Product | null> {
+  if (!productId) {
+    return null;
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from("products")
+      .update(updates)
+      .eq("id", productId)
+      .select()
+      .single();
+
+    if (error) {
+      console.error("Failed to update product:", error.message);
+      return null;
+    }
+
+    return data as Product;
+  } catch (err) {
+    console.error("Unexpected error updating product:", err);
+    return null;
+  }
+}
+
+/**
+ * Delete a product (soft delete by setting status to "deleted").
+ *
+ * @param productId - The product ID to delete
+ * @returns true if deleted successfully, false otherwise
+ *
+ * This function:
+ * - Never throws
+ * - Returns false for null productId
+ * - Returns false on any error
+ */
+export async function deleteProduct(productId: string | null): Promise<boolean> {
+  if (!productId) {
+    return false;
+  }
+
+  try {
+    const { error } = await supabase
+      .from("products")
+      .update({ status: "deleted", quantity: 0 })
+      .eq("id", productId);
+
+    if (error) {
+      console.error("Failed to delete product:", error.message);
+      return false;
+    }
+
+    return true;
+  } catch (err) {
+    console.error("Unexpected error deleting product:", err);
+    return false;
+  }
+}
 
 
 

@@ -1,7 +1,11 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { supabaseApi as base44 } from "@/api/supabaseClient";
+import { supabase } from "@/lib/supabase/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { isSuperAdmin } from "@/lib/auth/routeGuards";
+import { getShowById } from "@/api/shows";
+import { createProduct, updateProduct } from "@/api/products";
+import { getShowProductsByShowId, createShowProduct, updateShowProductByIds, clearFeaturedForShow, deleteShowProductByIds } from "@/api/showProducts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -37,7 +41,8 @@ import {
   Sparkles,
   MessageCircle,
   ClipboardCheck,
-  QrCode
+  QrCode,
+  ShoppingBag
 } from "lucide-react";
 import WebRTCBroadcaster from "../components/streaming/WebRTCBroadcaster";
 import HostBottomControls from "../components/host/HostBottomControls";
@@ -81,15 +86,20 @@ export default function HostConsole() {
   const [bottomBarMode, setBottomBarMode] = useState("products"); // "products" or "message"
   const [showFulfillmentDrawer, setShowFulfillmentDrawer] = useState(false);
   const [showFulfillmentDialog, setShowFulfillmentDialog] = useState(false);
+  
+  // Ref to prevent NO_SHOWID guard from re-triggering after initial mount
+  const noShowIdGuardRan = useRef(false);
 
   // CRITICAL: Immediate redirect if no showId - prevent "No Show ID" error from appearing
+  // Only runs ONCE on initial mount
   useEffect(() => {
+    if (noShowIdGuardRan.current) return; // Already ran, don't repeat
     if (!showId) {
-      console.log("⚠️ HostConsole loaded without showId - redirecting immediately");
-      const showsUrl = createPageUrl("SellerShows");
-      window.location.replace(showsUrl);
+      noShowIdGuardRan.current = true;
+      navigate(createPageUrl("SellerShows"), { replace: true });
+      return;
     }
-  }, [showId]);
+  }, []); // Empty deps = only on mount
 
   // ENHANCED: Load user and seller with better error handling
   useEffect(() => {
@@ -107,70 +117,63 @@ export default function HostConsole() {
 
   const loadUserAndSeller = async () => {
     try {
-      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-      console.log("🔐 HOSTCONSOLE - LOADING USER & SELLER");
-      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-      
       const user = await base44.auth.me();
       setCurrentUser(user);
       const userRole = user.user_metadata?.role || user.role;
-      console.log("👤 User loaded:", user.email);
-      console.log("   Role:", userRole);
-      console.log("   SuperAdmin?:", userRole === "super_admin");
-      console.log("   Admin?:", userRole === "admin" || userRole === "super_admin");
+      
+      // DERIVED CONSTANTS: Read ALL onboarding flags from user_metadata ONLY
+      const onboardingCompleted = user.user_metadata?.seller_onboarding_completed === true;
+      const safetyAgreed = user.user_metadata?.seller_safety_agreed === true;
+      const onboardingReset = user.user_metadata?.seller_onboarding_reset === true;
 
       // 🔐 SUPER_ADMIN BYPASS: Skip ALL checks
       if (isSuperAdmin(user)) {
-        console.log("🔑 SUPER_ADMIN detected — bypassing all checks in HostConsole");
         // Load seller if exists, but don't require it
-        const sellers = await base44.entities.Seller.filter({ created_by: user.email });
-        if (sellers.length > 0) {
-          setCurrentSeller(sellers[0]);
-          console.log("✅ Seller loaded:", sellers[0].business_name);
+        const { data: seller, error: sellerError } = await supabase
+          .from("sellers")
+          .select("*")
+          .eq("user_id", user.id)
+          .maybeSingle();
+        if (sellerError) throw sellerError;
+        if (seller) {
+          setCurrentSeller(seller);
         }
-        console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        setUserLoading(false);
         return;
       }
       
       // CRITICAL: Check for onboarding reset - must complete full onboarding again
-      if (userRole !== "admin" && user.seller_onboarding_reset === true) {
-        console.log("🔄 Seller onboarding reset detected - redirecting to full onboarding");
+      if (userRole !== "admin" && onboardingReset) {
         navigate(createPageUrl("SellerSafetyAgreement"), { replace: true });
         return;
       }
 
       // Check for seller safety agreement
-      if (userRole !== "admin" && user.seller_safety_agreed !== true) {
-        console.log("🛡️ Seller safety agreement required - redirecting");
+      if (userRole !== "admin" && !safetyAgreed) {
         navigate(createPageUrl("SellerSafetyAgreement"), { replace: true });
         return;
       }
 
       // Check for seller onboarding completion
-      if (userRole !== "admin" && !user.seller_onboarding_completed) {
-        console.log("📋 Seller onboarding incomplete - redirecting");
+      if (userRole !== "admin" && !onboardingCompleted) {
         navigate(createPageUrl("SellerOnboarding"), { replace: true });
         return;
       }
       
-      const sellers = await base44.entities.Seller.filter({ created_by: user.email });
-      console.log("🏪 Seller query result:", sellers.length, "sellers found");
+      const { data: seller, error: sellerError } = await supabase
+        .from("sellers")
+        .select("*")
+        .eq("user_id", user.id)
+        .maybeSingle();
+      if (sellerError) throw sellerError;
       
-      if (sellers.length > 0) {
-        setCurrentSeller(sellers[0]);
-        console.log("✅ Seller loaded:", sellers[0].business_name);
-        console.log("   Seller ID:", sellers[0].id);
-        console.log("   Status:", sellers[0].status);
+      if (seller) {
+        setCurrentSeller(seller);
       } else {
-        console.error("❌ NO SELLER PROFILE FOUND for user:", user.email);
-        console.error("   This user cannot access Host Console without a seller profile");
+        console.error("No seller profile found for user:", user.email);
       }
-      
-      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     } catch (error) {
-      console.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-      console.error("❌ CRITICAL ERROR loading user/seller:", error);
-      console.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+      console.error("Error loading user/seller:", error);
     } finally {
       setUserLoading(false);
     }
@@ -180,23 +183,16 @@ export default function HostConsole() {
   const { data: show, isLoading: showLoading, error: showError } = useQuery({
     queryKey: ['show', showId],
     queryFn: async () => {
-      console.log("🔍 HostConsole - Fetching show with ID:", showId);
-      const shows = await base44.entities.Show.filter({ id: showId });
-      console.log("📺 HostConsole - Show query result:", shows);
+      const fetchedShow = await getShowById(showId);
       
-      if (!shows || shows.length === 0) {
+      if (!fetchedShow) {
         throw new Error("Show not found");
       }
       
-      const fetchedShow = shows[0];
-      console.log("✅ HostConsole - Show loaded:", fetchedShow.title, "| ShowID:", fetchedShow.id, "| SellerID:", fetchedShow.seller_id);
-      
       // CRITICAL: If show is ended, redirect immediately
       if (fetchedShow.status === "ended" || fetchedShow.status === "cancelled") {
-        console.log("⚠️ Show is ended/cancelled - redirecting to SellerShows");
-        const showsUrl = createPageUrl("SellerShows");
-        window.location.replace(showsUrl);
-        throw new Error("Show has ended - redirecting");
+        navigate(createPageUrl("SellerShows"), { replace: true });
+        return null;
       }
       
       return fetchedShow;
@@ -209,44 +205,23 @@ export default function HostConsole() {
   const { data: showSeller, isLoading: sellerLoading } = useQuery({
     queryKey: ['show-seller', show?.seller_id],
     queryFn: async () => {
-      console.log("🏪 HostConsole - Fetching seller for show:", show.seller_id);
-      const sellers = await base44.entities.Seller.filter({ id: show.seller_id });
-      if (sellers.length > 0) {
-        console.log("✅ HostConsole - Show seller loaded:", sellers[0].business_name, "ID:", sellers[0].id);
-        return sellers[0];
-      }
-      return null;
+      const { data: fetchedSeller, error } = await supabase
+        .from("sellers")
+        .select("*")
+        .eq("user_id", show.seller_id)
+        .maybeSingle();
+      if (error) throw error;
+      return fetchedSeller || null;
     },
     enabled: !!show?.seller_id
   });
 
-  // ENHANCED: Access control with detailed logging
+  // Access control
   useEffect(() => {
     // Only run access control after user, show, and showSeller are loaded and not in a loading state
     if (!userLoading && !showLoading && !sellerLoading && currentUser && show && showSeller) {
-      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-      console.log("🔐 ACCESS CONTROL CHECK");
-      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-      console.log("User:", currentUser.email);
-      console.log("User Role:", currentUser.role);
-      console.log("Is Admin:", currentUser.role === "admin");
-      console.log("---");
-      console.log("Current Seller:", currentSeller?.business_name || "NONE");
-      console.log("Current Seller ID:", currentSeller?.id || "NONE");
-      console.log("Current Seller Status:", currentSeller?.status || "NONE");
-      console.log("---");
-      console.log("Show:", show.title);
-      console.log("Show ID:", show.id);
-      console.log("Show Seller ID:", show.seller_id);
-      console.log("---");
-      console.log("Show Seller:", showSeller.business_name);
-      console.log("Show Seller ID:", showSeller.id);
-      console.log("---");
-      
       // Admin bypass
       if (currentUser.role === "admin") {
-        console.log("✅ ACCESS GRANTED - User is Admin");
-        console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         setAccessError(null);
         setDebugInfo({
           userEmail: currentUser.email,
@@ -261,8 +236,6 @@ export default function HostConsole() {
       
       // Seller must exist
       if (!currentSeller) {
-        console.log("❌ ACCESS DENIED - No seller profile");
-        console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         setAccessError("You need a seller profile to access Host Console.");
         setDebugInfo({
           userEmail: currentUser.email,
@@ -276,15 +249,9 @@ export default function HostConsole() {
       }
       
       // Seller ID must match
-      const isOwner = currentSeller.id === show.seller_id;
-      console.log("Seller ID Match:", isOwner);
-      console.log("   Current:", currentSeller.id);
-      console.log("   Required:", show.seller_id);
-      console.log("   Match:", currentSeller.id === show.seller_id ? "✅ YES" : "❌ NO");
+      const isOwner = currentSeller.user_id === show.seller_id;
       
       if (!isOwner) {
-        console.log("❌ ACCESS DENIED - Seller ID mismatch");
-        console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         setAccessError(`This show belongs to ${showSeller.business_name}. You cannot access their Host Console.`);
         setDebugInfo({
           userEmail: currentUser.email,
@@ -299,8 +266,6 @@ export default function HostConsole() {
         return;
       }
       
-      console.log("✅ ACCESS GRANTED - Seller owns this show");
-      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
       setAccessError(null);
       setDebugInfo({
         userEmail: currentUser.email,
@@ -315,44 +280,37 @@ export default function HostConsole() {
     }
   }, [userLoading, showLoading, sellerLoading, currentUser, currentSeller, show, showSeller]);
 
-  // CRITICAL: Reduced product polling from 2s to 10s
-  const { data: products = [] } = useQuery({
+  // Reduced product polling from 2s to 10s
+  // Now fetches from show_products joined with products
+  const { data: showProductsRaw = [] } = useQuery({
     queryKey: ['show-products', showId],
     queryFn: async () => {
-      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-      console.log("📦 HostConsole - Fetching products for show_id:", showId);
-      
-      // Fetch all products for this show (including sold out items for seller view)
-      const showProducts = await base44.entities.Product.filter({
-        show_id: showId
-      });
-      
-      console.log("✅ HostConsole - Products loaded:", showProducts.length, "items for show", showId);
-      
-      // Log each product with quantity status
-      showProducts.forEach((product, index) => {
-        console.log(`   ${index + 1}. "${product.title}" | Qty: ${product.quantity} | Status: ${product.status}`);
-      });
-      
-      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-      
+      const showProducts = await getShowProductsByShowId(showId);
       return showProducts;
     },
     enabled: !!show && !!showId,
-    refetchInterval: 10000, // REDUCED from 2s to 10s
+    refetchInterval: 10000,
     staleTime: 5000
   });
 
-  // CRITICAL: Reduced orders polling from 5s to 15s
+  // Transform show_products into a products-like array for rendering
+  // Each item has product fields + show_product fields (box_number, is_featured, is_givi)
+  const products = showProductsRaw.map(sp => ({
+    ...sp.product,
+    show_product_id: sp.id,
+    box_number: sp.box_number,
+    is_featured: sp.is_featured,
+    is_givi_in_show: sp.is_givi,
+  })).filter(p => p.id); // Filter out any with missing product data
+
+  // Reduced orders polling from 5s to 15s
   const { data: orders = [] } = useQuery({
     queryKey: ['show-orders', showId],
     queryFn: async () => {
-      console.log("🛒 HostConsole - Fetching orders for show:", showId);
       const result = await base44.entities.Order.filter({ show_id: showId });
-      console.log("✅ HostConsole - Orders loaded:", result.length, "orders");
       return result;
     },
-    refetchInterval: 15000, // REDUCED from 5s to 15s
+    refetchInterval: 15000,
     staleTime: 10000
   });
 
@@ -378,8 +336,6 @@ export default function HostConsole() {
     if (activeGIVI?.status === "result" && activeGIVI?.winner_ids?.length > 0) {
       const bannerShownKey = `givi_banner_shown_${activeGIVI.id}`;
       if (localStorage.getItem(bannerShownKey) !== 'true') {
-        console.log("🎊 Showing winner banner for host");
-        console.log("   Winner Names:", activeGIVI.winner_names);
         setShowWinnerBanner(true);
         localStorage.setItem(bannerShownKey, 'true');
       }
@@ -390,24 +346,17 @@ export default function HostConsole() {
     mutationFn: async (product) => {
       console.log("⭐ HostConsole - Featuring product:", product.title, "ID:", product.id);
       
-      if (show.featured_product_id) {
-        const prevProducts = await base44.entities.Product.filter({ id: show.featured_product_id });
-        if (prevProducts.length > 0) {
-          await base44.entities.Product.update(prevProducts[0].id, { 
-            status: "available",
-            featured_in_show_id: null
-          });
-        }
-      }
+      // Clear any previously featured products in this show
+      await clearFeaturedForShow(showId);
       
-      await base44.entities.Product.update(product.id, {
-        status: "featured",
-        featured_in_show_id: showId
-      });
+      // Feature this product in show_products
+      await updateShowProductByIds(showId, product.id, { is_featured: true });
       
-      await base44.entities.Show.update(showId, {
-        featured_product_id: product.id
-      });
+      // Update show's featured product reference
+      await supabase
+        .from("shows")
+        .update({ featured_product_id: product.id })
+        .eq("id", showId);
       
       console.log("✅ HostConsole - Product featured successfully");
     },
@@ -418,22 +367,17 @@ export default function HostConsole() {
   });
 
   const unfeatureProductMutation = useMutation({
-    mutationFn: async () => {
-      console.log("👁️ HostConsole - Unfeaturing product");
+    mutationFn: async (product) => {
+      console.log("👁️ HostConsole - Unfeaturing product:", product?.id);
       
-      if (show.featured_product_id) {
-        const prevProducts = await base44.entities.Product.filter({ id: show.featured_product_id });
-        if (prevProducts.length > 0) {
-          await base44.entities.Product.update(prevProducts[0].id, { 
-            status: "available",
-            featured_in_show_id: null
-          });
-        }
-      }
+      // Clear featured flag on show_products
+      await clearFeaturedForShow(showId);
       
-      await base44.entities.Show.update(showId, {
-        featured_product_id: null
-      });
+      // Clear featured product on show
+      await supabase
+        .from("shows")
+        .update({ featured_product_id: null })
+        .eq("id", showId);
       
       console.log("✅ HostConsole - Product unfeatured successfully");
     },
@@ -452,30 +396,46 @@ export default function HostConsole() {
         throw new Error("Show ID is missing - cannot create product");
       }
       
-      // Calculate next box number
-      const allProducts = await base44.entities.Product.filter({ seller_id: currentSeller.id });
-      const maxBoxNumber = allProducts.reduce((max, p) => {
-        return (p.box_number && p.box_number > max) ? p.box_number : max;
-      }, 0);
-      const nextBoxNumber = maxBoxNumber + 1;
-      
+      // Step 1: Create the product in the products catalog
+      // Extract is_givey for show_products, don't pass to products
+      const { is_givey, ...catalogData } = data;
       const productData = { 
-        ...data, 
-        seller_id: currentSeller.id,
-        show_id: showId, // CRITICAL: Assign to THIS specific show
-        is_live_item: true,
-        box_number: nextBoxNumber
+        ...catalogData, 
+        seller_id: currentSeller.user_id, // Use user_id for seller_id FK
+        status: "active"
       };
-      console.log("📦 HostConsole - Creating product with data:", productData);
-      console.log("🆔 Seller ID:", currentSeller.id);
-      console.log("🆔 Show ID:", showId);
-      console.log("📦 Box Number:", nextBoxNumber);
-      return base44.entities.Product.create(productData);
+      console.log("📦 HostConsole - Creating product in catalog:", productData);
+      console.log("🆔 Seller ID (user_id):", currentSeller.user_id);
+      
+      const newProduct = await createProduct(productData);
+      if (!newProduct) {
+        throw new Error("Failed to create product - check Supabase logs");
+      }
+      console.log("✅ Product created in catalog:", newProduct.id);
+      
+      // Step 2: Link product to this show via show_products
+      // is_givi is stored here (per-show state), not in products catalog
+      console.log("🔗 Linking product to show:", showId);
+      const showProduct = await createShowProduct({
+        show_id: showId,
+        product_id: newProduct.id,
+        seller_id: currentSeller.user_id,
+        is_featured: false,
+        is_givi: is_givey === true,
+      });
+      
+      if (!showProduct) {
+        throw new Error("Failed to link product to show - check Supabase logs");
+      }
+      console.log("✅ Show product link created:", showProduct.id, "Box #:", showProduct.box_number);
+      
+      return { product: newProduct, showProduct };
     },
-    onSuccess: (newProduct) => {
-      console.log("✅ HostConsole - Product created successfully:", newProduct);
-      console.log("🆔 Product seller_id:", newProduct.seller_id);
-      console.log("🆔 Product show_id:", newProduct.show_id);
+    onSuccess: ({ product, showProduct }) => {
+      console.log("✅ HostConsole - Product created and linked successfully");
+      console.log("🆔 Product ID:", product.id);
+      console.log("🆔 Show Product ID:", showProduct.id);
+      console.log("📦 Box Number:", showProduct.box_number);
       queryClient.invalidateQueries({ queryKey: ['show-products', showId] });
       setShowProductDialog(false);
       setShowAddProductDrawer(false);
@@ -489,10 +449,14 @@ export default function HostConsole() {
   const updatePriceMutation = useMutation({
     mutationFn: async ({ productId, newPrice }) => {
       console.log("💰 HostConsole - Updating price for product:", productId, "to $", newPrice);
-      await base44.entities.Product.update(productId, {
+      const updated = await updateProduct(productId, {
         price: parseFloat(newPrice)
       });
+      if (!updated) {
+        throw new Error("Failed to update price");
+      }
       console.log("✅ HostConsole - Price updated successfully");
+      return updated;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['show-products', showId] });
@@ -529,8 +493,12 @@ export default function HostConsole() {
         }
       }
       
-      await base44.entities.Product.update(productId, updates);
+      const updated = await updateProduct(productId, updates);
+      if (!updated) {
+        throw new Error("Failed to update quantity");
+      }
       console.log("✅ HostConsole - Quantity updated successfully");
+      return updated;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['show-products', showId] });
@@ -542,25 +510,26 @@ export default function HostConsole() {
     }
   });
 
-  // NEW: Delete/Deactivate Product Mutation
+  // NEW: Remove Product from Show (removes show_product link)
   const deleteProductMutation = useMutation({
     mutationFn: async (productId) => {
-      console.log("🗑️ HostConsole - Soft deleting product:", productId);
+      console.log("🗑️ HostConsole - Removing product from show:", productId);
       
-      // Soft delete: set status to sold and quantity to 0
-      await base44.entities.Product.update(productId, {
-        status: "sold",
-        quantity: 0
-      });
-      
-      // If this was the featured product, unfeature it
-      if (show.featured_product_id === productId) {
-        await base44.entities.Show.update(showId, {
-          featured_product_id: null
-        });
+      // Remove the show_product link (keeps product in catalog)
+      const deleted = await deleteShowProductByIds(showId, productId);
+      if (!deleted) {
+        throw new Error("Failed to remove product from show");
       }
       
-      console.log("✅ HostConsole - Product deleted successfully");
+      // If this was the featured product, clear it
+      if (show.featured_product_id === productId) {
+        await supabase
+          .from("shows")
+          .update({ featured_product_id: null })
+          .eq("id", showId);
+      }
+      
+      console.log("✅ HostConsole - Product removed from show successfully");
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['show-products', showId] });
@@ -652,9 +621,8 @@ export default function HostConsole() {
       queryClient.invalidateQueries({ queryKey: ['all-shows'] });
       queryClient.invalidateQueries({ queryKey: ['marketplace-live-shows'] });
       
-      // Use window.location.replace() for complete page reload with new URL
-      const showsUrl = createPageUrl("SellerShows");
-      window.location.replace(showsUrl);
+      // Navigate using router (preserves React state)
+      navigate(createPageUrl("SellerShows"), { replace: true });
     },
     onError: (error) => {
       console.error("❌ Error ending show:", error);
@@ -842,13 +810,13 @@ export default function HostConsole() {
     );
   }
 
-  const featuredProduct = products.find(p => p.id === show.featured_product_id);
+  // Find featured product - check is_featured flag from show_products first, then fall back to show.featured_product_id
+  const featuredProduct = products.find(p => p.is_featured) || products.find(p => p.id === show.featured_product_id);
   const filteredProducts = products.filter(p => {
     const searchLower = searchTerm.toLowerCase();
     return (
       p.title.toLowerCase().includes(searchLower) ||
-      p.description?.toLowerCase().includes(searchLower) ||
-      (p.box_number && p.box_number.toString().includes(searchTerm))
+      p.description?.toLowerCase().includes(searchLower)
     );
   });
 
@@ -1115,11 +1083,11 @@ export default function HostConsole() {
             <SellerProductDetailCard 
               product={selectedProduct}
               showId={showId}
-              isFeatured={selectedProduct.id === show.featured_product_id}
+              isFeatured={selectedProduct.is_featured || selectedProduct.id === show.featured_product_id}
               onClose={() => setSelectedProduct(null)}
               onPushToLive={(product) => {
                 const isLocked = product.status === "locked" || product.status === "sold";
-                const isFeatured = product.id === show.featured_product_id;
+                const isFeatured = product.is_featured || product.id === show.featured_product_id;
                 
                 if (!isLocked) {
                   if (isFeatured) {
@@ -1306,7 +1274,7 @@ export default function HostConsole() {
             <div className="space-y-3">
               {filteredProducts.map((product) => {
                 const isLocked = product.status === "locked" || product.status === "sold";
-                const isFeatured = product.id === show.featured_product_id;
+                const isFeatured = product.is_featured || product.id === show.featured_product_id;
                 const isEditingQty = editingQuantityProductId === product.id;
                 const isEditingPrice = editingPriceProductId === product.id;
                 
@@ -1332,9 +1300,9 @@ export default function HostConsole() {
                   >
                     <div className="flex gap-3">
                       <div className="relative w-20 h-20 flex-shrink-0">
-                        {product.image_urls?.[0] ? (
+                        {Array.isArray(product.images) && product.images.length > 0 ? (
                           <img
-                            src={product.image_urls[0]}
+                            src={product.images[0]}
                             alt={product.title}
                             className="w-full h-full object-cover rounded"
                           />
@@ -1353,6 +1321,9 @@ export default function HostConsole() {
                       </div>
                       <div className="flex-1 min-w-0">
                         <h3 className="text-white font-semibold text-sm line-clamp-2">{product.title}</h3>
+                        {product.category && (
+                          <p className="text-white/50 text-xs mt-0.5">{product.category}</p>
+                        )}
                         
                         <div className="flex items-center gap-2 mt-1" onClick={(e) => e.stopPropagation()}>
                           {isEditingPrice ? (

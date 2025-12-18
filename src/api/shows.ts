@@ -56,7 +56,7 @@ export async function getAllShows(): Promise<Show[]> {
     const { data, error } = await supabase
       .from("shows")
       .select("*")
-      .order("scheduled_start", { ascending: false });
+      .order("scheduled_start_time", { ascending: false });
 
     if (error) {
       console.warn("Failed to fetch all shows:", error.message);
@@ -93,7 +93,7 @@ export async function getShowsBySellerId(
       .from("shows")
       .select("*")
       .eq("seller_id", sellerId)
-      .order("scheduled_start", { ascending: false });
+      .order("scheduled_start_time", { ascending: false });
 
     if (error) {
       console.warn("Failed to fetch shows by seller ID:", error.message);
@@ -162,7 +162,7 @@ export async function getShowsByStatus(
       .from("shows")
       .select("*")
       .eq("status", status)
-      .order("scheduled_start", { ascending: false });
+      .order("scheduled_start_time", { ascending: false });
 
     if (error) {
       console.warn("Failed to fetch shows by status:", error.message);
@@ -202,5 +202,41 @@ export async function getScheduledShows(): Promise<Show[]> {
   return getShowsByStatus("scheduled");
 }
 
+export async function createShow(input: {
+  seller_id: string;
+  title: string;
+  description?: string;
+  pickup_instructions?: string;
+  scheduled_start?: string;
+}) {
+  try {
+    const insertPayload = {
+      seller_id: input.seller_id,
+      title: input.title,
+      description: input.description ?? null,
+      pickup_instructions: input.pickup_instructions ?? null,
+      scheduled_start_time: input.scheduled_start ?? null,
+      status: "scheduled",
+    };
+    
+    console.log("🧪 createShow INSERT PAYLOAD:", insertPayload);
+    console.log("🧪 seller_id being inserted:", input.seller_id);
+    
+    const { data, error } = await supabase
+      .from("shows")
+      .insert(insertPayload)
+      .select()
+      .single();
 
+    if (error) {
+      console.warn("createShow failed:", error.message);
+      return null;
+    }
+
+    return data;
+  } catch (err) {
+    console.warn("createShow unexpected error:", err);
+    return null;
+  }
+}
 

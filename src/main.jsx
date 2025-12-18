@@ -1,3 +1,12 @@
+// TEMP: Global error capture for debugging navigation issues
+window.addEventListener("error", (event) => {
+  console.error("🔥 GLOBAL ERROR:", event.error || event.message, event);
+});
+
+window.addEventListener("unhandledrejection", (event) => {
+  console.error("🔥 UNHANDLED PROMISE REJECTION:", event.reason);
+});
+
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from '@/App.jsx'

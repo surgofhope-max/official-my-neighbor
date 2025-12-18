@@ -314,7 +314,7 @@ Deno.serve(async (req) => {
           title: notificationTitle,
           body: notificationBody,
           type: notificationType,
-          is_read: false,
+          read: false,
           metadata: {
             event: notificationEvent,
             seller_id: seller_id,

@@ -1,7 +1,10 @@
 import React, { useState, useEffect } from "react";
 import { supabaseApi as base44 } from "@/api/supabaseClient";
+import { supabase } from "@/lib/supabase/supabaseClient";
+import { useSupabaseAuth } from "@/lib/auth/SupabaseAuthProvider";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { isSuperAdmin } from "@/lib/auth/routeGuards";
+import { getShowsBySellerId, createShow } from "@/api/shows";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -38,22 +41,39 @@ import ProductForm from "../components/products/ProductForm";
 export default function SellerShows() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  
+  // Use SupabaseAuthProvider as single source of truth for auth
+  const { user: authUser, isLoadingAuth } = useSupabaseAuth();
+  
   const [showScheduleDialog, setShowScheduleDialog] = useState(false);
   const [editingShow, setEditingShow] = useState(null);
   const [user, setUser] = useState(null);
   const [seller, setSeller] = useState(null);
+  const [isLoadingSeller, setIsLoadingSeller] = useState(true);
   const [showProductDialog, setShowProductDialog] = useState(false);
   const [selectedShowForProduct, setSelectedShowForProduct] = useState(null);
   const [showPastShows, setShowPastShows] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
 
+  // Load seller data when auth user changes
   useEffect(() => {
-    loadUser();
-  }, []);
+    if (isLoadingAuth) return; // Wait for auth check to complete
+    
+    if (!authUser) {
+      // Not logged in - redirect to login
+      console.log("🔐 User not authenticated - redirecting to login");
+      navigate(createPageUrl("Login"), { replace: true });
+      return;
+    }
+    
+    loadSeller();
+  }, [authUser, isLoadingAuth]);
 
-  const loadUser = async () => {
+  const loadSeller = async () => {
+    setIsLoadingSeller(true);
     try {
-      const currentUser = await base44.auth.me();
+      // Auth is already checked by useEffect - authUser is guaranteed to exist here
+      const currentUser = authUser;
       setUser(currentUser);
       const userRole = currentUser.user_metadata?.role || currentUser.role;
       console.log("👤 SellerShows - Current user:", currentUser.email, "Role:", userRole);
@@ -62,29 +82,34 @@ export default function SellerShows() {
       if (isSuperAdmin(currentUser)) {
         console.log("🔑 SUPER_ADMIN detected — bypassing all checks in SellerShows");
         // Load seller if exists, but don't require it
-        const sellers = await base44.entities.Seller.filter({ created_by: currentUser.email });
-        if (sellers.length > 0) {
-          setSeller(sellers[0]);
+        const { data: sellerProfile } = await supabase
+          .from("sellers")
+          .select("*")
+          .eq("user_id", currentUser.id)
+          .maybeSingle();
+        
+        if (sellerProfile) {
+          setSeller(sellerProfile);
         }
         return;
       }
 
       // CRITICAL: Check for onboarding reset - must complete full onboarding again
-      if (userRole !== "admin" && currentUser.seller_onboarding_reset === true) {
+      if (userRole !== "admin" && currentUser.user_metadata?.seller_onboarding_reset === true) {
         console.log("🔄 Seller onboarding reset detected - redirecting to full onboarding");
         navigate(createPageUrl("SellerSafetyAgreement"), { replace: true });
         return;
       }
 
       // Check for seller safety agreement
-      if (userRole !== "admin" && currentUser.seller_safety_agreed !== true) {
+      if (userRole !== "admin" && currentUser.user_metadata?.seller_safety_agreed !== true) {
         console.log("🛡️ Seller safety agreement required - redirecting");
         navigate(createPageUrl("SellerSafetyAgreement"), { replace: true });
         return;
       }
 
       // Check for seller onboarding completion
-      if (userRole !== "admin" && !currentUser.seller_onboarding_completed) {
+      if (userRole !== "admin" && !currentUser.user_metadata?.seller_onboarding_completed) {
         console.log("📋 Seller onboarding incomplete - redirecting");
         navigate(createPageUrl("SellerOnboarding"), { replace: true });
         return;
@@ -94,36 +119,50 @@ export default function SellerShows() {
       const impersonatingSellerId = sessionStorage.getItem('admin_impersonate_seller_id');
 
       if (impersonatingSellerId && userRole === "admin") {
-        const allSellers = await base44.entities.Seller.list();
-        const impersonatedSeller = allSellers.find(s => s.id === impersonatingSellerId);
+        const { data: impersonatedSeller } = await supabase
+          .from("sellers")
+          .select("*")
+          .eq("id", impersonatingSellerId)
+          .maybeSingle();
 
         if (impersonatedSeller) {
           setSeller(impersonatedSeller);
           console.log("🔧 Admin impersonating seller in Shows:", impersonatedSeller.business_name);
-          return; // Exit loadUser early if impersonating
+          return; // Exit loadSeller early if impersonating
         }
       }
 
-      const sellers = await base44.entities.Seller.filter({ created_by: currentUser.email });
-      if (sellers.length > 0) {
-        const sellerProfile = sellers[0];
+      // Load seller by user_id
+      const { data: sellerProfile, error: sellerError } = await supabase
+        .from("sellers")
+        .select("*")
+        .eq("user_id", currentUser.id)
+        .maybeSingle();
+
+      if (sellerError && sellerError.code !== "PGRST116") {
+        throw sellerError;
+      }
+
+      if (sellerProfile) {
         setSeller(sellerProfile);
         console.log("🏪 SellerShows - Loaded seller:", sellerProfile.business_name, "ID:", sellerProfile.id);
 
         if (userRole !== "admin" && sellerProfile.status !== "approved") {
-          alert("Your seller application is pending approval. You will be redirected to the marketplace.");
-          navigate(createPageUrl("Marketplace"));
+          console.log("⚠️ Seller not approved - redirecting to BuyerProfile");
+          navigate(createPageUrl("BuyerProfile"), { replace: true, state: { sellerStatus: sellerProfile.status } });
           return;
         }
       } else {
-        console.log("⚠️ SellerShows - No seller profile found, redirecting to Marketplace.");
-        navigate(createPageUrl("Marketplace"));
+        console.log("⚠️ SellerShows - No seller profile found, redirecting to BuyerProfile.");
+        navigate(createPageUrl("BuyerProfile"), { replace: true });
         return;
       }
     } catch (error) {
-      console.error("Error loading user or seller:", error);
-      navigate(createPageUrl("Marketplace")); // Redirect on any error
+      console.error("Error loading seller:", error);
+      navigate(createPageUrl("BuyerProfile"), { replace: true });
       return;
+    } finally {
+      setIsLoadingSeller(false);
     }
   };
 
@@ -135,9 +174,7 @@ export default function SellerShows() {
         return [];
       }
       console.log("📺 SellerShows - Fetching shows for seller_id:", seller.id);
-      const result = await base44.entities.Show.filter({
-        seller_id: seller.id
-      }, '-scheduled_start');
+      const result = await getShowsBySellerId(seller.user_id);
       console.log("✅ SellerShows - Shows fetched:", result.length, "shows");
 
       // Log each show with its IDs
@@ -151,13 +188,30 @@ export default function SellerShows() {
   });
 
   const createShowMutation = useMutation({
-    mutationFn: (showData) => {
-      const newShow = { ...showData, seller_id: seller.id };
-      console.log("➕ SellerShows - Creating show:", newShow);
-      console.log("   Title:", newShow.title);
-      console.log("   Seller ID:", newShow.seller_id);
+    mutationFn: async (showData) => {
+      console.log("➕ SellerShows - Creating show:", showData);
+      console.log("   Title:", showData.title);
+      console.log("🧪 DEBUG - seller.id (sellers table PK):", seller.id);
+      console.log("🧪 DEBUG - seller.user_id (auth FK):", seller.user_id);
+      console.log("🧪 DEBUG - authUser.id (current auth):", authUser?.id);
+      console.log("🧪 DEBUG - seller.user_id === authUser.id?", seller.user_id === authUser?.id);
       console.log("   Seller Name:", seller.business_name);
-      return base44.entities.Show.create(newShow);
+      
+      const createdShow = await createShow({
+        seller_id: seller.user_id,
+        title: showData.title,
+        description: showData.description,
+        pickup_instructions: showData.pickup_instructions,
+        scheduled_start: showData.scheduled_start,
+      });
+
+      if (!createdShow) {
+        console.warn("Show creation failed");
+        throw new Error("Failed to create show");
+      }
+
+      console.log("✅ Show created:", createdShow);
+      return createdShow;
     },
     onSuccess: (newShow) => {
       console.log("✅ SellerShows - Show created successfully:");
@@ -236,6 +290,7 @@ export default function SellerShows() {
   };
 
   const goLive = async (show) => {
+    console.log("🟢 goLive START", show);
     console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     console.log("🔴 GO LIVE - UNIVERSAL ROUTING (MOBILE + DESKTOP)");
     console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
@@ -248,8 +303,13 @@ export default function SellerShows() {
     console.log("🖥️ Platform:", navigator.userAgent);
 
     try {
+      console.log("🟡 goLive TRY BLOCK ENTERED");
       // Update show status
-      await base44.entities.Show.update(show.id, { status: "live" });
+      console.log("🟡 Calling supabase.update for show status...");
+      await supabase
+        .from("shows")
+        .update({ status: "live", started_at: new Date().toISOString() })
+        .eq("id", show.id);
       console.log("✅ Show status updated to 'live'");
 
       // Invalidate queries
@@ -262,11 +322,16 @@ export default function SellerShows() {
       const hostConsoleUrl = createPageUrl("HostConsole") + `?showId=${show.id}`;
       console.log("🔗 Navigating to:", hostConsoleUrl);
       console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+      console.log("🧭 GoLive hostConsoleUrl:", hostConsoleUrl);
+      console.log("🧭 window.location BEFORE:", window.location.pathname + window.location.search);
 
       // Use navigate with replace to prevent back button from returning to this page after show ends
+      console.log("🟡 CALLING navigate() NOW");
       navigate(hostConsoleUrl, { replace: true });
+      console.log("🟢 navigate() RETURNED - goLive END");
     } catch (error) {
       console.error("❌ Error going live:", error);
+      console.log("🔴 goLive CAUGHT ERROR:", error.message);
       alert(`Failed to go live: ${error.message}`);
     }
   };
@@ -292,7 +357,10 @@ export default function SellerShows() {
     console.log("⏹️ SellerShows - Ending show:", show.id);
     
     try {
-      await base44.entities.Show.update(show.id, { status: "ended" });
+      await supabase
+        .from("shows")
+        .update({ status: "ended", ended_at: new Date().toISOString() })
+        .eq("id", show.id);
       
       queryClient.invalidateQueries({ queryKey: ['seller-shows', seller.id] });
       queryClient.invalidateQueries({ queryKey: ['all-shows'] });
@@ -305,8 +373,24 @@ export default function SellerShows() {
     }
   };
 
-  // If user or seller is not loaded yet (or has been redirected), render nothing
-  if (!user || !seller) {
+  // Show loading state while auth or seller is loading
+  if (isLoadingAuth || isLoadingSeller) {
+    return (
+      <div className="p-6 flex items-center justify-center min-h-[200px]">
+        <div className="text-gray-600">Loading shows…</div>
+      </div>
+    );
+  }
+
+  // Redirect if not authenticated (should not reach here normally)
+  if (!user) {
+    navigate(createPageUrl("Login"), { replace: true });
+    return null;
+  }
+
+  // Redirect if no seller profile (should not reach here normally)
+  if (!seller) {
+    navigate(createPageUrl("BuyerProfile"), { replace: true });
     return null;
   }
 
@@ -487,7 +571,9 @@ export default function SellerShows() {
                     </div>
                     <div className="flex items-center gap-2 text-sm text-gray-600 mb-4">
                       <Calendar className="w-4 h-4" />
-                      {format(new Date(show.scheduled_start), "MMM d, yyyy 'at' h:mm a")}
+                      {show.scheduled_start_time
+                        ? format(new Date(show.scheduled_start_time), "MMM d, yyyy 'at' h:mm a")
+                        : "Not scheduled"}
                     </div>
                     <div className="space-y-2">
                       <div className="flex gap-2">

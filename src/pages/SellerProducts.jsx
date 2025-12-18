@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { supabaseApi as base44 } from "@/api/supabaseClient";
+import { supabase } from "@/lib/supabase/supabaseClient";
+import { useSupabaseAuth } from "@/lib/auth/SupabaseAuthProvider";
 import { useMutation } from "@tanstack/react-query";
 import { isSuperAdmin } from "@/lib/auth/routeGuards";
 import { Card, CardContent } from "@/components/ui/card";
@@ -40,6 +42,10 @@ import { getShowsBySellerId } from "@/api/shows";
 
 export default function SellerProducts() {
   const navigate = useNavigate();
+  
+  // Use SupabaseAuthProvider as single source of truth for auth
+  const { user: authUser, isLoadingAuth } = useSupabaseAuth();
+  
   const [user, setUser] = useState(null);
   const [seller, setSeller] = useState(null);
   const [showProductDialog, setShowProductDialog] = useState(false);
@@ -56,13 +62,24 @@ export default function SellerProducts() {
   const [shows, setShows] = useState([]);
   const [allProducts, setAllProducts] = useState([]);
 
+  // Load seller data when auth user changes
   useEffect(() => {
+    if (isLoadingAuth) return; // Wait for auth check to complete
+    
+    if (!authUser) {
+      // Not logged in - redirect to login
+      console.log("🔐 User not authenticated - redirecting to login");
+      navigate(createPageUrl("Login"), { replace: true });
+      return;
+    }
+    
     loadUser();
-  }, []);
+  }, [authUser, isLoadingAuth]);
 
   const loadUser = async () => {
     try {
-      const currentUser = await base44.auth.me();
+      // Auth is already checked by useEffect - authUser is guaranteed to exist here
+      const currentUser = authUser;
       setUser(currentUser);
 
       // 🔐 SUPER_ADMIN BYPASS: Skip ALL checks
@@ -70,9 +87,14 @@ export default function SellerProducts() {
       if (isSuperAdmin(currentUser)) {
         console.log("🔑 SUPER_ADMIN detected — bypassing all checks in SellerProducts");
         // Load seller if exists, but don't require it
-        const sellers = await base44.entities.Seller.filter({ created_by: currentUser.email });
-        if (sellers.length > 0) {
-          setSeller(sellers[0]);
+        const { data: sellerProfile } = await supabase
+          .from("sellers")
+          .select("*")
+          .eq("user_id", currentUser.id)
+          .single();
+        
+        if (sellerProfile) {
+          setSeller(sellerProfile);
         }
         return;
       }
@@ -102,8 +124,11 @@ export default function SellerProducts() {
       const impersonatingSellerId = sessionStorage.getItem('admin_impersonate_seller_id');
       
       if (impersonatingSellerId && userRole === "admin") {
-        const allSellers = await base44.entities.Seller.list();
-        const impersonatedSeller = allSellers.find(s => s.id === impersonatingSellerId);
+        const { data: impersonatedSeller } = await supabase
+          .from("sellers")
+          .select("*")
+          .eq("id", impersonatingSellerId)
+          .single();
         
         if (impersonatedSeller) {
           setSeller(impersonatedSeller);
@@ -112,10 +137,18 @@ export default function SellerProducts() {
         }
       }
       
-      // Original logic for regular users or if impersonation ID not found/invalid
-      const sellers = await base44.entities.Seller.filter({ created_by: currentUser.email });
-      if (sellers.length > 0) {
-        const sellerProfile = sellers[0];
+      // Normal flow - load seller by user_id
+      const { data: sellerProfile, error: sellerError } = await supabase
+        .from("sellers")
+        .select("*")
+        .eq("user_id", currentUser.id)
+        .single();
+
+      if (sellerError && sellerError.code !== "PGRST116") {
+        throw sellerError;
+      }
+
+      if (sellerProfile) {
         setSeller(sellerProfile);
         
         if (userRole !== "admin" && sellerProfile.status !== "approved") {

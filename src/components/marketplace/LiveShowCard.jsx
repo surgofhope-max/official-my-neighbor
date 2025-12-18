@@ -39,8 +39,9 @@ export default function LiveShowCard({ show, seller, onClick, isUpcoming = false
   }, [isHovered, show.video_preview_url]);
 
   const getTimeUntilStart = () => {
-    if (!show.scheduled_start) return null;
-    const startDate = new Date(show.scheduled_start);
+    const scheduledAt = show.scheduled_start_time || show.started_at;
+    if (!scheduledAt) return null;
+    const startDate = new Date(scheduledAt);
     const now = new Date();
     
     if (startDate <= now) return "Starting soon";
@@ -169,7 +170,11 @@ export default function LiveShowCard({ show, seller, onClick, isUpcoming = false
         {/* Stats */}
         <div className="flex items-center justify-between text-xs text-gray-500">
           {isUpcoming ? (
-            <span className="leading-none">{format(new Date(show.scheduled_start), "MMM d 'at' h:mm a")}</span>
+            <span className="leading-none">
+              {(show.scheduled_start_time || show.started_at)
+                ? format(new Date(show.scheduled_start_time || show.started_at), "MMM d 'at' h:mm a")
+                : "Not scheduled"}
+            </span>
           ) : (
             <span className="leading-none">{show.total_sales || 0} sales</span>
           )}
