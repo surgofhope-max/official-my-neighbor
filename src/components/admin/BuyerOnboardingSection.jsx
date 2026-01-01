@@ -134,7 +134,7 @@ export default function BuyerOnboardingSection({ user, buyerProfile }) {
           <div className="grid grid-cols-2 gap-x-4 gap-y-1">
             <InfoRow 
               label="Full Name" 
-              value={buyerProfile?.full_name || user?.full_name} 
+              value={user?.full_name || buyerProfile?.full_name} 
               icon={User}
             />
             <InfoRow 
@@ -143,12 +143,12 @@ export default function BuyerOnboardingSection({ user, buyerProfile }) {
             />
             <InfoRow 
               label="Email" 
-              value={buyerProfile?.email || user?.email} 
+              value={user?.email || buyerProfile?.email} 
               icon={Mail}
             />
             <InfoRow 
               label="Phone" 
-              value={buyerProfile?.phone} 
+              value={user?.phone || buyerProfile?.phone} 
               icon={Phone}
             />
             <InfoRow 
@@ -344,28 +344,13 @@ export default function BuyerOnboardingSection({ user, buyerProfile }) {
                   <AlertTriangle className="w-4 h-4" />
                   <span className="text-sm font-medium">Account Suspended</span>
                 </div>
-                {user?.suspension_reason && (
-                  <p className="text-xs text-yellow-700 mt-1">Reason: {user.suspension_reason}</p>
+                {user?.account_status_reason && (
+                  <p className="text-xs text-yellow-700 mt-1">Reason: {user.account_status_reason}</p>
                 )}
-                {user?.suspended_at && (
+                {user?.account_status_updated_at && (
                   <p className="text-xs text-yellow-600 mt-1">
-                    Since: {format(new Date(user.suspended_at), "MMM d, yyyy")}
+                    Since: {format(new Date(user.account_status_updated_at), "MMM d, yyyy")}
                   </p>
-                )}
-              </div>
-            )}
-
-            {user?.account_status === "banned" && (
-              <div className="bg-red-50 border border-red-200 rounded p-2 mt-2">
-                <div className="flex items-center gap-2 text-red-800">
-                  <AlertTriangle className="w-4 h-4" />
-                  <span className="text-sm font-medium">Account Banned</span>
-                </div>
-                {user?.suspension_reason && (
-                  <p className="text-xs text-red-700 mt-1">Reason: {user.suspension_reason}</p>
-                )}
-                {user?.suspended_by && (
-                  <p className="text-xs text-red-600 mt-1">By: {user.suspended_by}</p>
                 )}
               </div>
             )}

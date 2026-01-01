@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { supabaseApi as base44 } from "@/api/supabaseClient";
+import { isShowLive } from "@/api/streamSync";
 import { AlertCircle, Radio, Clock } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 
@@ -85,7 +86,10 @@ export default function WebRTCViewer({ show, onViewerCountChange }) {
 
   // REMOVED: checkStreamStatus function - no longer needed
   // Parent LiveShow component handles show polling via react-query
-  // WebRTCViewer only connects when show.is_streaming is already true
+  // WebRTCViewer only connects when isShowLive(show) is true
+
+  // AUTHORITATIVE: stream_status === "live" is the ONLY rule for live
+  const showIsLive = isShowLive(show);
 
   // CRITICAL FIX: ONLY start monitoring when stream is actually live
   // DO NOT poll when stream is offline - prevents the glitch loop
@@ -94,8 +98,8 @@ export default function WebRTCViewer({ show, onViewerCountChange }) {
       return;
     }
 
-    // CRITICAL: Only connect/poll when stream is ACTUALLY LIVE
-    if (show.is_streaming && show.stream_url) {
+    // AUTHORITATIVE: Only connect when stream_status === "live"
+    if (showIsLive && show.stream_url) {
       // Stream is live - connect immediately
       if (!callObjectRef.current) {
         connectToStream(show.stream_url);
@@ -115,7 +119,7 @@ export default function WebRTCViewer({ show, onViewerCountChange }) {
       }
       disconnectFromStream();
     };
-  }, [sdkLoaded, show?.id, show?.is_streaming, show?.stream_url]);
+  }, [sdkLoaded, show?.id, showIsLive, show?.stream_url]);
 
   const connectToStream = async (streamUrl) => {
     if (!mountedRef.current) return;
@@ -389,8 +393,8 @@ export default function WebRTCViewer({ show, onViewerCountChange }) {
   }
 
   // FIXED: Waiting for stream - FULL-SCREEN PREVIEW VIDEO
-  // CRITICAL: Guard against undefined show prop to prevent crash during query refetch
-  if (!show || !show.is_streaming) {
+  // AUTHORITATIVE: stream_status === "live" is the only rule for live
+  if (!show || !showIsLive) {
     // Minimal log to avoid spam
     
     // CRITICAL: If show is undefined, show loading state instead of "Waiting for Stream"

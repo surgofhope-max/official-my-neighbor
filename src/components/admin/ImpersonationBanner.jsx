@@ -4,7 +4,8 @@ import { Button } from "@/components/ui/button";
 import { Shield, X } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
-import { supabaseApi as base44 } from "@/api/supabaseClient";
+import { supabase } from "@/lib/supabase/supabaseClient";
+import { supabaseApi as base44 } from "@/api/supabaseClient"; // Keep for entities
 import { useQuery } from "@tanstack/react-query";
 
 export default function ImpersonationBanner() {
@@ -16,8 +17,9 @@ export default function ImpersonationBanner() {
   useEffect(() => {
     const loadAdminId = async () => {
       try {
-        const user = await base44.auth.me();
-        setAdminUserId(user.id);
+        const { data, error } = await supabase.auth.getUser();
+        if (error || !data?.user) return;
+        setAdminUserId(data.user.id);
       } catch (error) {
         console.error("Error loading admin ID:", error);
       }
@@ -44,7 +46,9 @@ export default function ImpersonationBanner() {
     
     if (sellerId && startTime) {
       try {
-        const user = await base44.auth.me();
+        const { data: authData } = await supabase.auth.getUser();
+        const user = authData?.user ?? null;
+        if (!user) return;
         const logs = await base44.entities.AdminAccessLog.filter({
           admin_id: user.id,
           seller_id: sellerId,

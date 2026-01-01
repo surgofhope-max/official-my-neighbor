@@ -19,28 +19,57 @@ import {
   Coffee,
   Music,
   Book,
-  MapPin
+  MapPin,
+  Wrench,
+  Gem
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import { supabaseApi as base44 } from "@/api/supabaseClient";
+import { useNavigate } from "react-router-dom";
+import { supabase } from "@/lib/supabase/supabaseClient";
+import { createPageUrl } from "@/utils";
 
 // Icon mapping for Lucide icons
 const iconMap = {
   Package, Store, Home, ShoppingCart, Sparkles, Truck, Leaf, Video, Key,
-  Users, Heart, Star, ShoppingBag, Gift, Coffee, Music, Book, MapPin
+  Users, Heart, Star, ShoppingBag, Gift, Coffee, Music, Book, MapPin, Wrench, Gem
+};
+
+// UI-only "All" option (never written to DB)
+const ALL_COMMUNITIES_OPTION = {
+  id: "all",
+  name: "all",
+  label: "All",
+  icon_name: "Package",
+  bg_image_url: "https://images.unsplash.com/photo-1607082348824-0a96f2a4b9da?w=400&h=300&fit=crop",
+  color_gradient: "from-purple-500 to-blue-500"
 };
 
 export default function CommunityCarousel({ selectedCommunity, onSelectCommunity }) {
+  const navigate = useNavigate();
   const categoryCarouselRef = useRef(null);
 
-  // Fetch communities from database
-  const { data: communities = [] } = useQuery({
-    queryKey: ['communities'],
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STEP C6-E.1 PART B: Fetch communities from Supabase (replaces Base44)
+  // ═══════════════════════════════════════════════════════════════════════════
+  const { data: dbCommunities = [] } = useQuery({
+    queryKey: ['communities-carousel'],
     queryFn: async () => {
-      const result = await base44.entities.Community.filter({ is_active: true }, 'sort_order');
-      return result;
+      const { data, error } = await supabase
+        .from("communities")
+        .select("id,name,label,icon_name,bg_image_url,color_gradient,sort_order")
+        .eq("is_active", true)
+        .order("sort_order", { ascending: true });
+      
+      if (error) {
+        console.error("[CommunityCarousel] Supabase query error:", error.message);
+        return [];
+      }
+      return data ?? [];
     }
   });
+
+  // Prepend "All" option to DB communities
+  const communities = [ALL_COMMUNITIES_OPTION, ...dbCommunities];
 
   const scrollCategoryCarousel = (direction) => {
     if (categoryCarouselRef.current) {
@@ -56,9 +85,21 @@ export default function CommunityCarousel({ selectedCommunity, onSelectCommunity
     }
   };
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STEP C6-E.2 PART A: Navigate to CommunityPage instead of filtering in place
+  // "All" stays on Marketplace, specific communities navigate to CommunityPage
+  // ═══════════════════════════════════════════════════════════════════════════
   const handleCommunityClick = (communityName) => {
-    // Filter in place instead of navigating
-    onSelectCommunity(communityName);
+    if (communityName === "all") {
+      // "All" means show everything on Marketplace - stay here
+      // Optionally notify parent to clear any filter
+      if (onSelectCommunity) {
+        onSelectCommunity("all");
+      }
+    } else {
+      // Navigate to the canonical CommunityPage
+      navigate(createPageUrl(`CommunityPage?community=${communityName}`));
+    }
   };
 
   return (

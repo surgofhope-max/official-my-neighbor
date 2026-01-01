@@ -3,7 +3,8 @@ import { supabaseApi as base44 } from "@/api/supabaseClient";
 import { supabase } from "@/lib/supabase/supabaseClient";
 import { useSupabaseAuth } from "@/lib/auth/SupabaseAuthProvider";
 import { useMutation } from "@tanstack/react-query";
-import { isSuperAdmin } from "@/lib/auth/routeGuards";
+import { isSuperAdmin, requireSellerAsync, isAdmin } from "@/lib/auth/routeGuards";
+import { checkAccountActiveAsync } from "@/lib/auth/accountGuards";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -82,87 +83,102 @@ export default function SellerProducts() {
       const currentUser = authUser;
       setUser(currentUser);
 
-      // 🔐 SUPER_ADMIN BYPASS: Skip ALL checks
-      const userRole = currentUser.user_metadata?.role || currentUser.role;
+      // ═══════════════════════════════════════════════════════════════════════════
+      // OPTION B SELLER GATING (STEP 3 REFACTOR)
+      // User is seller IFF: public.users.role='seller' AND sellers.status='approved'
+      // ═══════════════════════════════════════════════════════════════════════════
+
+      // 🔐 SUPER_ADMIN BYPASS: Full system authority
       if (isSuperAdmin(currentUser)) {
-        console.log("🔑 SUPER_ADMIN detected — bypassing all checks in SellerProducts");
-        // Load seller if exists, but don't require it
+        console.log("[SellerGate] SUPER_ADMIN bypass - full access");
         const { data: sellerProfile } = await supabase
           .from("sellers")
           .select("*")
           .eq("user_id", currentUser.id)
-          .single();
-        
+          .maybeSingle();
         if (sellerProfile) {
           setSeller(sellerProfile);
         }
         return;
       }
-      
-      // CRITICAL: Check for onboarding reset - must complete full onboarding again
-      if (userRole !== "admin" && currentUser.seller_onboarding_reset === true) {
-        console.log("🔄 Seller onboarding reset detected - redirecting to full onboarding");
-        navigate(createPageUrl("SellerSafetyAgreement"), { replace: true });
-        return;
-      }
 
-      // Check for seller safety agreement
-      if (userRole !== "admin" && currentUser.seller_safety_agreed !== true) {
-        console.log("🛡️ Seller safety agreement required - redirecting");
-        navigate(createPageUrl("SellerSafetyAgreement"), { replace: true });
-        return;
-      }
-
-      // Check for seller onboarding completion
-      if (userRole !== "admin" && !currentUser.seller_onboarding_completed) {
-        console.log("📋 Seller onboarding incomplete - redirecting");
-        navigate(createPageUrl("SellerOnboarding"), { replace: true });
-        return;
-      }
-      
-      // Check if admin is impersonating
-      const impersonatingSellerId = sessionStorage.getItem('admin_impersonate_seller_id');
-      
-      if (impersonatingSellerId && userRole === "admin") {
-        const { data: impersonatedSeller } = await supabase
+      // 🔐 ADMIN BYPASS: Admins can access seller routes
+      if (isAdmin(currentUser)) {
+        console.log("[SellerGate] Admin bypass - access granted");
+        // Check for impersonation
+        const impersonatingSellerId = sessionStorage.getItem('admin_impersonate_seller_id');
+        if (impersonatingSellerId) {
+          const { data: impersonatedSeller } = await supabase
+            .from("sellers")
+            .select("*")
+            .eq("id", impersonatingSellerId)
+            .maybeSingle();
+          if (impersonatedSeller) {
+            setSeller(impersonatedSeller);
+            console.log("🔧 Admin impersonating seller in Products:", impersonatedSeller.business_name);
+            return;
+          }
+        }
+        // Admin's own seller profile
+        const { data: sellerProfile } = await supabase
           .from("sellers")
           .select("*")
-          .eq("id", impersonatingSellerId)
-          .single();
-        
-        if (impersonatedSeller) {
-          setSeller(impersonatedSeller);
-          console.log("🔧 Admin impersonating seller in Products:", impersonatedSeller.business_name);
-          return; // Exit after setting impersonated seller
+          .eq("user_id", currentUser.id)
+          .maybeSingle();
+        if (sellerProfile) {
+          setSeller(sellerProfile);
         }
-      }
-      
-      // Normal flow - load seller by user_id
-      const { data: sellerProfile, error: sellerError } = await supabase
-        .from("sellers")
-        .select("*")
-        .eq("user_id", currentUser.id)
-        .single();
-
-      if (sellerError && sellerError.code !== "PGRST116") {
-        throw sellerError;
-      }
-
-      if (sellerProfile) {
-        setSeller(sellerProfile);
-        
-        if (userRole !== "admin" && sellerProfile.status !== "approved") {
-          navigate(createPageUrl("Marketplace"));
-          return;
-        }
-      } else {
-        navigate(createPageUrl("Marketplace"));
         return;
       }
+
+      // ═══════════════════════════════════════════════════════════════════════════
+      // SUSPENSION CHECK: Block seller routes for suspended accounts
+      // ═══════════════════════════════════════════════════════════════════════════
+      const { canProceed: accountActive, error: suspendedReason } = await checkAccountActiveAsync(supabase, currentUser.id);
+      if (!accountActive) {
+        console.log("[SellerGate] Account suspended - redirecting to BuyerProfile");
+        navigate(createPageUrl("BuyerProfile"), { 
+          replace: true, 
+          state: { suspended: true, reason: suspendedReason } 
+        });
+        return;
+      }
+
+      // ═══════════════════════════════════════════════════════════════════════════
+      // OPTION B CHECK: Query DB for role + seller status
+      // ═══════════════════════════════════════════════════════════════════════════
+      const sellerCheck = await requireSellerAsync(currentUser.id);
+      
+      console.log("[SellerGate] SellerProducts check:", {
+        ok: sellerCheck.ok,
+        role: sellerCheck.role,
+        sellerStatus: sellerCheck.sellerStatus,
+        reason: sellerCheck.reason
+      });
+
+      if (!sellerCheck.ok) {
+        // NOT an approved seller - redirect based on reason
+        if (sellerCheck.reason === "seller_onboarding_incomplete" || sellerCheck.reason === "seller_safety_not_agreed") {
+          // Onboarding incomplete - send to BuyerProfile to continue onboarding
+          console.log("[SellerGate] Onboarding incomplete - redirecting to BuyerProfile");
+          navigate(createPageUrl("BuyerProfile"), { replace: true });
+        } else {
+          // Other failure (no seller row, not approved, etc.) - redirect to Marketplace
+          console.log("[SellerGate] Not approved seller - redirecting to Marketplace");
+          navigate(createPageUrl("Marketplace"), { replace: true });
+        }
+        return;
+      }
+
+      // ═══════════════════════════════════════════════════════════════════════════
+      // APPROVED SELLER - Load products
+      // ═══════════════════════════════════════════════════════════════════════════
+      console.log("[SellerGate] Approved seller verified:", sellerCheck.sellerRow?.business_name);
+      setSeller(sellerCheck.sellerRow);
+
     } catch (error) {
       console.error("Error loading user:", error);
-      navigate(createPageUrl("Marketplace"));
-      return;
+      navigate(createPageUrl("Marketplace"), { replace: true });
     }
   };
 

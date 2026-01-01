@@ -1,6 +1,6 @@
 import React, { useState } from "react";
-import { supabaseApi as base44 } from "@/api/supabaseClient";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { supabase } from "@/lib/supabase/supabaseClient";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   Dialog,
   DialogContent,
@@ -71,150 +71,337 @@ export default function UserProfileDialog({ open, onOpenChange, user, buyerProfi
     }
   }, [user]);
 
-  const updateUserMutation = useMutation({
-    mutationFn: async (data) => {
-      await base44.entities.User.update(user.id, data);
-    },
-    onSuccess: () => {
+  // ─────────────────────────────────────────────────────────────────────────
+  // HELPER: Update user in public.users via Supabase (replaces base44.entities)
+  // ─────────────────────────────────────────────────────────────────────────
+  const updateUser = async (userId, data) => {
+    if (!userId) {
+      console.warn("[UserProfileDialog] updateUser called with no userId");
+      throw new Error("No user ID provided");
+    }
+    const { error } = await supabase
+      .from("users")
+      .update(data)
+      .eq("id", userId);
+    
+    if (error) {
+      console.error("[UserProfileDialog] Failed to update user:", error.message);
+      throw new Error(error.message);
+    }
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // HELPER: Update seller in public.sellers via Supabase
+  // ─────────────────────────────────────────────────────────────────────────
+  const updateSeller = async (userId, data) => {
+    if (!userId) {
+      console.warn("[UserProfileDialog] updateSeller called with no userId");
+      return; // Don't throw, seller may not exist
+    }
+    const { error } = await supabase
+      .from("sellers")
+      .update(data)
+      .eq("user_id", userId);
+    
+    if (error) {
+      console.warn("[UserProfileDialog] Failed to update seller (may not exist):", error.message);
+      // Don't throw - seller profile may not exist
+    }
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // HANDLER: Save all form changes
+  // ─────────────────────────────────────────────────────────────────────────
+  const handleSave = async () => {
+    if (!user?.id) {
+      console.warn("[UserProfileDialog] handleSave: No user selected");
+      alert("No user selected");
+      return;
+    }
+    
+    setSaving(true);
+    try {
+      // Only include columns that exist in public.users
+      const updateData = {
+        buyer_safety_agreed: formData.buyer_safety_agreed,
+        seller_safety_agreed: formData.seller_safety_agreed,
+        age_verified: formData.age_verified,
+        location_permission_granted: formData.location_permission_granted,
+        explicit_content_permission: formData.explicit_content_permission,
+        identity_verified: formData.identity_verified,
+        seller_status: formData.seller_status,
+        seller_verification_notes: formData.seller_verification_notes
+      };
+      
+      await updateUser(user.id, updateData);
       queryClient.invalidateQueries({ queryKey: ['all-users-manage'] });
       alert("User profile updated successfully");
-    },
-    onError: (error) => {
-      alert(`Failed to update: ${error.message}`);
+    } catch (err) {
+      alert(`Failed to update: ${err.message}`);
+    } finally {
+      setSaving(false);
     }
-  });
-
-  const handleSave = async () => {
-    setSaving(true);
-    const now = new Date().toISOString();
-    
-    const updateData = { ...formData };
-    
-    // Set timestamps for newly verified fields
-    if (formData.identity_verified && !user.identity_verified) {
-      updateData.identity_verified_at = now;
-    }
-    
-    await updateUserMutation.mutateAsync(updateData);
-    setSaving(false);
   };
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // HANDLER: Reset Buyer Safety Agreement
+  // Only updates columns that exist in public.users
+  // ─────────────────────────────────────────────────────────────────────────
   const handleResetBuyerSafety = async () => {
+    if (!user?.id) {
+      console.warn("[UserProfileDialog] handleResetBuyerSafety: No user selected");
+      alert("No user selected");
+      return;
+    }
     if (!confirm("Reset buyer safety agreement? User will need to re-agree.")) return;
     
-    await updateUserMutation.mutateAsync({
-      buyer_safety_agreed: false,
-      buyer_safety_agreed_at: null,
-      age_verified: false,
-      age_verified_at: null,
-      location_permission_granted: false,
-      location_permission_granted_at: null,
-      explicit_content_permission: false,
-      explicit_content_permission_at: null
-    });
-    
-    setFormData(prev => ({
-      ...prev,
-      buyer_safety_agreed: false,
-      age_verified: false,
-      location_permission_granted: false,
-      explicit_content_permission: false
-    }));
+    try {
+      await updateUser(user.id, {
+        buyer_safety_agreed: false,
+        buyer_safety_agreed_at: null,
+        age_verified: false,
+        age_verified_at: null,
+        location_permission_granted: false,
+        explicit_content_permission: false
+      });
+      
+      setFormData(prev => ({
+        ...prev,
+        buyer_safety_agreed: false,
+        age_verified: false,
+        location_permission_granted: false,
+        explicit_content_permission: false
+      }));
+      
+      queryClient.invalidateQueries({ queryKey: ['all-users-manage'] });
+      alert("Buyer safety agreement has been reset.");
+    } catch (err) {
+      alert(`Failed to reset buyer safety: ${err.message}`);
+    }
   };
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // HANDLER: Reset Seller Safety Agreement (partial reset)
+  // ─────────────────────────────────────────────────────────────────────────
   const handleResetSellerSafety = async () => {
+    if (!user?.id) {
+      console.warn("[UserProfileDialog] handleResetSellerSafety: No user selected");
+      alert("No user selected");
+      return;
+    }
     if (!confirm("Reset seller safety agreement? User will need to re-agree.")) return;
     
-    await updateUserMutation.mutateAsync({
-      seller_safety_agreed: false,
-      seller_safety_agreed_at: null,
-      seller_status: "none"
-    });
-    
-    setFormData(prev => ({
-      ...prev,
-      seller_safety_agreed: false,
-      seller_status: "none"
-    }));
+    try {
+      // Reset user flags
+      await updateUser(user.id, {
+        seller_safety_agreed: false,
+        seller_safety_agreed_at: null,
+        identity_verified: false,
+        seller_onboarding_completed: false
+      });
+      
+      setFormData(prev => ({
+        ...prev,
+        seller_safety_agreed: false,
+        identity_verified: false,
+        seller_status: prev.seller_status
+      }));
+      
+      queryClient.invalidateQueries({ queryKey: ['all-users-manage'] });
+      alert("Seller safety agreement has been reset.");
+    } catch (err) {
+      alert(`Failed to reset seller safety: ${err.message}`);
+    }
   };
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // HANDLER: Reset FULL Seller Onboarding (complete reset)
+  // Only updates columns that exist in public.users
+  // ─────────────────────────────────────────────────────────────────────────
   const handleResetSellerOnboarding = async () => {
+    if (!user?.id) {
+      console.warn("[UserProfileDialog] handleResetSellerOnboarding: No user selected");
+      alert("No user selected");
+      return;
+    }
     if (!confirm("Reset FULL seller onboarding? This will lock the seller out of all show-related features until they complete the entire onboarding flow again (Agreement → Identity → Categories → Profile → Review).")) return;
     
-    const now = new Date().toISOString();
-    const adminUser = await base44.auth.me();
-    
-    await updateUserMutation.mutateAsync({
-      seller_onboarding_reset: true,
-      seller_onboarding_reset_at: now,
-      seller_onboarding_reset_by: adminUser.email,
-      seller_safety_agreed: false,
-      seller_safety_agreed_at: null,
-      seller_status: "pending",
-      // Clear all seller onboarding data
-      seller_guideline_honor_purchases: false,
-      seller_guideline_no_counterfeit: false,
-      seller_guideline_accurate_descriptions: false,
-      seller_guideline_ship_safely: false,
-      seller_guideline_minor_preapproval: false,
-      seller_guidelines_accepted_at: null,
-      seller_onboarding_steps_completed: [],
-      seller_onboarding_steps_remaining: ["agreement", "identity", "categories", "profile", "review"]
-    });
-    
-    setFormData(prev => ({
-      ...prev,
-      seller_safety_agreed: false,
-      seller_status: "pending"
-    }));
-    
-    alert("Seller onboarding has been reset. The seller must complete the full onboarding flow again before accessing any show-related features.");
+    try {
+      // Reset user-side seller onboarding flags (only columns that exist)
+      await updateUser(user.id, {
+        seller_safety_agreed: false,
+        seller_safety_agreed_at: null,
+        seller_onboarding_completed: false,
+        identity_verified: false,
+        seller_status: "pending",
+        seller_verification_notes: null
+      });
+      
+      // Also reset seller entity status to pending (if seller profile exists)
+      await updateSeller(user.id, {
+        status: "pending",
+        verification_notes: null
+      });
+      
+      setFormData(prev => ({
+        ...prev,
+        seller_safety_agreed: false,
+        identity_verified: false,
+        seller_status: "pending",
+        seller_verification_notes: ""
+      }));
+      
+      queryClient.invalidateQueries({ queryKey: ['all-users-manage'] });
+      queryClient.invalidateQueries({ queryKey: ['all-sellers-manage'] });
+      alert("Seller onboarding has been reset. The seller must complete the full onboarding flow again before accessing any show-related features.");
+    } catch (err) {
+      alert(`Failed to reset seller onboarding: ${err.message}`);
+    }
   };
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // HANDLER: Approve Seller
+  // Only updates columns that exist in public.users
+  // ─────────────────────────────────────────────────────────────────────────
   const handleApproveSeller = async () => {
-    const now = new Date().toISOString();
-    await updateUserMutation.mutateAsync({
-      seller_status: "approved",
-      identity_verified: true,
-      identity_verified_at: now,
-      seller_verification_notes: formData.seller_verification_notes + `\n[${format(new Date(), "yyyy-MM-dd HH:mm")}] Approved by admin`
-    });
-    setFormData(prev => ({ ...prev, seller_status: "approved", identity_verified: true }));
+    if (!user?.id) {
+      console.warn("[UserProfileDialog] handleApproveSeller: No user selected");
+      alert("No user selected");
+      return;
+    }
+    
+    try {
+      const notes = (formData.seller_verification_notes || "") + `\n[${format(new Date(), "yyyy-MM-dd HH:mm")}] Approved by admin`;
+      
+      // Update user record (only columns that exist)
+      await updateUser(user.id, {
+        seller_status: "approved",
+        identity_verified: true,
+        seller_verification_notes: notes
+      });
+      
+      // Also update seller entity if exists
+      await updateSeller(user.id, {
+        status: "approved"
+      });
+      
+      setFormData(prev => ({ 
+        ...prev, 
+        seller_status: "approved", 
+        identity_verified: true,
+        seller_verification_notes: notes
+      }));
+      
+      queryClient.invalidateQueries({ queryKey: ['all-users-manage'] });
+      queryClient.invalidateQueries({ queryKey: ['all-sellers-manage'] });
+      alert("Seller has been approved.");
+    } catch (err) {
+      alert(`Failed to approve seller: ${err.message}`);
+    }
   };
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // HANDLER: Reject Seller
+  // ─────────────────────────────────────────────────────────────────────────
   const handleRejectSeller = async () => {
+    if (!user?.id) {
+      console.warn("[UserProfileDialog] handleRejectSeller: No user selected");
+      alert("No user selected");
+      return;
+    }
+    
     const reason = prompt("Reason for rejection:");
     if (!reason) return;
     
-    await updateUserMutation.mutateAsync({
-      seller_status: "rejected",
-      seller_verification_notes: formData.seller_verification_notes + `\n[${format(new Date(), "yyyy-MM-dd HH:mm")}] Rejected: ${reason}`
-    });
-    setFormData(prev => ({ ...prev, seller_status: "rejected" }));
+    try {
+      const notes = (formData.seller_verification_notes || "") + `\n[${format(new Date(), "yyyy-MM-dd HH:mm")}] Rejected: ${reason}`;
+      
+      // Update user record
+      await updateUser(user.id, {
+        seller_status: "rejected",
+        seller_verification_notes: notes
+      });
+      
+      // Also update seller entity if exists
+      await updateSeller(user.id, {
+        status: "declined"
+      });
+      
+      setFormData(prev => ({ 
+        ...prev, 
+        seller_status: "rejected",
+        seller_verification_notes: notes
+      }));
+      
+      queryClient.invalidateQueries({ queryKey: ['all-users-manage'] });
+      queryClient.invalidateQueries({ queryKey: ['all-sellers-manage'] });
+      alert("Seller has been rejected.");
+    } catch (err) {
+      alert(`Failed to reject seller: ${err.message}`);
+    }
   };
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // HANDLER: Ban User
+  // ─────────────────────────────────────────────────────────────────────────
   const handleBanUser = async () => {
+    if (!user?.id) {
+      console.warn("[UserProfileDialog] handleBanUser: No user selected");
+      alert("No user selected");
+      return;
+    }
+    
     const reason = prompt("Reason for ban:");
     if (!reason) return;
     
-    const now = new Date().toISOString();
-    const adminUser = await base44.auth.me();
-    
-    await updateUserMutation.mutateAsync({
-      account_status: "banned",
-      suspended_at: now,
-      suspended_by: adminUser.email,
-      suspension_reason: reason
-    });
+    try {
+      const now = new Date().toISOString();
+      const { data: authData } = await supabase.auth.getUser();
+      const adminId = authData?.user?.id ?? null;
+      
+      // Use canonical account_status columns
+      await updateUser(user.id, {
+        account_status: "suspended",
+        account_status_reason: reason,
+        account_status_updated_at: now,
+        account_status_updated_by: adminId
+      });
+      
+      queryClient.invalidateQueries({ queryKey: ['all-users-manage'] });
+      alert("User has been suspended.");
+    } catch (err) {
+      alert(`Failed to suspend user: ${err.message}`);
+    }
   };
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // HANDLER: Unsuspend User (formerly Unban)
+  // ─────────────────────────────────────────────────────────────────────────
   const handleUnbanUser = async () => {
-    await updateUserMutation.mutateAsync({
-      account_status: "active",
-      suspended_at: null,
-      suspended_by: null,
-      suspension_reason: null
-    });
+    if (!user?.id) {
+      console.warn("[UserProfileDialog] handleUnbanUser: No user selected");
+      alert("No user selected");
+      return;
+    }
+    
+    try {
+      const now = new Date().toISOString();
+      const { data: authData } = await supabase.auth.getUser();
+      const adminId = authData?.user?.id ?? null;
+      
+      // Use canonical account_status columns
+      await updateUser(user.id, {
+        account_status: "active",
+        account_status_reason: null,
+        account_status_updated_at: now,
+        account_status_updated_by: adminId
+      });
+      
+      queryClient.invalidateQueries({ queryKey: ['all-users-manage'] });
+      alert("User has been unsuspended.");
+    } catch (err) {
+      alert(`Failed to unsuspend user: ${err.message}`);
+    }
   };
 
   if (!user) return null;
@@ -252,6 +439,10 @@ export default function UserProfileDialog({ open, onOpenChange, user, buyerProfi
               <div>
                 <Label className="text-gray-500">Full Name</Label>
                 <p className="font-medium">{user.full_name || "Not set"}</p>
+              </div>
+              <div>
+                <Label className="text-gray-500">Display Name</Label>
+                <p className="font-medium">{user.display_name || "Not set"}</p>
               </div>
               <div>
                 <Label className="text-gray-500">Role</Label>

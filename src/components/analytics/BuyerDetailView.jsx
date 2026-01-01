@@ -1,6 +1,4 @@
 import React from "react";
-import { supabaseApi as base44 } from "@/api/supabaseClient";
-import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,38 +12,42 @@ import {
 } from "@/components/ui/table";
 import { ExternalLink, TrendingUp, DollarSign, RefreshCw, ShoppingBag } from "lucide-react";
 
-export default function BuyerDetailView({ buyer, startDate, endDate, payments, refunds }) {
-  // Filter buyer-specific data
+// ─────────────────────────────────────────────────────────────────────────────
+// BuyerDetailView - Rewired to use analytics_events-backed data
+// 
+// Props:
+//   - buyer: Buyer profile for identity (name, email, user_id)
+//   - payments: Order analytics data mapped to payment-like shape
+//   - refunds: Empty array (refunds not yet tracked in analytics_events)
+//   - sellers: Optional - seller entities for name lookup
+//   - startDate/endDate: Date range for filtering
+//
+// Note: Removed Base44 dependencies for orders and sellers
+// ─────────────────────────────────────────────────────────────────────────────
+
+export default function BuyerDetailView({ buyer, startDate, endDate, payments, refunds, sellers = [] }) {
+  // Helper to get date from either created_at or created_date
+  const getDate = (item) => new Date(item.created_at || item.created_date);
+  
+  // Filter buyer-specific data by date range
   const buyerPayments = payments.filter(p =>
     p.buyer_id === buyer.user_id &&
-    new Date(p.created_date) >= startDate &&
-    new Date(p.created_date) <= endDate
+    getDate(p) >= startDate &&
+    getDate(p) <= endDate
   );
 
+  // Refunds: filter by buyer (refunds array is currently empty)
   const buyerRefunds = refunds.filter(r => {
-    const payment = payments.find(p => p.stripe_charge_id === r.stripe_charge_id);
-    return payment && payment.buyer_id === buyer.user_id &&
-      new Date(r.created_date) >= startDate &&
-      new Date(r.created_date) <= endDate;
+    const refundDate = getDate(r);
+    return r.buyer_id === buyer.user_id &&
+      refundDate >= startDate &&
+      refundDate <= endDate;
   });
 
-  // Fetch orders for this buyer
-  const { data: orders = [] } = useQuery({
-    queryKey: ['buyer-orders', buyer.user_id],
-    queryFn: async () => {
-      const allOrders = await base44.entities.Order.list();
-      return allOrders.filter(o => o.buyer_id === buyer.user_id);
-    }
-  });
-
-  // Fetch sellers for seller names
-  const { data: sellers = [] } = useQuery({
-    queryKey: ['all-sellers'],
-    queryFn: () => base44.entities.Seller.list()
-  });
-
+  // Create sellers lookup map if sellers provided
   const sellersMap = sellers.reduce((acc, s) => {
     acc[s.id] = s;
+    if (s.user_id) acc[s.user_id] = s;
     return acc;
   }, {});
 
@@ -54,7 +56,7 @@ export default function BuyerDetailView({ buyer, startDate, endDate, payments, r
   const refundAmount = buyerRefunds.reduce((sum, r) => sum + (r.amount || 0), 0);
   const netSpend = totalSpend - refundAmount;
   const lastPurchase = buyerPayments.length > 0
-    ? new Date(Math.max(...buyerPayments.map(p => new Date(p.created_date))))
+    ? new Date(Math.max(...buyerPayments.map(p => getDate(p))))
     : null;
 
   const kpiCards = [
@@ -131,65 +133,41 @@ export default function BuyerDetailView({ buyer, startDate, endDate, payments, r
                 <TableRow>
                   <TableHead>Order ID</TableHead>
                   <TableHead>Seller</TableHead>
-                  <TableHead>Charge ID</TableHead>
                   <TableHead className="text-right">Amount</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Date</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {buyerPayments.map((payment) => {
-                  const order = orders.find(o => o.id === payment.order_id);
                   const seller = sellersMap[payment.seller_id];
                   
                   return (
                     <TableRow key={payment.id}>
                       <TableCell>
                         <code className="text-xs bg-gray-100 px-2 py-1 rounded">
-                          {payment.order_id?.substring(0, 8)}...
+                          {payment.order_id?.substring(0, 8) || "—"}...
                         </code>
                       </TableCell>
                       <TableCell>
-                        {seller?.business_name || "Unknown Seller"}
-                      </TableCell>
-                      <TableCell>
-                        <code className="text-xs bg-gray-100 px-2 py-1 rounded">
-                          {payment.stripe_charge_id?.substring(0, 12)}...
-                        </code>
+                        {seller?.business_name || "—"}
                       </TableCell>
                       <TableCell className="text-right font-semibold">
-                        ${payment.amount?.toFixed(2)}
+                        ${payment.amount?.toFixed(2) || "0.00"}
                       </TableCell>
                       <TableCell>
                         <Badge
                           className={
-                            payment.status === "succeeded"
+                            payment.status === "succeeded" || payment.status === "fulfilled" || payment.status === "picked_up"
                               ? "bg-green-100 text-green-800 border-green-200"
                               : "bg-gray-100 text-gray-800 border-gray-200"
                           }
                         >
-                          {payment.status}
+                          {payment.status || "pending"}
                         </Badge>
                       </TableCell>
                       <TableCell>
-                        {new Date(payment.created_date).toLocaleDateString()}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        {payment.stripe_charge_id && (
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() =>
-                              window.open(
-                                `https://dashboard.stripe.com/payments/${payment.stripe_charge_id}`,
-                                "_blank"
-                              )
-                            }
-                          >
-                            <ExternalLink className="w-4 h-4" />
-                          </Button>
-                        )}
+                        {getDate(payment).toLocaleDateString()}
                       </TableCell>
                     </TableRow>
                   );
@@ -219,7 +197,6 @@ export default function BuyerDetailView({ buyer, startDate, endDate, payments, r
                     <TableHead>Reason</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Date</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -227,11 +204,11 @@ export default function BuyerDetailView({ buyer, startDate, endDate, payments, r
                     <TableRow key={refund.id}>
                       <TableCell>
                         <code className="text-xs bg-gray-100 px-2 py-1 rounded">
-                          {refund.stripe_refund_id?.substring(0, 12)}...
+                          {refund.id?.substring(0, 12) || "—"}...
                         </code>
                       </TableCell>
                       <TableCell className="text-right font-semibold text-red-600">
-                        ${refund.amount?.toFixed(2)}
+                        ${refund.amount?.toFixed(2) || "0.00"}
                       </TableCell>
                       <TableCell>{refund.reason || "N/A"}</TableCell>
                       <TableCell>
@@ -242,27 +219,11 @@ export default function BuyerDetailView({ buyer, startDate, endDate, payments, r
                               : "bg-gray-100 text-gray-800 border-gray-200"
                           }
                         >
-                          {refund.status}
+                          {refund.status || "pending"}
                         </Badge>
                       </TableCell>
                       <TableCell>
-                        {new Date(refund.created_date).toLocaleDateString()}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        {refund.stripe_refund_id && (
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() =>
-                              window.open(
-                                `https://dashboard.stripe.com/refunds/${refund.stripe_refund_id}`,
-                                "_blank"
-                              )
-                            }
-                          >
-                            <ExternalLink className="w-4 h-4" />
-                          </Button>
-                        )}
+                        {getDate(refund).toLocaleDateString()}
                       </TableCell>
                     </TableRow>
                   ))}

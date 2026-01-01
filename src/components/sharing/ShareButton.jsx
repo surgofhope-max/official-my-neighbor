@@ -17,7 +17,7 @@ import {
   CheckCircle,
   Instagram
 } from "lucide-react";
-import { supabaseApi as base44 } from "@/api/supabaseClient";
+import { supabase } from "@/lib/supabase/supabaseClient";
 import { toast } from "sonner";
 
 /**
@@ -47,8 +47,12 @@ export default function ShareButton({
 
   const loadUser = async () => {
     try {
-      const currentUser = await base44.auth.me();
-      setUser(currentUser);
+      const { data, error } = await supabase.auth.getUser();
+      if (error) {
+        setUser(null);
+        return;
+      }
+      setUser(data?.user ?? null);
     } catch (error) {
       setUser(null);
     }

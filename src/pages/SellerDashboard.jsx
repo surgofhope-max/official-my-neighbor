@@ -1,9 +1,15 @@
 import React, { useState, useEffect, useRef } from "react";
 import { supabaseApi as base44 } from "@/api/supabaseClient";
 import { supabase } from "@/lib/supabase/supabaseClient";
+import { getFollowersBySellerId } from "@/api/followers";
+import { getFollowingByUserId } from "@/api/following";
+import { getOrdersBySeller } from "@/api/sellerOrders";
+import { getProductsBySellerId } from "@/api/products";
+import { getShowsBySellerId } from "@/api/shows";
 import { useSupabaseAuth } from "@/lib/auth/SupabaseAuthProvider";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { isSuperAdmin } from "@/lib/auth/routeGuards";
+import { isSuperAdmin, requireSellerAsync, isAdmin } from "@/lib/auth/routeGuards";
+import { checkAccountActiveAsync } from "@/lib/auth/accountGuards";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -37,7 +43,11 @@ import {
   Eye,
   EyeOff,
   Shield,
-  LogOut
+  LogOut,
+  PartyPopper,
+  Sparkles,
+  ArrowRight,
+  Plus
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
@@ -77,6 +87,9 @@ export default function SellerDashboard() {
   const [isDeleting, setIsDeleting] = useState(false);
   const profileImageRef = useRef(null);
   const backgroundImageRef = useRef(null);
+  
+  // First-run activation banner dismiss state (in-session only)
+  const [activationBannerDismissed, setActivationBannerDismissed] = useState(false);
   const [formData, setFormData] = useState({
     business_name: "",
     contact_phone: "",
@@ -95,20 +108,29 @@ export default function SellerDashboard() {
   });
 
   const { data: products = [] } = useQuery({
-    queryKey: ['seller-products'],
-    queryFn: () => seller ? base44.entities.Product.filter({ seller_id: seller.id }) : [],
+    queryKey: ['seller-products', seller?.id],
+    queryFn: async () => {
+      if (!seller?.id) return [];
+      return getProductsBySellerId(seller.id);
+    },
     enabled: !!seller && seller.status === "approved"
   });
 
   const { data: shows = [] } = useQuery({
-    queryKey: ['seller-shows'],
-    queryFn: () => seller ? base44.entities.Show.filter({ seller_id: seller.id }) : [],
+    queryKey: ['seller-shows', seller?.id],
+    queryFn: async () => {
+      if (!seller?.id) return [];
+      return getShowsBySellerId(seller.id);
+    },
     enabled: !!seller && seller.status === "approved"
   });
 
   const { data: orders = [] } = useQuery({
-    queryKey: ['seller-orders'],
-    queryFn: () => seller ? base44.entities.Order.filter({ seller_id: seller.id }) : [],
+    queryKey: ['seller-orders', seller?.id],
+    queryFn: async () => {
+      if (!seller?.id) return [];
+      return getOrdersBySeller(seller.id, seller.user_id);
+    },
     enabled: !!seller && seller.status === "approved"
   });
 
@@ -116,12 +138,29 @@ export default function SellerDashboard() {
     queryKey: ['seller-followers', seller?.id],
     queryFn: async () => {
       if (!seller?.id) return [];
-      const follows = await base44.entities.FollowedSeller.filter({ seller_id: seller.id });
-      if (follows.length === 0) return [];
-      const buyerIds = follows.map(f => f.buyer_id);
-      const buyers = await base44.entities.BuyerProfile.list();
-      const matchingBuyers = buyers.filter(b => buyerIds.includes(b.user_id));
-      return matchingBuyers;
+      const followRows = await getFollowersBySellerId(seller.id);
+      
+      // ═══════════════════════════════════════════════════════════════════════
+      // [FOLLOWERS AUDIT] — TEMPORARY LOGGING (REMOVE AFTER DEBUG)
+      // ═══════════════════════════════════════════════════════════════════════
+      console.group('[FOLLOWERS AUDIT]');
+      console.log('seller.id (entity):', seller?.id);
+      console.log('seller.user_id (auth):', seller?.user_id);
+      console.log('RAW followRows count:', followRows?.length);
+      console.log('RAW followRows:', followRows);
+      console.log('RAW follower buyer_ids:', followRows?.map(f => f.buyer_id));
+      console.groupEnd();
+      
+      // Extract buyer_profiles from joined rows
+      const mappedProfiles = followRows.map(f => f.buyer_profiles);
+      
+      console.group('[FOLLOWERS AUDIT — POST MAP]');
+      console.log('Mapped buyer_profiles (before filter):', mappedProfiles);
+      console.log('Mapped count (before filter):', mappedProfiles?.length);
+      console.log('Mapped count (after Boolean filter):', mappedProfiles?.filter(Boolean)?.length);
+      console.groupEnd();
+      
+      return mappedProfiles.filter(Boolean);
     },
     enabled: !!seller && seller.status === "approved"
   });
@@ -130,12 +169,8 @@ export default function SellerDashboard() {
     queryKey: ['seller-following', user?.id],
     queryFn: async () => {
       if (!user?.id) return [];
-      const follows = await base44.entities.FollowedSeller.filter({ buyer_id: user.id });
-      if (follows.length === 0) return [];
-      const sellerIds = follows.map(f => f.seller_id);
-      const sellers = await base44.entities.Seller.list();
-      const matchingSellers = sellers.filter(s => sellerIds.includes(s.id));
-      return matchingSellers;
+      const rows = await getFollowingByUserId(user.id);
+      return rows.map(r => r.sellers).filter(Boolean);
     },
     enabled: !!user && !!seller && seller.status === "approved"
   });
@@ -182,7 +217,6 @@ export default function SellerDashboard() {
     
     if (!authUser) {
       // Not logged in - redirect to login
-      console.log("🔐 User not authenticated - redirecting to login");
       navigate(createPageUrl("Login"), { replace: true });
       return;
     }
@@ -196,219 +230,144 @@ export default function SellerDashboard() {
       const currentUser = authUser;
       setUser(currentUser);
 
-      // 🔐 SUPER_ADMIN BYPASS: Skip ALL checks — full system authority
+      // ═══════════════════════════════════════════════════════════════════════════
+      // OPTION B SELLER GATING (STEP 3 REFACTOR)
+      // User is seller IFF: public.users.role='seller' AND sellers.status='approved'
+      // ═══════════════════════════════════════════════════════════════════════════
+
+      // 🔐 SUPER_ADMIN BYPASS: Full system authority
       if (isSuperAdmin(currentUser)) {
-        console.log("🔑 SUPER_ADMIN detected — bypassing ALL onboarding/safety/approval checks");
-        
-        // Load seller profile if exists, but don't require it
         const { data: sellerProfile } = await supabase
           .from("sellers")
           .select("*")
           .eq("user_id", currentUser.id)
-          .single();
+          .maybeSingle();
         
         if (sellerProfile) {
           setSeller(sellerProfile);
-          setFormData({
-            business_name: sellerProfile.business_name || "",
-            contact_phone: sellerProfile.contact_phone || "",
-            contact_email: sellerProfile.contact_email || currentUser.email,
-            pickup_address: sellerProfile.pickup_address || "",
-            pickup_city: sellerProfile.pickup_city || "",
-            pickup_state: sellerProfile.pickup_state || "Arizona",
-            pickup_zip: sellerProfile.pickup_zip || "",
-            pickup_notes: sellerProfile.pickup_notes || "",
-            bio: sellerProfile.bio || "",
-            profile_image_url: sellerProfile.profile_image_url || "",
-            background_image_url: sellerProfile.background_image_url || "",
-            show_contact_email: sellerProfile.show_contact_email !== false,
-            show_contact_phone: sellerProfile.show_contact_phone !== false,
-            show_pickup_address: sellerProfile.show_pickup_address !== false
-          });
+          populateFormData(sellerProfile, currentUser);
         } else {
-          // No seller profile — show creation form
           setIsOnboarding(true);
-          setFormData({
-            business_name: "Surge of Hope",
-            contact_phone: "",
-            contact_email: currentUser.email,
-            pickup_address: "",
-            pickup_city: "Phoenix",
-            pickup_state: "Arizona",
-            pickup_zip: "",
-            pickup_notes: "",
-            bio: "Official Surge of Hope marketplace for live charity auctions and sales",
-            profile_image_url: "",
-            background_image_url: "",
-            show_contact_email: true,
-            show_contact_phone: true,
-            show_pickup_address: true
-          });
+          populateDefaultFormData(currentUser);
         }
-        // SUPER_ADMIN: done loading, render dashboard
-        return;
-      }
-      
-      // CRITICAL: Check for onboarding reset - must complete full onboarding again
-      const userRole = currentUser.user_metadata?.role || currentUser.role;
-      if (userRole !== "admin" && currentUser.seller_onboarding_reset === true) {
-        console.log("🔄 Seller onboarding reset detected - redirecting to full onboarding");
-        navigate(createPageUrl("SellerSafetyAgreement"), { replace: true });
         return;
       }
 
-      // Check if seller entity already exists (If so, they are effectively onboarded)
-      const { data: sellerProfile, error: sellerError } = await supabase
-        .from("sellers")
-        .select("*")
-        .eq("user_id", currentUser.id)
-        .single();
-
-      if (sellerError && sellerError.code !== "PGRST116") {
-        throw sellerError;
-      }
-
-      const hasSellerEntity = !!sellerProfile;
-
-      // LOGGING FOR DEBUGGING
-      console.log("🔍 SellerDashboard Check:", {
-        hasSellerEntity,
-        sellerOnboardingCompleted: currentUser.seller_onboarding_completed,
-        sellerSafetyAgreed: currentUser.seller_safety_agreed,
-        sellerReset: currentUser.seller_onboarding_reset,
-        role: userRole
-      });
-      if (sellerProfile) {
-        console.log("✅ Seller profile found:", sellerProfile);
-      }
-
-      // SAFETY & ONBOARDING CHECKS (Sequential to prevent race conditions)
-      if (userRole !== "admin") {
-        // 1. Check Safety Agreement (Relaxed check)
-        // CRITICAL: If seller entity exists, we assume they are safe/approved regardless of flag
-        if (!currentUser.seller_safety_agreed && !hasSellerEntity) {
-          console.log("🛡️ Seller safety agreement required - redirecting");
-          navigate(createPageUrl("SellerSafetyAgreement"), { replace: true });
-          return;
+      // 🔐 ADMIN BYPASS: Admins can access seller routes
+      if (isAdmin(currentUser)) {
+        // Check for impersonation
+        const impersonatingSellerId = sessionStorage.getItem('admin_impersonate_seller_id');
+        if (impersonatingSellerId) {
+          const { data: impersonatedSeller } = await supabase
+            .from("sellers")
+            .select("*")
+            .eq("id", impersonatingSellerId)
+            .maybeSingle();
+          if (impersonatedSeller) {
+            setSeller(impersonatedSeller);
+            populateFormData(impersonatedSeller, currentUser);
+            return;
+          }
         }
+        // Admin's own seller profile
+        const { data: sellerProfile } = await supabase
+          .from("sellers")
+          .select("*")
+          .eq("user_id", currentUser.id)
+          .maybeSingle();
+        if (sellerProfile) {
+          setSeller(sellerProfile);
+          populateFormData(sellerProfile, currentUser);
+        } else {
+          setIsOnboarding(true);
+          populateDefaultFormData(currentUser);
+        }
+        return;
+      }
 
-        // 2. Check Onboarding Completion
-        // CRITICAL: If seller entity exists, we UNCONDITIONALLY allow access
-        // We do NOT check specific sub-fields like main_community, etc.
-        if (!hasSellerEntity && !currentUser.seller_onboarding_completed) {
-          console.log("📋 Seller onboarding incomplete - redirecting");
-          navigate(createPageUrl("SellerOnboarding"), { replace: true });
-          return;
-        }
+      // ═══════════════════════════════════════════════════════════════════════════
+      // SUSPENSION CHECK: Block seller dashboard for suspended accounts
+      // ═══════════════════════════════════════════════════════════════════════════
+      const { canProceed: accountActive, error: suspendedReason } = await checkAccountActiveAsync(supabase, currentUser.id);
+      if (!accountActive) {
+        // Suspended - redirect to BuyerProfile (they can still view it)
+        navigate(createPageUrl("BuyerProfile"), { 
+          replace: true, 
+          state: { suspended: true, reason: suspendedReason } 
+        });
+        return;
       }
-      
-      // CRITICAL: Ensure we don't show spinner if we have a user but no seller yet (new seller flow)
-      // If we reached here, onboarding is marked complete (or auto-repaired)
-      
-      // Check if admin is impersonating
-      const impersonatingSellerId = sessionStorage.getItem('admin_impersonate_seller_id');
-      
-      if (impersonatingSellerId && currentUser.role === "admin") {
-        // Load the impersonated seller by ID
-        const allSellers = await base44.entities.Seller.list();
-        const impersonatedSeller = allSellers.find(s => s.id === impersonatingSellerId);
-        
-        if (impersonatedSeller) {
-          setSeller(impersonatedSeller);
-          setFormData({
-            business_name: impersonatedSeller.business_name || "",
-            contact_phone: impersonatedSeller.contact_phone || "",
-            contact_email: impersonatedSeller.contact_email || currentUser.email,
-            pickup_address: impersonatedSeller.pickup_address || "",
-            pickup_city: impersonatedSeller.pickup_city || "",
-            pickup_state: impersonatedSeller.pickup_state || "Arizona",
-            pickup_zip: impersonatedSeller.pickup_zip || "",
-            pickup_notes: impersonatedSeller.pickup_notes || "",
-            bio: impersonatedSeller.bio || "",
-            profile_image_url: impersonatedSeller.profile_image_url || "",
-            background_image_url: impersonatedSeller.background_image_url || "",
-            show_contact_email: impersonatedSeller.show_contact_email !== false,
-            show_contact_phone: impersonatedSeller.show_contact_phone !== false,
-            show_pickup_address: impersonatedSeller.show_pickup_address !== false
-          });
-          console.log("🔧 Admin impersonating seller:", impersonatedSeller.business_name);
-          return;
-        }
-      }
-      
-      // Normal flow - use the sellerProfile already fetched above
-      if (sellerProfile) {
-        setSeller(sellerProfile);
-        
-        if (currentUser.role !== "admin" && sellerProfile.status !== "approved") {
-          // Redirect to BuyerProfile with pending status - they'll see the banner there
+
+      // ═══════════════════════════════════════════════════════════════════════════
+      // OPTION B CHECK: Query DB for role + seller status
+      // ═══════════════════════════════════════════════════════════════════════════
+      const sellerCheck = await requireSellerAsync(currentUser.id);
+
+      if (!sellerCheck.ok) {
+        // NOT an approved seller - redirect to appropriate page
+        if (sellerCheck.sellerRow && sellerCheck.sellerRow.status === "pending") {
+          // Pending seller - redirect to BuyerProfile with pending status
           navigate(createPageUrl("BuyerProfile"), {
             replace: true,
-            state: { sellerStatus: sellerProfile.status }
-          });
-          return;
-        }
-        
-        setFormData({
-          business_name: sellerProfile.business_name || "",
-          contact_phone: sellerProfile.contact_phone || "",
-          contact_email: sellerProfile.contact_email || currentUser.email,
-          pickup_address: sellerProfile.pickup_address || "",
-          pickup_city: sellerProfile.pickup_city || "",
-          pickup_state: sellerProfile.pickup_state || "Arizona",
-          pickup_zip: sellerProfile.pickup_zip || "",
-          pickup_notes: sellerProfile.pickup_notes || "",
-          bio: sellerProfile.bio || "",
-          profile_image_url: sellerProfile.profile_image_url || "",
-          background_image_url: sellerProfile.background_image_url || "",
-          show_contact_email: sellerProfile.show_contact_email !== false,
-          show_contact_phone: sellerProfile.show_contact_phone !== false,
-          show_pickup_address: sellerProfile.show_pickup_address !== false
-        });
-      } else {
-        // User has completed "User Onboarding" (steps) but hasn't created "Seller Entity" yet.
-        // Show the Profile Creation Form.
-        if (currentUser.role === "admin") {
-          setFormData({
-            business_name: "Surge of Hope",
-            contact_phone: "",
-            contact_email: currentUser.email,
-            pickup_address: "",
-            pickup_city: "Phoenix",
-            pickup_state: "Arizona",
-            pickup_zip: "",
-            pickup_notes: "",
-            bio: "Official Surge of Hope marketplace for live charity auctions and sales",
-            profile_image_url: "",
-            background_image_url: "",
-            show_contact_email: true,
-            show_contact_phone: true,
-            show_pickup_address: true
+            state: { sellerStatus: "pending" }
           });
         } else {
-          // Pre-fill from user onboarding data
-          setFormData({
-            business_name: currentUser.seller_return_full_name || "",
-            contact_phone: currentUser.phone_number || "",
-            contact_email: currentUser.email,
-            pickup_address: (currentUser.seller_return_address_1 || "") + (currentUser.seller_return_address_2 ? " " + currentUser.seller_return_address_2 : ""),
-            pickup_city: currentUser.seller_return_city || "",
-            pickup_state: currentUser.seller_return_state || "",
-            pickup_zip: currentUser.seller_return_zip || "",
-            pickup_notes: "",
-            bio: "",
-            profile_image_url: "",
-            background_image_url: "",
-            show_contact_email: true,
-            show_contact_phone: true,
-            show_pickup_address: true
-          });
+          // No seller or not approved - redirect to Marketplace
+          navigate(createPageUrl("Marketplace"), { replace: true });
         }
-        setIsOnboarding(true);
+        return;
       }
+
+      // ═══════════════════════════════════════════════════════════════════════════
+      // APPROVED SELLER - Load dashboard
+      // ═══════════════════════════════════════════════════════════════════════════
+      setSeller(sellerCheck.sellerRow);
+      populateFormData(sellerCheck.sellerRow, currentUser);
+
     } catch (error) {
       console.error("Error loading user:", error);
+      navigate(createPageUrl("Marketplace"), { replace: true });
     }
+  };
+
+  // Helper to populate form data from seller profile
+  const populateFormData = (sellerProfile, currentUser) => {
+    setFormData({
+      business_name: sellerProfile.business_name || "",
+      contact_phone: sellerProfile.contact_phone || "",
+      contact_email: sellerProfile.contact_email || currentUser?.email || "",
+      pickup_address: sellerProfile.pickup_address || "",
+      pickup_city: sellerProfile.pickup_city || "",
+      pickup_state: sellerProfile.pickup_state || "Arizona",
+      pickup_zip: sellerProfile.pickup_zip || "",
+      pickup_notes: sellerProfile.pickup_notes || "",
+      bio: sellerProfile.bio || "",
+      profile_image_url: sellerProfile.profile_image_url || "",
+      background_image_url: sellerProfile.background_image_url || "",
+      show_contact_email: sellerProfile.show_contact_email !== false,
+      show_contact_phone: sellerProfile.show_contact_phone !== false,
+      show_pickup_address: sellerProfile.show_pickup_address !== false
+    });
+  };
+
+  // Helper to populate default form data for onboarding
+  const populateDefaultFormData = (currentUser) => {
+    setFormData({
+      business_name: "",
+      contact_phone: "",
+      contact_email: currentUser?.email || "",
+      pickup_address: "",
+      pickup_city: "",
+      pickup_state: "Arizona",
+      pickup_zip: "",
+      pickup_notes: "",
+      bio: "",
+      profile_image_url: "",
+      background_image_url: "",
+      show_contact_email: true,
+      show_contact_phone: true,
+      show_pickup_address: true
+    });
   };
 
   const createSellerMutation = useMutation({
@@ -432,7 +391,20 @@ export default function SellerDashboard() {
   });
 
   const updateSellerMutation = useMutation({
-    mutationFn: ({ id, data }) => base44.entities.Seller.update(id, data),
+    mutationFn: async ({ id, data }) => {
+      const { data: updatedSeller, error } = await supabase
+        .from("sellers")
+        .update({
+          profile_image_url: data.profile_image_url ?? null,
+          background_image_url: data.background_image_url ?? null,
+        })
+        .eq("id", id)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return updatedSeller;
+    },
     onSuccess: (updatedSeller) => {
       setSeller(updatedSeller);
       setShowProfileEditor(false);
@@ -453,14 +425,35 @@ export default function SellerDashboard() {
     if (!file) return;
 
     setUploadingProfileImage(true);
+
     try {
-      const { file_url } = await base44.integrations.Core.UploadFile({ file });
-      setFormData(prev => ({ ...prev, profile_image_url: file_url }));
-    } catch (error) {
-      console.error("Error uploading profile image:", error);
+      const fileExt = file.name.split(".").pop();
+      const fileName = `${crypto.randomUUID()}.${fileExt}`;
+
+      const { error } = await supabase.storage
+        .from("seller-images")
+        .upload(fileName, file, { upsert: true });
+
+      if (error) {
+        console.error("Error uploading profile image:", error);
+        alert("Failed to upload image. Please try again.");
+        return;
+      }
+
+      const { data } = supabase.storage
+        .from("seller-images")
+        .getPublicUrl(fileName);
+
+      setFormData(prev => ({
+        ...prev,
+        profile_image_url: data.publicUrl
+      }));
+    } catch (err) {
+      console.error("Unexpected error uploading profile image:", err);
       alert("Failed to upload image. Please try again.");
+    } finally {
+      setUploadingProfileImage(false);
     }
-    setUploadingProfileImage(false);
   };
 
   const handleBackgroundImageUpload = async (e) => {
@@ -468,14 +461,35 @@ export default function SellerDashboard() {
     if (!file) return;
 
     setUploadingBackgroundImage(true);
+
     try {
-      const { file_url } = await base44.integrations.Core.UploadFile({ file });
-      setFormData(prev => ({ ...prev, background_image_url: file_url }));
-    } catch (error) {
-      console.error("Error uploading background image:", error);
+      const fileExt = file.name.split(".").pop();
+      const fileName = `${crypto.randomUUID()}.${fileExt}`;
+
+      const { error } = await supabase.storage
+        .from("seller-images")
+        .upload(fileName, file, { upsert: true });
+
+      if (error) {
+        console.error("Error uploading background image:", error);
+        alert("Failed to upload image. Please try again.");
+        return;
+      }
+
+      const { data } = supabase.storage
+        .from("seller-images")
+        .getPublicUrl(fileName);
+
+      setFormData(prev => ({
+        ...prev,
+        background_image_url: data.publicUrl
+      }));
+    } catch (err) {
+      console.error("Unexpected error uploading background image:", err);
       alert("Failed to upload image. Please try again.");
+    } finally {
+      setUploadingBackgroundImage(false);
     }
-    setUploadingBackgroundImage(false);
   };
 
   const handleConnectStripe = () => {
@@ -572,11 +586,18 @@ export default function SellerDashboard() {
     </div>
   );
 
-  // SAFETY CHECK: Redirect checks (handled in loadUser, but keep UI clean)
-  if (user && user.role !== "admin" && (!user.seller_safety_agreed || !user.seller_onboarding_completed)) {
-    // Don't block rendering with spinner here - rely on loadUser to redirect or set state
-    // This prevents stuck loading state if there's a slight sync delay
-  }
+  // OPTION B: Seller gating is handled in loadUser via requireSellerAsync()
+  // No user_metadata checks here - DB truth only
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // FIRST-RUN SELLER DETECTION
+  // Seller is "first-run" if approved but has zero products AND zero shows
+  // ═══════════════════════════════════════════════════════════════════════════
+  const isApprovedSeller = seller && seller.status === "approved";
+  const productCount = products?.length || 0;
+  const showCount = shows?.length || 0;
+  const isFirstRunSeller = isApprovedSeller && productCount === 0 && showCount === 0;
+  const showActivationBanner = isFirstRunSeller && !activationBannerDismissed;
 
   if (isOnboarding) {
     return (
@@ -852,7 +873,14 @@ export default function SellerDashboard() {
     },
     {
       title: "Followers",
-      value: followers.length,
+      // [FOLLOWERS TILE AUDIT] — log before consuming
+      value: (() => {
+        console.group('[FOLLOWERS TILE]');
+        console.log('followers array:', followers);
+        console.log('followers.length:', followers?.length);
+        console.groupEnd();
+        return followers.length;
+      })(),
       icon: Users,
       color: "from-orange-500 to-red-500",
       onClick: () => setShowFollowersDialog(true)
@@ -988,6 +1016,68 @@ export default function SellerDashboard() {
           </Alert>
         )}
 
+        {/* ═══════════════════════════════════════════════════════════════════════════
+            FIRST-RUN ACTIVATION BANNER
+            Shows for approved sellers with zero products AND zero shows
+            ═══════════════════════════════════════════════════════════════════════════ */}
+        {showActivationBanner && (
+          <Card className="relative overflow-hidden border-0 shadow-xl bg-gradient-to-r from-purple-600 via-blue-600 to-cyan-500">
+            <button
+              onClick={() => setActivationBannerDismissed(true)}
+              className="absolute top-3 right-3 text-white/80 hover:text-white transition-colors z-10"
+              aria-label="Dismiss activation banner"
+            >
+              <CloseIcon className="w-5 h-5" />
+            </button>
+            <CardContent className="p-6 sm:p-8">
+              <div className="flex flex-col sm:flex-row items-center gap-6">
+                {/* Celebration Icon */}
+                <div className="flex-shrink-0">
+                  <div className="w-20 h-20 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center">
+                    <PartyPopper className="w-10 h-10 text-white" />
+                  </div>
+                </div>
+                
+                {/* Message */}
+                <div className="flex-1 text-center sm:text-left">
+                  <div className="flex items-center justify-center sm:justify-start gap-2 mb-2">
+                    <Sparkles className="w-5 h-5 text-yellow-300" />
+                    <h2 className="text-2xl sm:text-3xl font-bold text-white">
+                      You're approved to sell!
+                    </h2>
+                    <Sparkles className="w-5 h-5 text-yellow-300" />
+                  </div>
+                  <p className="text-white/90 text-lg mb-4">
+                    Congratulations! You can now create products and host live shows. 
+                    Get started by creating your first product or scheduling your first show.
+                  </p>
+                  
+                  {/* CTAs */}
+                  <div className="flex flex-col sm:flex-row gap-3">
+                    <Button
+                      onClick={() => navigate(createPageUrl("SellerProducts"))}
+                      className="bg-white text-purple-700 hover:bg-white/90 font-semibold px-6 py-3 h-auto"
+                    >
+                      <Package className="w-5 h-5 mr-2" />
+                      Create Your First Product
+                      <ArrowRight className="w-4 h-4 ml-2" />
+                    </Button>
+                    <Button
+                      onClick={() => navigate(createPageUrl("SellerShows"))}
+                      variant="outline"
+                      className="border-2 border-white text-white hover:bg-white/20 font-semibold px-6 py-3 h-auto"
+                    >
+                      <Video className="w-5 h-5 mr-2" />
+                      Schedule Your First Show
+                      <ArrowRight className="w-4 h-4 ml-2" />
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         <Alert className={seller.stripe_connected ? "border-green-500 bg-green-50" : "border-orange-500 bg-orange-50"}>
           <div className="flex items-start gap-3">
             {seller.stripe_connected ? (
@@ -1043,6 +1133,45 @@ export default function SellerDashboard() {
             </Card>
           ))}
         </div>
+
+        {/* ═══════════════════════════════════════════════════════════════════════════
+            FIRST-RUN GUIDED EMPTY STATE
+            Shows when activation banner is dismissed or as secondary prompt
+            ═══════════════════════════════════════════════════════════════════════════ */}
+        {isFirstRunSeller && (
+          <Card className="shadow-lg border-2 border-dashed border-purple-300 bg-gradient-to-br from-purple-50 to-blue-50">
+            <CardContent className="p-8">
+              <div className="text-center">
+                <div className="w-16 h-16 rounded-full bg-gradient-to-r from-purple-600 to-blue-500 flex items-center justify-center mx-auto mb-4">
+                  <Sparkles className="w-8 h-8 text-white" />
+                </div>
+                <h3 className="text-xl font-bold text-gray-900 mb-2">
+                  You don't have any products or shows yet
+                </h3>
+                <p className="text-gray-600 mb-6 max-w-md mx-auto">
+                  Start building your seller presence by creating products to sell or scheduling a live show to connect with buyers.
+                </p>
+                <div className="flex flex-col sm:flex-row gap-3 justify-center">
+                  <Button
+                    onClick={() => navigate(createPageUrl("SellerProducts"))}
+                    className="bg-gradient-to-r from-purple-600 to-blue-500 hover:from-purple-700 hover:to-blue-600 font-semibold px-6"
+                  >
+                    <Plus className="w-4 h-4 mr-2" />
+                    Create Your First Product
+                  </Button>
+                  <Button
+                    onClick={() => navigate(createPageUrl("SellerShows"))}
+                    variant="outline"
+                    className="border-purple-500 text-purple-700 hover:bg-purple-50 font-semibold px-6"
+                  >
+                    <Video className="w-4 h-4 mr-2" />
+                    Schedule Your First Show
+                  </Button>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         <Card className="shadow-lg border-0">
           <CardHeader>

@@ -33,21 +33,42 @@ export interface GetUnreadMessageCountParams {
 }
 
 /**
+ * Helper to detect if an error indicates Supabase is degraded (503/timeout).
+ */
+function isDegradedError(error: unknown): boolean {
+  if (!error) return false;
+  const err = error as { message?: string; code?: string; status?: number; statusCode?: number };
+  const msg = (err.message || "").toLowerCase();
+  const code = err.code || "";
+  const status = err.status || err.statusCode;
+  
+  return (
+    status === 503 ||
+    code === "503" ||
+    msg.includes("503") ||
+    msg.includes("upstream connect error") ||
+    msg.includes("connection timeout") ||
+    msg.includes("fetch failed") ||
+    msg.includes("networkerror") ||
+    msg.includes("failed to fetch")
+  );
+}
+
+/**
  * Get the total count of unread messages across all conversations.
  *
  * @param params - The effective user context and role
- * @returns The total unread message count, or 0 if logged out or on error
+ * @returns The total unread message count, or null if fetch failed (degraded/503)
  *
  * This function:
- * - Never throws
  * - Returns 0 for logged-out users
- * - Returns 0 on any error
+ * - Returns null on 503/timeout (caller should NOT interpret as "0 unread")
  * - Safe for polling
  * - Respects admin impersonation via effectiveUserId/effectiveSellerId
  */
 export async function getUnreadMessageCount(
   params: GetUnreadMessageCountParams
-): Promise<number> {
+): Promise<number | null> {
   const { effectiveUserId, effectiveSellerId, role } = params;
 
   // Return 0 immediately for logged-out users
@@ -69,8 +90,13 @@ export async function getUnreadMessageCount(
         .eq("is_active", true);
 
       if (error) {
+        // Check if degraded - return null instead of 0
+        if (isDegradedError(error)) {
+          console.warn("[Messages] Supabase degraded (503/timeout) - returning null");
+          return null;
+        }
         console.warn("Failed to fetch seller unread message count:", error.message);
-        return 0;
+        return null; // Return null on error, not 0
       }
 
       // Sum all seller_unread_count values
@@ -88,8 +114,13 @@ export async function getUnreadMessageCount(
         .eq("is_active", true);
 
       if (error) {
+        // Check if degraded - return null instead of 0
+        if (isDegradedError(error)) {
+          console.warn("[Messages] Supabase degraded (503/timeout) - returning null");
+          return null;
+        }
         console.warn("Failed to fetch buyer unread message count:", error.message);
-        return 0;
+        return null; // Return null on error, not 0
       }
 
       // Sum all buyer_unread_count values
@@ -100,8 +131,13 @@ export async function getUnreadMessageCount(
       return total;
     }
   } catch (err) {
+    // Check if degraded - return null instead of 0
+    if (isDegradedError(err)) {
+      console.warn("[Messages] Supabase degraded (503/timeout) - returning null");
+      return null;
+    }
     console.warn("Unexpected error fetching unread message count:", err);
-    return 0;
+    return null; // Return null on error, not 0
   }
 }
 
@@ -121,14 +157,20 @@ export async function getMessagesForConversation(
       .from("messages")
       .select("*")
       .eq("conversation_id", conversationId)
-      .order("created_date", { ascending: true });
+      .order("created_at", { ascending: true });
 
     if (error) {
       console.warn("Failed to fetch messages:", error.message);
       return [];
     }
 
-    return (data as Message[]) ?? [];
+    // Map created_at → created_date for UI compatibility
+    const mapped = (data || []).map(m => ({
+      ...m,
+      created_date: m.created_at
+    }));
+
+    return mapped as Message[];
   } catch (err) {
     console.warn("Unexpected error fetching messages:", err);
     return [];

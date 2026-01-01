@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { supabaseApi as base44 } from "@/api/supabaseClient";
+import { supabase } from "@/lib/supabase/supabaseClient";
+import { supabaseApi as base44 } from "@/api/supabaseClient"; // Keep for entities
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -30,9 +31,16 @@ export default function GIVIDiagnostics() {
 
   const loadUser = async () => {
     try {
-      const currentUser = await base44.auth.me();
-      setUser(currentUser);
-      setSearchEmail(currentUser.email);
+      const { data, error } = await supabase.auth.getUser();
+      if (error) {
+        console.error("[GIVIDiagnostics] auth load failed", error);
+        return;
+      }
+      const currentUser = data?.user ?? null;
+      if (currentUser) {
+        setUser(currentUser);
+        setSearchEmail(currentUser.email);
+      }
     } catch (error) {
       console.error("Error loading user:", error);
     }

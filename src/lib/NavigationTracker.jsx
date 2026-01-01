@@ -40,9 +40,12 @@ export default function NavigationTracker() {
         }
 
         if (isAuthenticated && pageName) {
-            base44.appLogs.logUserInApp(pageName).catch(() => {
-                // Silently fail - logging shouldn't break the app
-            });
+            // Safe no-op: appLogs may not exist during Base44 migration
+            try {
+                base44?.appLogs?.logUserInApp?.(pageName);
+            } catch {
+                // Swallow - logging must never crash app
+            }
         }
     }, [location, isAuthenticated, Pages, mainPageKey]);
 

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { supabaseApi as base44 } from "@/api/supabaseClient";
+import { supabase } from "@/lib/supabase/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -13,6 +13,8 @@ import { findOrCreateBatch, updateBatch } from "@/api/batches";
 import { createOrderWithResult } from "@/api/orders";
 import { getProductById } from "@/api/products";
 import { createPaymentIntent, pollOrderPaymentStatus } from "@/api/payments";
+import { checkAccountActiveAsync } from "@/lib/auth/accountGuards";
+import { isShowLive } from "@/api/streamSync";
 
 // Feature flag for live payments
 const USE_LIVE_PAYMENTS = import.meta.env.VITE_STRIPE_ENABLED === "true";
@@ -44,8 +46,10 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
 
   const loadUser = async () => {
     try {
-      const currentUser = await base44.auth.me();
-      if (!currentUser) {
+      const { data, error } = await supabase.auth.getUser();
+      const currentUser = data?.user ?? null;
+      
+      if (error || !currentUser) {
         setUser(null);
         setLoadingProfile(false);
         return;
@@ -59,7 +63,7 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
       if (profile) {
         // Pre-fill form data with existing profile
         setProfileData({
-          full_name: profile.full_name || currentUser.full_name || "",
+          full_name: profile.full_name || currentUser.user_metadata?.full_name || "",
           phone: profile.phone || "",
           email: profile.email || currentUser.email || ""
         });
@@ -69,7 +73,7 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
       } else {
         // Pre-fill with user data from authentication
         setProfileData({
-          full_name: currentUser.full_name || "",
+          full_name: currentUser.user_metadata?.full_name || "",
           phone: "",
           email: currentUser.email || ""
         });
@@ -84,7 +88,12 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
   };
 
   // SAFETY CHECK: Verify buyer safety agreement
-  const needsSafetyAgreement = user && user.buyer_safety_agreed !== true;
+  const needsSafetyAgreement = user && user.user_metadata?.buyer_safety_agreed !== true;
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // LIFECYCLE GATING: Early check if show is live (stream_status === "live")
+  // ═══════════════════════════════════════════════════════════════════════════
+  const showIsLive = isShowLive(show);
 
   useEffect(() => {
     document.body.style.overflow = 'hidden';
@@ -132,13 +141,13 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
     const currentProduct = await getProductById(product.id);
     
     if (!currentProduct) {
-      throw new Error("Product not found");
-    }
-    
+        throw new Error("Product not found");
+      }
+      
     if ((currentProduct.quantity || 0) <= 0) {
-      throw new Error("Product is out of stock");
-    }
-    
+        throw new Error("Product is out of stock");
+      }
+      
     if (currentProduct.status === "sold_out" || currentProduct.status === "sold") {
       throw new Error("Product is sold out");
     }
@@ -149,6 +158,22 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
   const processOrder = async () => {
     if (!user) {
       throw new Error("Please log in to complete your purchase");
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // LIFECYCLE GATING: Only allow orders when show is actually live
+    // ═══════════════════════════════════════════════════════════════════════════
+    if (!isShowLive(show)) {
+      const status = show?.status || "unknown";
+      if (status === "scheduled") {
+        throw new Error("This show hasn't started yet. Please wait for the show to go live.");
+      } else if (status === "ended") {
+        throw new Error("This show has ended. Orders are no longer being accepted.");
+      } else if (status === "cancelled") {
+        throw new Error("This show has been cancelled. Orders cannot be placed.");
+      } else {
+        throw new Error("Orders can only be placed during a live show.");
+      }
     }
 
     const pickupCode = `PU${Date.now().toString().slice(-8)}`;
@@ -164,16 +189,12 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
     const batchCompletionCode = generateCompletionCode();
 
     const { batch, isNew } = await findOrCreateBatch({
-      buyer_id: user.id,
-      buyer_name: profileData.full_name,
-      buyer_email: profileData.email,
-      buyer_phone: profileData.phone,
-      seller_id: seller.id,
-      show_id: show.id,
-      batch_number: batchNumber,
-      completion_code: batchCompletionCode,
-      pickup_location: pickupLocation,
-      pickup_notes: seller.pickup_notes || "",
+      auth_user_id: user.id,
+      auth_user_email: user.email,
+          seller_id: seller.id,
+          show_id: show.id,
+          batch_number: batchNumber,
+          completion_code: batchCompletionCode,
     });
 
     if (!batch) {
@@ -186,13 +207,15 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
 
     // Create the order (with inventory enforcement at DB layer)
     // Use live payments if enabled, otherwise demo mode
+    // DUAL-WRITE (Step T3.6): Pass both seller identifiers
     const { order, error: orderError } = await createOrderWithResult({
       batch_id: batch.id,
       buyer_id: user.id,
       buyer_name: profileData.full_name,
       buyer_email: profileData.email,
       buyer_phone: profileData.phone,
-      seller_id: seller.id,
+      seller_user_id: seller.user_id,  // Legacy: auth.users.id (DB FK)
+      seller_id: seller.id,            // Canonical: sellers.id (entity PK)
       show_id: show.id,
       product_id: product.id,
       product_title: product.title,
@@ -222,12 +245,17 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
       throw new Error("Failed to create order");
     }
 
+    // Signal LiveShow to refresh product list (slight delay for read-after-write consistency)
+    setTimeout(() => {
+      window.dispatchEvent(new Event("lm:inventory_updated"));
+    }, 300);
+
     // Update batch totals
     const newTotalItems = (batch.total_items || 0) + 1;
     const newTotalAmount = (batch.total_amount || 0) + (product.price || 0) + (product.delivery_fee || 0);
 
     await updateBatch(batch.id, {
-      total_items: newTotalItems,
+        total_items: newTotalItems,
       total_amount: newTotalAmount,
     });
 
@@ -244,7 +272,7 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
       if (!success) {
         setCheckoutError("Failed to save profile. Please try again.");
       }
-    } catch (error) {
+      } catch (error) {
       setCheckoutError(error.message || "Failed to save profile");
     } finally {
       setIsSubmitting(false);
@@ -255,6 +283,17 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
     // QA HARDENING: Prevent double-click/double-submit
     if (isSubmitting) {
       return;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // SUSPENSION CHECK: Block checkout for suspended accounts
+    // ═══════════════════════════════════════════════════════════════════════════
+    if (user?.id) {
+      const { canProceed, error: guardError } = await checkAccountActiveAsync(supabase, user.id);
+      if (!canProceed) {
+        setCheckoutError(guardError);
+        return;
+      }
     }
 
     setIsSubmitting(true);
@@ -343,6 +382,36 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
         <div className="bg-white rounded-lg p-6 flex flex-col items-center gap-4">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-purple-600"></div>
           <p className="text-gray-700">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // LIFECYCLE GATING UI: Show error if show is not live
+  // ═══════════════════════════════════════════════════════════════════════════
+  if (!showIsLive) {
+    const statusMessage = show?.status === "scheduled" 
+      ? "This show hasn't started yet"
+      : show?.status === "ended"
+        ? "This show has ended"
+        : show?.status === "cancelled"
+          ? "This show was cancelled"
+          : "Show is not currently live";
+    
+    return (
+      <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+        <div className="bg-white rounded-lg p-6 max-w-sm mx-4 text-center">
+          <AlertCircle className="w-12 h-12 text-orange-500 mx-auto mb-4" />
+          <h3 className="text-lg font-semibold text-gray-900 mb-2">
+            Cannot Place Order
+          </h3>
+          <p className="text-gray-600 mb-4">
+            {statusMessage}. Orders can only be placed during live shows.
+          </p>
+          <Button onClick={handleClose} className="w-full">
+            Close
+          </Button>
         </div>
       </div>
     );
@@ -624,9 +693,9 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
                         </div>
                       ) : (
                         <>
-                          <Alert>
-                            <AlertCircle className="h-4 w-4" />
-                            <AlertDescription className="text-xs">
+                      <Alert>
+                        <AlertCircle className="h-4 w-4" />
+                        <AlertDescription className="text-xs">
                               {USE_LIVE_PAYMENTS ? (
                                 <>
                                   You will be redirected to complete payment securely via Stripe.
@@ -638,12 +707,12 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
                                   This is a local pickup only from {seller.business_name}.
                                 </>
                               )}
-                            </AlertDescription>
-                          </Alert>
+                        </AlertDescription>
+                      </Alert>
 
-                          <Button
-                            className="w-full bg-gradient-to-r from-purple-600 to-blue-500 text-lg py-6"
-                            onClick={handleCheckout}
+                      <Button
+                        className="w-full bg-gradient-to-r from-purple-600 to-blue-500 text-lg py-6"
+                        onClick={handleCheckout}
                             disabled={isSubmitting}
                           >
                             {isSubmitting ? (
@@ -651,13 +720,13 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
                                 <Loader2 className="w-5 h-5 mr-2 animate-spin" />
                                 Processing...
                               </>
-                            ) : (
-                              <>
-                                <CreditCard className="w-5 h-5 mr-2" />
+                        ) : (
+                          <>
+                            <CreditCard className="w-5 h-5 mr-2" />
                                 {USE_LIVE_PAYMENTS ? "Pay Now" : "Complete Order (Demo)"}
-                              </>
-                            )}
-                          </Button>
+                          </>
+                        )}
+                      </Button>
                         </>
                       )}
                       <p className="text-xs text-center text-gray-500">

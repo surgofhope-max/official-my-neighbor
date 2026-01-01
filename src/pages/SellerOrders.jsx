@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { supabaseApi as base44 } from "@/api/supabaseClient";
+import { supabase } from "@/lib/supabase/supabaseClient";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -57,10 +57,12 @@ import {
 import BanBuyerDialog from "../components/seller/BanBuyerDialog";
 import { getEffectiveUserContext } from "@/lib/auth/effectiveUser";
 import { getSellerByUserId, getSellerById } from "@/api/sellers";
-import { getBatchesBySellerId } from "@/api/sellerBatches";
-import { getOrdersBySellerId } from "@/api/sellerOrders";
+import { requireSellerAsync, isAdmin, isSuperAdmin } from "@/lib/auth/routeGuards";
+import { checkAccountActiveAsync } from "@/lib/auth/accountGuards";
+import { getBatchesBySellerId, getFulfillmentBatchesForShow } from "@/api/sellerBatches";
+import { getOrdersBySeller } from "@/api/sellerOrders";
 import { getShowsBySellerId } from "@/api/shows";
-import { autoSyncHealOrders } from "@/api/fulfillment";
+import { autoSyncHealOrders, completeBatchPickup } from "@/api/fulfillment";
 
 export default function SellerOrders() {
   const navigate = useNavigate();
@@ -88,6 +90,13 @@ export default function SellerOrders() {
   const [allBatches, setAllBatches] = useState([]);
   const [allOrders, setAllOrders] = useState([]);
   const [loading, setLoading] = useState(true);
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // BUYER IDENTITY MAP
+  // Maps buyer_id (public.users.id) → { full_name, email } for display only.
+  // Fetched once per batch load; does NOT affect business logic.
+  // ═══════════════════════════════════════════════════════════════════════════
+  const [buyerProfiles, setBuyerProfiles] = useState({});
 
   // Track if initial load is complete
   const initialLoadDone = useRef(false);
@@ -99,56 +108,150 @@ export default function SellerOrders() {
 
   const loadUser = async () => {
     try {
-      const currentUser = await base44.auth.me();
-      setUser(currentUser);
-      
-      // Use centralized effective user context for impersonation support
-      const context = getEffectiveUserContext(currentUser);
-      
-      // Resolve seller - impersonation aware
-      let resolvedSeller = null;
-      
-      if (context.isImpersonating && context.impersonatedSellerId) {
-        // Admin is impersonating - load the impersonated seller
-        resolvedSeller = await getSellerById(context.impersonatedSellerId);
-      } else {
-        // Normal user - load their seller profile
-        resolvedSeller = await getSellerByUserId(currentUser.id);
-      }
-      
-      if (resolvedSeller) {
-        setSeller(resolvedSeller);
-        
-        // Non-admin non-approved sellers get redirected
-        if (currentUser.role !== "admin" && resolvedSeller.status !== "approved") {
-          navigate(createPageUrl("Marketplace"));
-          return;
-        }
-      } else {
-        // No seller profile - redirect to marketplace
-        navigate(createPageUrl("Marketplace"));
+      const { data, error } = await supabase.auth.getUser();
+      if (error) {
+        console.error("[SellerOrders] auth load failed", error);
+        navigate(createPageUrl("Marketplace"), { replace: true });
         return;
       }
+      const currentUser = data?.user ?? null;
+      if (!currentUser) {
+        navigate(createPageUrl("Marketplace"), { replace: true });
+        return;
+      }
+      setUser(currentUser);
+
+      // ═══════════════════════════════════════════════════════════════════════════
+      // OPTION B SELLER GATING (STEP 3 REFACTOR)
+      // User is seller IFF: public.users.role='seller' AND sellers.status='approved'
+      // ═══════════════════════════════════════════════════════════════════════════
+
+      // 🔐 SUPER_ADMIN BYPASS: Full system authority
+      if (isSuperAdmin(currentUser)) {
+        console.log("[SellerGate] SUPER_ADMIN bypass - full access");
+        const resolvedSeller = await getSellerByUserId(currentUser.id);
+        if (resolvedSeller) {
+          setSeller(resolvedSeller);
+        }
+        return;
+      }
+
+      // 🔐 ADMIN BYPASS: Admins can access seller routes
+      if (isAdmin(currentUser)) {
+        console.log("[SellerGate] Admin bypass - access granted");
+        const context = getEffectiveUserContext(currentUser);
+        let resolvedSeller = null;
+        if (context.isImpersonating && context.impersonatedSellerId) {
+          resolvedSeller = await getSellerById(context.impersonatedSellerId);
+        } else {
+          resolvedSeller = await getSellerByUserId(currentUser.id);
+        }
+        if (resolvedSeller) {
+          setSeller(resolvedSeller);
+        }
+        return;
+      }
+
+      // ═══════════════════════════════════════════════════════════════════════════
+      // SUSPENSION CHECK: Block seller routes for suspended accounts
+      // ═══════════════════════════════════════════════════════════════════════════
+      const { canProceed: accountActive, error: suspendedReason } = await checkAccountActiveAsync(supabase, currentUser.id);
+      if (!accountActive) {
+        console.log("[SellerGate] Account suspended - redirecting to BuyerProfile");
+        navigate(createPageUrl("BuyerProfile"), { 
+          replace: true, 
+          state: { suspended: true, reason: suspendedReason } 
+        });
+        return;
+      }
+
+      // ═══════════════════════════════════════════════════════════════════════════
+      // OPTION B CHECK: Query DB for role + seller status
+      // ═══════════════════════════════════════════════════════════════════════════
+      const sellerCheck = await requireSellerAsync(currentUser.id);
+      
+      console.log("[SellerGate] SellerOrders check:", {
+        ok: sellerCheck.ok,
+        role: sellerCheck.role,
+        sellerStatus: sellerCheck.sellerStatus,
+        reason: sellerCheck.reason
+      });
+
+      if (!sellerCheck.ok) {
+        // NOT an approved seller - redirect based on reason
+        if (sellerCheck.reason === "seller_onboarding_incomplete" || sellerCheck.reason === "seller_safety_not_agreed") {
+          // Onboarding incomplete - send to BuyerProfile to continue onboarding
+          console.log("[SellerGate] Onboarding incomplete - redirecting to BuyerProfile");
+          navigate(createPageUrl("BuyerProfile"), { replace: true });
+        } else {
+          // Other failure (no seller row, not approved, etc.) - redirect to Marketplace
+          console.log("[SellerGate] Not approved seller - redirecting to Marketplace");
+          navigate(createPageUrl("Marketplace"), { replace: true });
+        }
+        return;
+      }
+
+      // ═══════════════════════════════════════════════════════════════════════════
+      // APPROVED SELLER - Load orders
+      // ═══════════════════════════════════════════════════════════════════════════
+      console.log("[SellerGate] Approved seller verified:", sellerCheck.sellerRow?.business_name);
+      setSeller(sellerCheck.sellerRow);
+
     } catch (error) {
+      console.error("[SellerOrders] Error loading:", error);
       setUser(null);
       setSeller(null);
       setLoading(false);
-      navigate(createPageUrl("Marketplace"));
+      navigate(createPageUrl("Marketplace"), { replace: true });
     }
   };
 
   // Load data when seller is available
   const loadData = async () => {
+    // ═══════════════════════════════════════════════════════════════════════════
+    // READ PATH (Step T3.5):
+    // - batches.seller_id = sellers.id (entity PK) — always canonical
+    // - orders: prefer seller_entity_id (canonical), fallback to seller_id (legacy)
+    // ═══════════════════════════════════════════════════════════════════════════
     if (!seller?.id) return;
 
     try {
       const [batchesData, ordersData] = await Promise.all([
-        getBatchesBySellerId(seller.id),
-        getOrdersBySellerId(seller.id),
+        getBatchesBySellerId(seller.id),        // batches use seller entity id (canonical)
+        // READ PATH: seller_entity_id (canonical) with seller_id (legacy) fallback
+        getOrdersBySeller(seller.id, seller.user_id),
       ]);
 
       setAllBatches(batchesData);
       setAllOrders(ordersData);
+      
+      // ═══════════════════════════════════════════════════════════════════════════
+      // BUYER IDENTITY ENRICHMENT (READ-ONLY, DISPLAY ONLY)
+      // batch.buyer_id = public.users.id — we lookup buyer_profiles for display.
+      // This does NOT change business logic; only adds name/email for UI.
+      // ═══════════════════════════════════════════════════════════════════════════
+      if (batchesData.length > 0) {
+        // FIX: Use buyer_id only (buyer_user_id does not exist in batches table)
+        const uniqueBuyerIds = [...new Set(batchesData.map(b => b.buyer_id).filter(Boolean))];
+        if (uniqueBuyerIds.length > 0) {
+          const { data: profiles } = await supabase
+            .from("buyer_profiles")
+            .select("user_id, full_name, email, phone")
+            .in("user_id", uniqueBuyerIds);
+          
+          if (profiles) {
+            const profileMap = {};
+            for (const p of profiles) {
+              profileMap[p.user_id] = {
+                full_name: p.full_name,
+                email: p.email,
+                phone: p.phone,
+              };
+            }
+            setBuyerProfiles(profileMap);
+          }
+        }
+      }
     } catch (error) {
       setAllBatches([]);
       setAllOrders([]);
@@ -160,9 +263,11 @@ export default function SellerOrders() {
 
   // Load shows for this seller
   const loadShows = async () => {
+    // shows.seller_id = sellers.id (entity PK)
     if (!seller?.id) return;
 
     try {
+      // NORMALIZED: shows.seller_id references sellers.id
       const allShowsData = await getShowsBySellerId(seller.id);
       const visibleShows = allShowsData.filter(show => !show.hidden_from_orders);
       setShows(visibleShows);
@@ -173,6 +278,7 @@ export default function SellerOrders() {
 
   // Initial data load and polling
   useEffect(() => {
+    // Need seller.id for batches, shows, and orders
     if (!seller?.id) return;
 
     // Initial load
@@ -185,15 +291,17 @@ export default function SellerOrders() {
     }, 5000);
 
     return () => clearInterval(interval);
-  }, [seller?.id]);
+  }, [seller?.id, seller?.user_id]);
 
   // Auto-sync order status when batch is completed (Base44 parity)
   // Every 5 seconds: for each batch where status === "completed",
   // if ANY order.status === "paid", auto-update those orders to "picked_up"
   useEffect(() => {
+    // autoSyncHealOrders queries batches, which use seller entity id
     if (!initialLoadDone.current || !seller?.id) return;
 
     const syncOrderStatuses = async () => {
+      // batches.seller_id uses seller entity id (public.sellers.id)
       const healed = await autoSyncHealOrders(seller.id);
       
       // Reload data after sync if any orders were healed
@@ -219,56 +327,62 @@ export default function SellerOrders() {
   const hideShow = async (showId) => {
     setIsHidingShow(true);
     try {
-      await base44.entities.Show.update(showId, { hidden_from_orders: true });
+      // Use direct Supabase call instead of Base44
+      const { error } = await supabase
+        .from("shows")
+        .update({ hidden_from_orders: true })
+        .eq("id", showId);
+      
+      if (error) {
+        console.error("[SellerOrders] Failed to hide show:", error.message);
+      }
+      
       await loadShows();
       setShowToDelete(null);
     } catch (error) {
-      // Mutation not yet wired - expected during migration
+      console.error("[SellerOrders] Unexpected error hiding show:", error);
     } finally {
       setIsHidingShow(false);
     }
   };
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PICKUP VERIFICATION (Backend-only, Supabase-based)
+  // Uses completeBatchPickup from fulfillment.ts which:
+  // - Updates batch status to "completed"
+  // - Updates all orders to "picked_up"
+  // - Creates review_request notification
+  // - Emits analytics events (shadow mode)
+  // ═══════════════════════════════════════════════════════════════════════════
   const verifyCompletionCode = async ({ code, batch }) => {
-    if (batch.completion_code !== code) {
+    // Normalize both codes to strings and compare
+    const enteredCode = String(code || "").trim();
+    const expectedCode = String(batch.completion_code || "").trim();
+    
+    if (enteredCode !== expectedCode) {
       setVerificationError("Invalid verification code");
       return;
     }
 
     setIsVerifying(true);
     try {
-      const batchOrders = allOrders.filter(order => order.batch_id === batch.id);
-      
-      await Promise.all(
-        batchOrders.map(order =>
-          base44.entities.Order.update(order.id, {
-            status: "picked_up",
-            picked_up_at: new Date().toISOString(),
-            picked_up_by: user.email
-          })
-        )
-      );
-      
-      await base44.entities.Batch.update(batch.id, {
-        status: "completed",
-        completed_at: new Date().toISOString(),
-        completed_by: user.email
-      });
-
-      await base44.entities.Notification.create({
-        user_id: batch.buyer_id,
-        title: "Leave a Review",
-        body: `Your order from ${seller.business_name} is complete. Tap to leave a review.`,
-        type: "review_request",
-        metadata: {
-          seller_id: seller.id,
-          seller_name: seller.business_name,
-          order_id: batchOrders[0].id,
-          batch_id: batch.id
-        }
+      // Use completeBatchPickup from fulfillment.ts
+      // batches.seller_id = seller entity id (public.sellers.id)
+      const result = await completeBatchPickup({
+        batchId: batch.id,
+        sellerId: seller.id, // seller entity id for batches
+        sellerEmail: user.email,
+        sellerName: seller.business_name,
+        isAdmin: false,
       });
       
-      // Reload data after verification
+      if (result.error) {
+        console.error("[PickupVerification] Error:", result.error);
+        setVerificationError(result.error.message || "Verification failed. Please try again.");
+        return;
+      }
+      
+      // Success - reload data to reflect changes
       await loadData();
       
       setShowVerificationModal(false);
@@ -276,8 +390,11 @@ export default function SellerOrders() {
       setVerificationError("");
       setSelectedBatch(null);
       
-      alert(`✅ Successfully verified ${batchOrders.length} ${batchOrders.length === 1 ? 'order' : 'orders'}. Review notification sent to buyer.`);
+      const ordersMsg = result.ordersUpdated === 1 ? 'order' : 'orders';
+      const notifMsg = result.notificationSent ? "Review notification sent to buyer." : "";
+      alert(`✅ Successfully verified ${result.ordersUpdated} ${ordersMsg}. ${notifMsg}`);
     } catch (error) {
+      console.error("[PickupVerification] Unexpected error:", error);
       setVerificationError("Verification failed. Please try again.");
     } finally {
       setIsVerifying(false);
@@ -306,37 +423,106 @@ export default function SellerOrders() {
     }
   };
 
-  const getPendingCountForShow = (showId) => {
-    const showBatches = allBatches.filter(batch => batch.show_id === showId);
-    return showBatches.filter(batch => {
-      const batchOrders = allOrders.filter(order => order.batch_id === batch.id);
-      const pendingCount = batchOrders.filter(o => o.status === 'paid').length;
-      return pendingCount > 0;
-    }).length;
+  // ═══════════════════════════════════════════════════════════════════════════
+  // FULFILLMENT DATA WIRING
+  // Build batch count map FIRST from ALL seller batches, grouped by show_id.
+  // Fulfillment count is derived from all seller batches grouped by show_id.
+  // This must happen BEFORE showsWithStats is computed.
+  // ═══════════════════════════════════════════════════════════════════════════
+  const batchCountByShow = React.useMemo(() => {
+    const countMap = {};
+    for (const batch of allBatches) {
+      if (batch.show_id) {
+        countMap[batch.show_id] = (countMap[batch.show_id] || 0) + 1;
+      }
+    }
+    return countMap;
+  }, [allBatches]);
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // BATCH CLASSIFICATION HELPERS
+  // A batch is considered DONE when:
+  //   batch.status === 'picked_up' OR batch.status === 'completed'
+  // A batch is considered PENDING when:
+  //   batch.status is NOT 'picked_up' AND NOT 'completed'
+  // ═══════════════════════════════════════════════════════════════════════════
+  const isBatchDone = (batch) => {
+    return batch.status === 'picked_up' || batch.status === 'completed';
   };
 
+  const getPendingCountForShow = (showId) => {
+    const showBatches = allBatches.filter(batch => batch.show_id === showId);
+    // Count batches that are NOT done (still need fulfillment)
+    return showBatches.filter(batch => !isBatchDone(batch)).length;
+  };
+  
+  const getDoneCountForShow = (showId) => {
+    const showBatches = allBatches.filter(batch => batch.show_id === showId);
+    // Count batches that ARE done (picked up or completed)
+    return showBatches.filter(batch => isBatchDone(batch)).length;
+  };
+
+  // Build fulfillment stats for each show using the pre-computed batchCountByShow map.
+  // fulfillmentCount is derived from all seller batches grouped by show_id (NOT analytics).
   const showsWithStats = shows.map(show => {
     const showBatches = allBatches.filter(batch => batch.show_id === show.id);
     const totalRevenue = showBatches.reduce((sum, batch) => sum + (batch.total_amount || 0), 0);
     const totalItems = showBatches.reduce((sum, batch) => sum + (batch.total_items || 0), 0);
     const pendingCount = getPendingCountForShow(show.id);
+    const doneCount = getDoneCountForShow(show.id);
     
     return {
       ...show,
       batchCount: showBatches.length,
+      // fulfillmentCount: derived from batchCountByShow map, NOT from analytics
+      fulfillmentCount: batchCountByShow[show.id] || 0,
       totalRevenue,
       totalItems,
       uniqueBuyers: showBatches.length,
-      pendingCount
+      pendingCount,
+      doneCount,
+      // A show is fully complete when it has batches AND all are done
+      isFullyComplete: showBatches.length > 0 && pendingCount === 0,
     };
   });
 
+  // Fulfillment batches are show-scoped but NOT show-lifecycle-scoped.
+  // ALL batches for the selected show are included regardless of show status (live/ended/cancelled).
+  // This ensures sellers can always see and manage fulfillment for any show.
   const batchesForShow = selectedShow 
     ? allBatches.filter(batch => batch.show_id === selectedShow.id)
     : [];
 
   const getOrdersForBatch = (batchId) => {
     return allOrders.filter(order => order.batch_id === batchId);
+  };
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // IDENTITY HELPERS (READ-ONLY, DISPLAY ONLY)
+  // - batches.seller_id = sellers.id (entity PK) — canonical
+  // - orders: seller_entity_id (canonical) or seller_id (legacy, auth user)
+  // - buyer_id in both = public.users.id (auth user)
+  // These helpers derive display names; they do NOT affect business logic.
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  // Get buyer display info for a batch. Returns { name, email } for UI display.
+  // FIX: Use buyer_id only (buyer_user_id does not exist in batches table)
+  const getBuyerIdentity = (batch) => {
+    const buyerId = batch.buyer_id;
+    const profile = buyerId ? buyerProfiles[buyerId] : null;
+    
+    // Priority: buyer_profiles.full_name → batch.buyer_name → "Unknown buyer"
+    const name = profile?.full_name || batch.buyer_name || "Unknown buyer";
+    // Priority: buyer_profiles.email → batch.buyer_email → ""
+    const email = profile?.email || batch.buyer_email || "";
+    const phone = profile?.phone || batch.buyer_phone || "";
+    
+    return { name, email, phone };
+  };
+  
+  // Get seller display name. Uses already-loaded seller context.
+  const getSellerDisplayName = () => {
+    return seller?.business_name || "Seller";
   };
 
   const handleShowClick = (show) => {
@@ -375,9 +561,13 @@ export default function SellerOrders() {
       show.title?.toLowerCase().includes(searchTerm.toLowerCase())
     );
 
-    // Separate active and past shows based on pending count
+    // ═══════════════════════════════════════════════════════════════════════════
+    // SHOW CLASSIFICATION
+    // Active Shows: shows with at least one batch that is NOT done (picked_up/completed)
+    // Past Shows: shows where ALL batches are done (picked_up or completed)
+    // ═══════════════════════════════════════════════════════════════════════════
     const activeShows = filteredShows.filter(show => show.pendingCount > 0);
-    const pastShows = filteredShows.filter(show => show.pendingCount === 0);
+    const pastShows = filteredShows.filter(show => show.isFullyComplete);
 
     const renderShowCard = (show) => (
       <Card 
@@ -411,6 +601,17 @@ export default function SellerOrders() {
               </div>
             )}
             <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent"></div>
+            
+            {/* Fulfillment badge: shows total batches needing seller attention */}
+            {show.fulfillmentCount > 0 && (
+              <div className="absolute top-3 left-3">
+                <Badge className="bg-purple-600 text-white border-0 shadow-lg">
+                  <ShoppingBag className="w-3 h-3 mr-1" />
+                  {show.fulfillmentCount} {show.fulfillmentCount === 1 ? 'Order' : 'Orders'}
+                </Badge>
+              </div>
+            )}
+            
             <div className="absolute bottom-3 left-3 right-3">
               <h3 className="text-white font-bold text-lg line-clamp-2">{show.title}</h3>
             </div>
@@ -420,7 +621,10 @@ export default function SellerOrders() {
               <div className="flex items-center justify-between text-sm">
                 <span className="text-gray-600">Date:</span>
                 <span className="font-medium">
-                  {format(new Date(show.scheduled_start), "MMM d, yyyy")}
+                  {/* FIX: Use scheduled_start_time (actual DB column) not scheduled_start */}
+                  {show.scheduled_start_time 
+                    ? format(new Date(show.scheduled_start_time), "MMM d, yyyy")
+                    : "Not scheduled"}
                 </span>
               </div>
               <div className="grid grid-cols-3 gap-2 pt-3 border-t">
@@ -584,31 +788,36 @@ export default function SellerOrders() {
   // ========================================
   // VIEW 2: BATCHES LIST FOR SELECTED SHOW (WITH EXPANDABLE ITEMS)
   // ========================================
+  // Fulfillment batches are show-scoped but NOT show-lifecycle-scoped.
+  // ALL batches for the show are displayed regardless of show status.
+  // Empty state ONLY if truly zero batches exist for this show.
   if (view === 'batches') {
-    const filteredBatches = batchesForShow.filter(batch =>
-      batch.buyer_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      batch.buyer_email?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      batch.batch_number?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      batch.completion_code?.toLowerCase().includes(searchTerm.toLowerCase())
-    );
-
-    // Separate active and past batches
-    const activeBatches = filteredBatches.filter(batch => {
-      const batchOrders = getOrdersForBatch(batch.id);
-      const pendingCount = batchOrders.filter(o => o.status === 'paid').length;
-      const completedCount = batchOrders.filter(o => o.status === 'picked_up').length;
-      return pendingCount > 0 || completedCount > 0;
+    // Filter batches by search - checks enriched buyer identity + raw batch fields
+    const filteredBatches = batchesForShow.filter(batch => {
+      const buyerIdentity = getBuyerIdentity(batch);
+      const searchLower = searchTerm.toLowerCase();
+      return (
+        buyerIdentity.name?.toLowerCase().includes(searchLower) ||
+        buyerIdentity.email?.toLowerCase().includes(searchLower) ||
+        batch.batch_number?.toLowerCase().includes(searchLower) ||
+        batch.completion_code?.toLowerCase().includes(searchLower)
+      );
     });
 
-    const pastBatches = filteredBatches.filter(batch => {
-      const batchOrders = getOrdersForBatch(batch.id);
-      const pendingCount = batchOrders.filter(o => o.status === 'paid').length;
-      const completedCount = batchOrders.filter(o => o.status === 'picked_up').length;
-      return pendingCount === 0 && completedCount === 0;
-    });
+    // ═══════════════════════════════════════════════════════════════════════════
+    // BATCH CLASSIFICATION (within selected show)
+    // Uses isBatchDone helper: batch.status === 'picked_up' OR 'completed'
+    // Active: batches that are NOT done (need fulfillment)
+    // Completed: batches that ARE done (picked up or completed)
+    // Pending: batches with orders still in 'paid' status (need immediate attention)
+    // ═══════════════════════════════════════════════════════════════════════════
+    const activeBatches = filteredBatches.filter(batch => !isBatchDone(batch));
+    const completedBatches = filteredBatches.filter(batch => isBatchDone(batch));
 
-    // Calculate pending batches
+    // For pending highlight card - batches with orders needing immediate attention
+    // These are batches with orders in 'paid' status (not yet verified)
     const pendingBatches = batchesForShow.filter(batch => {
+      if (isBatchDone(batch)) return false; // Don't show done batches as pending
       const batchOrders = getOrdersForBatch(batch.id);
       const pendingCount = batchOrders.filter(o => o.status === 'paid').length;
       return pendingCount > 0;
@@ -620,12 +829,15 @@ export default function SellerOrders() {
       const pendingCount = batchOrders.filter(o => o.status === 'paid').length;
       const completedCount = batchOrders.filter(o => o.status === 'picked_up').length;
       
+      // Identity enrichment (read-only, display only)
+      const buyerIdentity = getBuyerIdentity(batch);
+      
       return (
         <Card key={batch.id} className="border-0 shadow-lg hover:shadow-xl transition-shadow">
           <CardContent className="p-6">
             <div className="flex items-start justify-between mb-4">
               <div className="w-12 h-12 bg-gradient-to-r from-purple-600 to-blue-600 rounded-full flex items-center justify-center text-white font-bold text-lg">
-                {batch.buyer_name?.[0]?.toUpperCase() || '?'}
+                {buyerIdentity.name?.[0]?.toUpperCase() || '?'}
               </div>
               <div className="flex items-center gap-2">
                 <Badge className={`${statusColors[batch.status]} border`}>
@@ -642,11 +854,12 @@ export default function SellerOrders() {
                       className="text-red-600"
                       onClick={(e) => {
                         e.stopPropagation();
+                        // FIX: Use buyer_id only (buyer_user_id does not exist)
                         setBanningBuyer({
                           user_id: batch.buyer_id,
-                          email: batch.buyer_email,
-                          full_name: batch.buyer_name,
-                          buyer_name: batch.buyer_name
+                          email: buyerIdentity.email,
+                          full_name: buyerIdentity.name,
+                          buyer_name: buyerIdentity.name
                         });
                       }}
                     >
@@ -658,10 +871,11 @@ export default function SellerOrders() {
               </div>
             </div>
             
+            {/* Buyer identity - joined from buyer_profiles for display only */}
             <h3 className="font-semibold text-lg text-gray-900 mb-1">
-              {batch.buyer_name}
+              {buyerIdentity.name}
             </h3>
-            <p className="text-sm text-gray-600 mb-3">{batch.buyer_email}</p>
+            <p className="text-sm text-gray-600 mb-3">{buyerIdentity.email || "No email"}</p>
             
             {/* Batch Number */}
             <div className="mb-3 p-2 bg-gray-50 rounded-lg">
@@ -959,7 +1173,8 @@ export default function SellerOrders() {
             </div>
           )}
 
-          {pastBatches.length > 0 && (
+          {/* Completed batches - fulfillment finished, all orders picked up */}
+          {completedBatches.length > 0 && (
             <div className="space-y-4">
               <Button
                 variant="outline"
@@ -968,9 +1183,9 @@ export default function SellerOrders() {
               >
                 <div className="flex items-center gap-3">
                   <ShoppingBag className="w-5 h-5 text-gray-600" />
-                  <span className="text-lg font-semibold text-gray-900">Past Buyer Batches</span>
+                  <span className="text-lg font-semibold text-gray-900">Completed Batches</span>
                   <Badge variant="secondary" className="bg-gray-200 text-gray-700">
-                    {pastBatches.length}
+                    {completedBatches.length}
                   </Badge>
                 </div>
                 {showPastBatches ? (
@@ -982,7 +1197,7 @@ export default function SellerOrders() {
 
               {showPastBatches && (
                 <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {pastBatches.map(renderBatchCard)}
+                  {completedBatches.map(renderBatchCard)}
                 </div>
               )}
             </div>
@@ -1013,14 +1228,16 @@ export default function SellerOrders() {
               {pendingBatches.map((batch) => {
                 const batchOrders = getOrdersForBatch(batch.id);
                 const pendingCount = batchOrders.filter(o => o.status === 'paid').length;
+                const pendingBuyerIdentity = getBuyerIdentity(batch);
                 
                 return (
                   <Card key={batch.id} className="border border-orange-200 bg-orange-50">
                     <CardContent className="p-4">
                       <div className="flex items-start justify-between mb-3">
                         <div>
-                          <h4 className="font-semibold text-gray-900 text-lg">{batch.buyer_name}</h4>
-                          <p className="text-sm text-gray-600">{batch.buyer_email}</p>
+                          {/* Buyer identity - joined from buyer_profiles for display only */}
+                          <h4 className="font-semibold text-gray-900 text-lg">{pendingBuyerIdentity.name}</h4>
+                          <p className="text-sm text-gray-600">{pendingBuyerIdentity.email || "No email"}</p>
                         </div>
                         <Badge className="bg-orange-200 text-orange-800 border-orange-300">
                           {pendingCount} Pending
@@ -1094,7 +1311,8 @@ export default function SellerOrders() {
                   </div>
                   
                   <p className="text-gray-600 mb-4">
-                    Ask {selectedBatch.buyer_name} to show their 9-digit verification code:
+                    {/* Buyer identity - joined from buyer_profiles for display only */}
+                    Ask {getBuyerIdentity(selectedBatch).name} to show their 9-digit verification code:
                   </p>
                   
                   <form onSubmit={handleVerifyCode} className="space-y-4">

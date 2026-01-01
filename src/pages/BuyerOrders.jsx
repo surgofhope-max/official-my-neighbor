@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { supabaseApi as base44 } from "@/api/supabaseClient";
+import { supabase } from "@/lib/supabase/supabaseClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -31,6 +31,7 @@ import { getEffectiveUserContext } from "@/lib/auth/effectiveUser";
 import { getBatchesByBuyerId } from "@/api/batches";
 import { getOrdersByBuyerId } from "@/api/orders";
 import { getAllShows } from "@/api/shows";
+import { getAllSellers } from "@/api/sellers";
 import { autoSyncHealBuyerOrders } from "@/api/fulfillment";
 
 export default function BuyerOrders() {
@@ -58,7 +59,21 @@ export default function BuyerOrders() {
 
   const loadUser = async () => {
     try {
-      const currentUser = await base44.auth.me();
+      const { data, error } = await supabase.auth.getUser();
+      if (error) {
+        console.error("[BuyerOrders] auth load failed", error);
+        setUser(null);
+        setEffectiveUserId(null);
+        setLoading(false);
+        return;
+      }
+      const currentUser = data?.user ?? null;
+      if (!currentUser) {
+        setUser(null);
+        setEffectiveUserId(null);
+        setLoading(false);
+        return;
+      }
       setUser(currentUser);
       
       // Use centralized effective user context for impersonation support
@@ -97,8 +112,9 @@ export default function BuyerOrders() {
   // Load sellers and shows (reference data)
   const loadReferenceData = async () => {
     try {
+      // FIX: Use Supabase API instead of Base44
       const [sellersData, showsData] = await Promise.all([
-        base44.entities.Seller.list(),
+        getAllSellers(),
         getAllShows(),
       ]);
       setSellers(sellersData);
@@ -172,16 +188,23 @@ export default function BuyerOrders() {
   };
 
   // Separate active and past batches
-  const activeBatches = batches.filter(batch => batch.status !== 'completed');
-  const pastBatches = batches.filter(batch => batch.status === 'completed');
+  // FIX: Both 'completed' and 'picked_up' are terminal states for past orders
+  const terminalStatuses = ['completed', 'picked_up', 'fulfilled'];
+  const activeBatches = batches.filter(batch => !terminalStatuses.includes(batch.status));
+  const pastBatches = batches.filter(batch => terminalStatuses.includes(batch.status));
 
+  // Status styling for batches and orders
+  // Batch statuses: pending, partial, completed, cancelled, picked_up
+  // Order statuses: pending, paid, ready, picked_up, cancelled, refunded, completed, fulfilled
   const statusColors = {
     pending: "bg-yellow-100 text-yellow-800 border-yellow-200",
     partial: "bg-blue-100 text-blue-800 border-blue-200",
     completed: "bg-green-100 text-green-800 border-green-200",
+    fulfilled: "bg-green-100 text-green-800 border-green-200",  // FIX: Add fulfilled status
     cancelled: "bg-red-100 text-red-800 border-red-200",
     paid: "bg-green-100 text-green-800 border-green-200",
-    picked_up: "bg-blue-100 text-blue-800 border-blue-200",
+    ready: "bg-blue-100 text-blue-800 border-blue-200",  // FIX: Add ready status
+    picked_up: "bg-green-100 text-green-800 border-green-200",  // FIX: picked_up is success (green)
     refunded: "bg-red-100 text-red-800 border-red-200"
   };
 
@@ -189,8 +212,10 @@ export default function BuyerOrders() {
     pending: <Clock className="w-4 h-4" />,
     partial: <AlertCircle className="w-4 h-4" />,
     completed: <CheckCircle className="w-4 h-4" />,
+    fulfilled: <CheckCircle className="w-4 h-4" />,  // FIX: Add fulfilled status
     cancelled: <XCircle className="w-4 h-4" />,
     paid: <CheckCircle className="w-4 h-4" />,
+    ready: <Package className="w-4 h-4" />,  // FIX: Add ready status
     picked_up: <CheckCircle className="w-4 h-4" />,
     refunded: <XCircle className="w-4 h-4" />
   };
@@ -203,7 +228,7 @@ export default function BuyerOrders() {
             <ShoppingBag className="w-16 h-16 text-gray-400 mx-auto mb-4" />
             <h3 className="text-lg font-semibold text-gray-900 mb-2">Please Log In</h3>
             <p className="text-gray-600 mb-4">You need to be logged in to view your orders.</p>
-            <Button onClick={() => base44.auth.redirectToLogin()}>
+            <Button onClick={() => { sessionStorage.setItem("login_return_url", window.location.href); window.location.href = "/Login"; }}>
               Log In
             </Button>
           </CardContent>
@@ -224,11 +249,24 @@ export default function BuyerOrders() {
     );
   }
 
-  // Calculate totals
-  const totalOrders = allOrders.length;
-  const totalItems = batches.reduce((sum, batch) => sum + (batch.total_items || 0), 0);
-  const totalSpent = batches.reduce((sum, batch) => sum + (batch.total_amount || 0), 0);
-  const giviWins = allOrders.filter(o => o.price === 0).length;
+  // ─────────────────────────────────────────────────────────────────────────────
+  // BUYER ANALYTICS DERIVATION (read-time)
+  // AUTHORITATIVE SOURCE: orders (buyer_id === auth.user.id)
+  // Orders are the buyer-owned source of truth for analytics
+  // Batches remain for pickup verification, grouping, and display only
+  // ─────────────────────────────────────────────────────────────────────────────
+  
+  // Filter out cancelled orders from analytics
+  const validOrders = allOrders.filter(o => o.status !== 'cancelled');
+  
+  // Derive buyer analytics from ORDERS (authoritative source for buyers)
+  const totalOrders = validOrders.length;
+  const totalItems = validOrders.length;  // Each order = 1 item
+  const totalSpent = validOrders.reduce((sum, order) => sum + (order.price || 0), 0);
+  const giviWins = validOrders.filter(o => o.price === 0).length;
+  
+  // Keep batches for display grouping only
+  const validBatches = batches.filter(b => b.status !== 'cancelled');
 
   const renderBatchCard = (batch) => {
     const seller = sellersMap[batch.seller_id];
@@ -236,6 +274,10 @@ export default function BuyerOrders() {
     const batchOrders = getOrdersForBatch(batch.id);
     const isExpanded = expandedBatches[batch.id];
     const hasGIVIItems = batchOrders.some(o => o.price === 0);
+    
+    // FIX: Derive totals from ORDERS (authoritative for buyers), not batch fields
+    const cardItemCount = batchOrders.length;
+    const cardTotalAmount = batchOrders.reduce((sum, o) => sum + (o.price || 0), 0);
 
     return (
       <Card key={batch.id} className={`border-0 shadow-lg overflow-hidden ${hasGIVIItems ? 'ring-2 ring-yellow-400' : ''}`}>
@@ -268,7 +310,7 @@ export default function BuyerOrders() {
                     </div>
                   )}
                   <p className="text-xs text-gray-500">
-                    {format(new Date(batch.created_date), "MMM d, yyyy")}
+                    {format(new Date(batch.created_at), "MMM d, yyyy")}
                   </p>
                   
                   {/* NEW: GIVI Badge on Batch Header */}
@@ -282,28 +324,32 @@ export default function BuyerOrders() {
               </div>
 
               {/* Status Badge - Mobile Optimized */}
-              <Badge className={`${statusColors[batch.status]} border px-2 py-1 sm:px-3 sm:py-1 text-xs sm:text-sm flex items-center gap-1.5 flex-shrink-0`}>
-                {statusIcons[batch.status]}
+              {/* FIX: Map all batch statuses to proper UI labels */}
+              <Badge className={`${statusColors[batch.status] || statusColors.pending} border px-2 py-1 sm:px-3 sm:py-1 text-xs sm:text-sm flex items-center gap-1.5 flex-shrink-0`}>
+                {statusIcons[batch.status] || statusIcons.pending}
                 <span className="hidden sm:inline">
                   {batch.status === "pending" ? "Ready" :
                    batch.status === "partial" ? "Partial" :
-                   batch.status === "completed" ? "Done" :
-                   "Cancelled"}
+                   batch.status === "completed" ? "Completed" :
+                   batch.status === "picked_up" ? "Completed" :
+                   batch.status === "fulfilled" ? "Completed" :
+                   batch.status === "cancelled" ? "Cancelled" :
+                   "Unknown"}
                 </span>
               </Badge>
             </div>
 
-            {/* Row 2: Batch Stats */}
+            {/* Row 2: Batch Stats - FIX: Use order-derived totals for buyers */}
             <div className="flex items-center gap-3 sm:gap-4 text-xs sm:text-sm bg-white/50 rounded-lg p-2 sm:p-3">
               <div className="flex items-center gap-1.5 text-gray-700">
                 <Package className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-                <span className="font-semibold">{batch.total_items}</span>
+                <span className="font-semibold">{cardItemCount}</span>
                 <span className="text-gray-500 hidden sm:inline">items</span>
               </div>
               <span className="text-gray-400">•</span>
               <div className="flex items-center gap-1.5 text-gray-700">
                 <DollarSign className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-                <span className="font-semibold">${batch.total_amount?.toFixed(2)}</span>
+                <span className="font-semibold">${cardTotalAmount.toFixed(2)}</span>
               </div>
               {hasGIVIItems && (
                 <>
@@ -376,11 +422,12 @@ export default function BuyerOrders() {
             </Alert>
           )}
 
-          {batch.status === "completed" && batch.completed_at && (
+          {/* FIX: Show completion alert for all terminal statuses */}
+          {(batch.status === "completed" || batch.status === "picked_up" || batch.status === "fulfilled") && (batch.completed_at || batch.picked_up_at) && (
             <Alert className="bg-green-50 border-green-200">
               <CheckCircle className="h-4 w-4 text-green-600 flex-shrink-0" />
               <AlertDescription className="text-green-800 text-xs sm:text-sm">
-                <strong>Completed</strong> — Picked up on {format(new Date(batch.completed_at), "MMM d, yyyy")}
+                <strong>Completed</strong> — Picked up on {format(new Date(batch.completed_at || batch.picked_up_at), "MMM d, yyyy")}
               </AlertDescription>
             </Alert>
           )}
@@ -454,11 +501,17 @@ export default function BuyerOrders() {
                             )}
 
                             {/* Individual Order Status */}
-                            <Badge className={`${statusColors[order.status]} border text-xs`}>
+                            {/* FIX: Map all order statuses to proper UI labels */}
+                            <Badge className={`${statusColors[order.status] || statusColors.pending} border text-xs`}>
                               {order.status === "paid" ? "Paid" :
-                               order.status === "picked_up" ? "Picked Up" :
+                               order.status === "ready" ? "Ready" :
+                               order.status === "picked_up" ? "Completed" :
+                               order.status === "completed" ? "Completed" :
+                               order.status === "fulfilled" ? "Completed" :
                                order.status === "cancelled" ? "Cancelled" :
-                               "Refunded"}
+                               order.status === "refunded" ? "Refunded" :
+                               order.status === "pending" ? "Pending" :
+                               "Unknown"}
                             </Badge>
                           </div>
                           
@@ -529,8 +582,9 @@ export default function BuyerOrders() {
             <CardContent className="p-3 sm:p-6">
               <div className="text-center sm:flex sm:items-center sm:justify-between">
                 <div className="flex-1">
-                  <p className="text-white/80 text-xs sm:text-sm mb-1">Batches</p>
-                  <p className="text-2xl sm:text-3xl font-bold text-white">{batches.length}</p>
+                  {/* FIX: Show Orders count derived from orders (authoritative) */}
+                  <p className="text-white/80 text-xs sm:text-sm mb-1">Orders</p>
+                  <p className="text-2xl sm:text-3xl font-bold text-white">{totalOrders}</p>
                 </div>
                 <div className="hidden sm:flex w-12 h-12 bg-white/20 rounded-lg items-center justify-center">
                   <ShoppingBag className="w-6 h-6 text-white" />
@@ -543,6 +597,7 @@ export default function BuyerOrders() {
             <CardContent className="p-3 sm:p-6">
               <div className="text-center sm:flex sm:items-center sm:justify-between">
                 <div className="flex-1">
+                  {/* FIX: Items = order count (each order = 1 item) */}
                   <p className="text-white/80 text-xs sm:text-sm mb-1">Items</p>
                   <p className="text-2xl sm:text-3xl font-bold text-white">{totalItems}</p>
                 </div>

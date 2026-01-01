@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect } from "react";
-import { supabaseApi as base44 } from "@/api/supabaseClient";
+import { supabase } from "@/lib/supabase/supabaseClient";
+import { supabaseApi as base44 } from "@/api/supabaseClient"; // Keep for entities
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -34,6 +35,7 @@ import {
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
+import { isAdmin } from "@/lib/auth/routeGuards";
 import { format } from "date-fns";
 import BannedBuyersManager from "../components/seller/BannedBuyersManager";
 
@@ -59,12 +61,23 @@ export default function AdminSellerData() {
 
   const loadUser = async () => {
     try {
-      const currentUser = await base44.auth.me();
+      const { data, error } = await supabase.auth.getUser();
+      if (error) {
+        console.error("[AdminSellerData] auth load failed", error);
+        navigate(createPageUrl("Marketplace"));
+        return;
+      }
+      const currentUser = data?.user ?? null;
+      if (!currentUser) {
+        navigate(createPageUrl("Marketplace"));
+        return;
+      }
       setUser(currentUser);
       
-      if (currentUser.role !== "admin") {
-        alert("Access denied. Admin privileges required.");
+      // ADMIN GATING: Uses DB truth (public.users.role), allows 'admin' OR 'super_admin'
+      if (!isAdmin(currentUser)) {
         navigate(createPageUrl("Marketplace"));
+        return;
       }
     } catch (error) {
       console.error("Error loading user:", error);
@@ -81,31 +94,31 @@ export default function AdminSellerData() {
       console.log("✅ Seller found:", foundSeller ? foundSeller.business_name : "NOT FOUND");
       return foundSeller;
     },
-    enabled: !!sellerId && !!user && user.role === "admin"
+    enabled: !!sellerId && !!user && isAdmin(user)
   });
 
   const { data: products = [] } = useQuery({
     queryKey: ['admin-seller-products', sellerId],
     queryFn: () => base44.entities.Product.filter({ seller_id: sellerId }),
-    enabled: !!sellerId && !!user && user.role === "admin"
+    enabled: !!sellerId && !!user && isAdmin(user)
   });
 
   const { data: shows = [] } = useQuery({
     queryKey: ['admin-seller-shows', sellerId],
     queryFn: () => base44.entities.Show.filter({ seller_id: sellerId }), // Removed sort from queryFn per outline
-    enabled: !!sellerId && !!user && user.role === "admin"
+    enabled: !!sellerId && !!user && isAdmin(user)
   });
 
   const { data: orders = [] } = useQuery({
     queryKey: ['admin-seller-orders', sellerId],
     queryFn: () => base44.entities.Order.filter({ seller_id: sellerId }), // Removed sort from queryFn per outline
-    enabled: !!sellerId && !!user && user.role === "admin"
+    enabled: !!sellerId && !!user && isAdmin(user)
   });
 
   const { data: batches = [] } = useQuery({
     queryKey: ['admin-seller-batches', sellerId],
     queryFn: () => base44.entities.Batch.filter({ seller_id: sellerId }), // Removed sort from queryFn per outline
-    enabled: !!sellerId && !!user && user.role === "admin"
+    enabled: !!sellerId && !!user && isAdmin(user)
   });
 
   const { data: followers = 0 } = useQuery({ // Default to 0 for count
@@ -114,19 +127,19 @@ export default function AdminSellerData() {
       const follows = await base44.entities.FollowedSeller.filter({ seller_id: sellerId });
       return follows.length; // Return length directly
     },
-    enabled: !!sellerId && !!user && user.role === "admin"
+    enabled: !!sellerId && !!user && isAdmin(user)
   });
 
   const { data: reviews = [] } = useQuery({
     queryKey: ['admin-seller-reviews', sellerId],
     queryFn: () => base44.entities.Review.filter({ seller_id: sellerId }), // Removed sort from queryFn per outline
-    enabled: !!sellerId && !!user && user.role === "admin"
+    enabled: !!sellerId && !!user && isAdmin(user)
   });
 
   const { data: conversations = [] } = useQuery({
     queryKey: ['admin-seller-conversations', sellerId],
     queryFn: () => base44.entities.Conversation.filter({ seller_id: sellerId }), // Removed sort from queryFn per outline
-    enabled: !!sellerId && !!user && user.role === "admin"
+    enabled: !!sellerId && !!user && isAdmin(user)
   });
 
   if (!sellerId) {

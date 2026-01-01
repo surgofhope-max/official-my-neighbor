@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { supabase } from "@/lib/supabase/supabaseClient";
 import { supabaseApi as base44 } from "@/api/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Input } from "@/components/ui/input";
@@ -26,10 +27,15 @@ export default function LiveChatOverlay({ showId, isSeller = false, onClose, inp
 
   const loadUser = async () => {
     try {
-      const currentUser = await base44.auth.me();
-      setUser(currentUser);
+      const { data, error } = await supabase.auth.getUser();
+      if (error) {
+        // Gracefully handle - user just can't chat
+        setUser(null);
+        return;
+      }
+      setUser(data?.user ?? null);
     } catch (error) {
-      console.log("User not logged in - chat view only");
+      // Swallow errors - chat is non-critical
       setUser(null);
     }
   };

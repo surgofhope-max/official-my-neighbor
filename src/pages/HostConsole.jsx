@@ -2,8 +2,10 @@ import React, { useState, useEffect, useRef } from "react";
 import { supabaseApi as base44 } from "@/api/supabaseClient";
 import { supabase } from "@/lib/supabase/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { isSuperAdmin } from "@/lib/auth/routeGuards";
+import { isSuperAdmin, requireSellerAsync, isAdmin } from "@/lib/auth/routeGuards";
+import { checkAccountActiveAsync } from "@/lib/auth/accountGuards";
 import { getShowById } from "@/api/shows";
+import { isShowLive } from "@/api/streamSync";
 import { createProduct, updateProduct } from "@/api/products";
 import { getShowProductsByShowId, createShowProduct, updateShowProductByIds, clearFeaturedForShow, deleteShowProductByIds } from "@/api/showProducts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -49,6 +51,7 @@ import HostBottomControls from "../components/host/HostBottomControls";
 import SellerProductDetailCard from "../components/host/SellerProductDetailCard";
 import LiveChat from "../components/chat/LiveChat";
 import LiveChatOverlay from "../components/chat/LiveChatOverlay";
+import SupabaseLiveChat from "../components/chat/SupabaseLiveChat";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import ProductForm from "../components/products/ProductForm";
@@ -86,9 +89,11 @@ export default function HostConsole() {
   const [bottomBarMode, setBottomBarMode] = useState("products"); // "products" or "message"
   const [showFulfillmentDrawer, setShowFulfillmentDrawer] = useState(false);
   const [showFulfillmentDialog, setShowFulfillmentDialog] = useState(false);
+  const [showPurchaseBanner, setShowPurchaseBanner] = useState(false);
   
   // Ref to prevent NO_SHOWID guard from re-triggering after initial mount
   const noShowIdGuardRan = useRef(false);
+  const lastSalesCountRef = useRef(null);
 
   // CRITICAL: Immediate redirect if no showId - prevent "No Show ID" error from appearing
   // Only runs ONCE on initial mount
@@ -117,61 +122,96 @@ export default function HostConsole() {
 
   const loadUserAndSeller = async () => {
     try {
-      const user = await base44.auth.me();
+      // Get current user from Supabase auth
+      const { data: authData, error: authError } = await supabase.auth.getUser();
+      if (authError || !authData?.user) {
+        console.error("No authenticated user found");
+        setUserLoading(false);
+        return;
+      }
+      const user = authData.user;
       setCurrentUser(user);
-      const userRole = user.user_metadata?.role || user.role;
-      
-      // DERIVED CONSTANTS: Read ALL onboarding flags from user_metadata ONLY
-      const onboardingCompleted = user.user_metadata?.seller_onboarding_completed === true;
-      const safetyAgreed = user.user_metadata?.seller_safety_agreed === true;
-      const onboardingReset = user.user_metadata?.seller_onboarding_reset === true;
 
-      // 🔐 SUPER_ADMIN BYPASS: Skip ALL checks
+      // ═══════════════════════════════════════════════════════════════════════════
+      // OPTION B SELLER GATING (STEP 3 REFACTOR)
+      // User is seller IFF: public.users.role='seller' AND sellers.status='approved'
+      // ═══════════════════════════════════════════════════════════════════════════
+
+      // 🔐 SUPER_ADMIN BYPASS: Full system authority
       if (isSuperAdmin(user)) {
-        // Load seller if exists, but don't require it
-        const { data: seller, error: sellerError } = await supabase
+        console.log("[SellerGate] SUPER_ADMIN bypass - full access");
+        const { data: seller } = await supabase
           .from("sellers")
           .select("*")
           .eq("user_id", user.id)
           .maybeSingle();
-        if (sellerError) throw sellerError;
         if (seller) {
           setCurrentSeller(seller);
         }
         setUserLoading(false);
         return;
       }
-      
-      // CRITICAL: Check for onboarding reset - must complete full onboarding again
-      if (userRole !== "admin" && onboardingReset) {
-        navigate(createPageUrl("SellerSafetyAgreement"), { replace: true });
+
+      // 🔐 ADMIN BYPASS: Admins can access seller routes
+      if (isAdmin(user)) {
+        console.log("[SellerGate] Admin bypass - access granted");
+        const { data: seller } = await supabase
+          .from("sellers")
+          .select("*")
+          .eq("user_id", user.id)
+          .maybeSingle();
+        if (seller) {
+          setCurrentSeller(seller);
+        }
+        setUserLoading(false);
         return;
       }
 
-      // Check for seller safety agreement
-      if (userRole !== "admin" && !safetyAgreed) {
-        navigate(createPageUrl("SellerSafetyAgreement"), { replace: true });
+      // ═══════════════════════════════════════════════════════════════════════════
+      // SUSPENSION CHECK: Block seller routes for suspended accounts
+      // ═══════════════════════════════════════════════════════════════════════════
+      const { canProceed: accountActive, error: suspendedReason } = await checkAccountActiveAsync(supabase, user.id);
+      if (!accountActive) {
+        console.log("[SellerGate] Account suspended - redirecting to BuyerProfile");
+        navigate(createPageUrl("BuyerProfile"), { 
+          replace: true, 
+          state: { suspended: true, reason: suspendedReason } 
+        });
         return;
       }
 
-      // Check for seller onboarding completion
-      if (userRole !== "admin" && !onboardingCompleted) {
-        navigate(createPageUrl("SellerOnboarding"), { replace: true });
+      // ═══════════════════════════════════════════════════════════════════════════
+      // OPTION B CHECK: Query DB for role + seller status
+      // ═══════════════════════════════════════════════════════════════════════════
+      const sellerCheck = await requireSellerAsync(user.id);
+      
+      console.log("[SellerGate] HostConsole check:", {
+        ok: sellerCheck.ok,
+        role: sellerCheck.role,
+        sellerStatus: sellerCheck.sellerStatus,
+        reason: sellerCheck.reason
+      });
+
+      if (!sellerCheck.ok) {
+        // NOT an approved seller - redirect based on reason
+        if (sellerCheck.reason === "seller_onboarding_incomplete" || sellerCheck.reason === "seller_safety_not_agreed") {
+          // Onboarding incomplete - send to BuyerProfile to continue onboarding
+          console.log("[SellerGate] Onboarding incomplete - redirecting to BuyerProfile");
+          navigate(createPageUrl("BuyerProfile"), { replace: true });
+        } else {
+          // Other failure (no seller row, not approved, etc.) - redirect to SellerShows
+          console.log("[SellerGate] Not approved seller - redirecting to SellerShows");
+          navigate(createPageUrl("SellerShows"), { replace: true });
+        }
         return;
       }
-      
-      const { data: seller, error: sellerError } = await supabase
-        .from("sellers")
-        .select("*")
-        .eq("user_id", user.id)
-        .maybeSingle();
-      if (sellerError) throw sellerError;
-      
-      if (seller) {
-        setCurrentSeller(seller);
-      } else {
-        console.error("No seller profile found for user:", user.email);
-      }
+
+      // ═══════════════════════════════════════════════════════════════════════════
+      // APPROVED SELLER - Load host console
+      // ═══════════════════════════════════════════════════════════════════════════
+      console.log("[SellerGate] Approved seller verified:", sellerCheck.sellerRow?.business_name);
+      setCurrentSeller(sellerCheck.sellerRow);
+
     } catch (error) {
       console.error("Error loading user/seller:", error);
     } finally {
@@ -205,16 +245,24 @@ export default function HostConsole() {
   const { data: showSeller, isLoading: sellerLoading } = useQuery({
     queryKey: ['show-seller', show?.seller_id],
     queryFn: async () => {
+      // NORMALIZED: show.seller_id = sellers.id
       const { data: fetchedSeller, error } = await supabase
         .from("sellers")
         .select("*")
-        .eq("user_id", show.seller_id)
+        .eq("id", show.seller_id)
         .maybeSingle();
       if (error) throw error;
       return fetchedSeller || null;
     },
     enabled: !!show?.seller_id
   });
+
+  // Determine which chat system to use:
+  // SupabaseLiveChat renders when show is starting or live (lifecycle-based)
+  // Legacy chat is fallback for other states
+  const useSupabaseChat =
+    show?.stream_status === 'starting' ||
+    show?.stream_status === 'live';
 
   // Access control
   useEffect(() => {
@@ -248,8 +296,8 @@ export default function HostConsole() {
         return;
       }
       
-      // Seller ID must match
-      const isOwner = currentSeller.user_id === show.seller_id;
+      // Seller ID must match (shows.seller_id = sellers.id)
+      const isOwner = currentSeller.id === show.seller_id;
       
       if (!isOwner) {
         setAccessError(`This show belongs to ${showSeller.business_name}. You cannot access their Host Console.`);
@@ -307,8 +355,13 @@ export default function HostConsole() {
   const { data: orders = [] } = useQuery({
     queryKey: ['show-orders', showId],
     queryFn: async () => {
-      const result = await base44.entities.Order.filter({ show_id: showId });
-      return result;
+      const { data, error } = await supabase
+        .from('orders')
+        .select('id, show_id, price, delivery_fee, created_at')
+        .eq('show_id', showId);
+
+      if (error) throw error;
+      return data || [];
     },
     refetchInterval: 15000,
     staleTime: 10000
@@ -341,6 +394,25 @@ export default function HostConsole() {
       }
     }
   }, [activeGIVI?.id, activeGIVI?.status, activeGIVI?.winner_ids]);
+
+  // Detect sales_count changes and show global purchase banner
+  useEffect(() => {
+    if (!show || typeof show.sales_count !== "number") return;
+
+    // Initialize on first load
+    if (lastSalesCountRef.current === null) {
+      lastSalesCountRef.current = show.sales_count;
+      return;
+    }
+
+    // Detect increment
+    if (show.sales_count > lastSalesCountRef.current) {
+      setShowPurchaseBanner(true);
+      setTimeout(() => setShowPurchaseBanner(false), 2000);
+    }
+
+    lastSalesCountRef.current = show.sales_count;
+  }, [show?.sales_count]);
 
   const featureProductMutation = useMutation({
     mutationFn: async (product) => {
@@ -399,13 +471,21 @@ export default function HostConsole() {
       // Step 1: Create the product in the products catalog
       // Extract is_givey for show_products, don't pass to products
       const { is_givey, ...catalogData } = data;
+      
+      // ═══════════════════════════════════════════════════════════════════════════
+      // NORMALIZED: products.seller_id = sellers.id (NOT user_id)
+      // ═══════════════════════════════════════════════════════════════════════════
+      if (!currentSeller?.id) {
+        throw new Error("Seller ID is missing from seller profile - cannot create product");
+      }
+      
       const productData = { 
         ...catalogData, 
-        seller_id: currentSeller.user_id, // Use user_id for seller_id FK
+        seller_id: currentSeller.id, // FIXED: Use sellers.id (not user_id)
         status: "active"
       };
       console.log("📦 HostConsole - Creating product in catalog:", productData);
-      console.log("🆔 Seller ID (user_id):", currentSeller.user_id);
+      console.log("🆔 Seller ID (sellers.id):", currentSeller.id);
       
       const newProduct = await createProduct(productData);
       if (!newProduct) {
@@ -415,11 +495,12 @@ export default function HostConsole() {
       
       // Step 2: Link product to this show via show_products
       // is_givi is stored here (per-show state), not in products catalog
+      // NORMALIZED: show_products.seller_id = sellers.id (NOT user_id)
       console.log("🔗 Linking product to show:", showId);
       const showProduct = await createShowProduct({
         show_id: showId,
         product_id: newProduct.id,
-        seller_id: currentSeller.user_id,
+        seller_id: currentSeller.id, // FIXED: Use sellers.id (not user_id)
         is_featured: false,
         is_givi: is_givey === true,
       });
@@ -548,6 +629,101 @@ export default function HostConsole() {
     console.log("⏹️ HostConsole - Stream stopped for ShowID:", showId);
   };
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // LIFECYCLE: Start Broadcast - DB-driven live flip
+  // ═══════════════════════════════════════════════════════════════════════════
+  const startBroadcastMutation = useMutation({
+    mutationFn: async () => {
+      console.log("📡 HostConsole - Starting broadcast for show:", showId);
+      
+      // Build payload - stream_status="live" triggers viewer playback
+      // Only set started_at if not already set (avoid overwriting)
+      const payload = {
+        status: "live",
+        stream_status: "live",
+        ...(show?.started_at ? {} : { started_at: new Date().toISOString() })
+      };
+      
+      console.log("📝 Start Broadcast payload:", payload);
+      
+      const { data, error } = await supabase
+        .from("shows")
+        .update(payload)
+        .eq("id", showId)
+        .select()
+        .maybeSingle();
+      
+      if (error) {
+        console.error("[StartBroadcast] supabase update failed", error);
+        throw error;
+      }
+      
+      console.log("✅ Broadcast started - stream_status now 'live'");
+      return data;
+    },
+    onSuccess: () => {
+      setIsBroadcasting(true);
+      // Invalidate queries so other pages see the update
+      queryClient.invalidateQueries({ queryKey: ['seller-shows'] });
+      queryClient.invalidateQueries({ queryKey: ['all-shows'] });
+      queryClient.invalidateQueries({ queryKey: ['marketplace-live-shows'] });
+      queryClient.invalidateQueries({ queryKey: ['show', showId] });
+    },
+    onError: (error) => {
+      console.error("❌ Error starting broadcast:", error);
+      alert(`Failed to start broadcast: ${error.message}`);
+    }
+  });
+
+  const stopBroadcastMutation = useMutation({
+    mutationFn: async () => {
+      console.log("⏹️ HostConsole - Stopping broadcast for show:", showId);
+      
+      // Set stream_status back to "starting" (host stopped but show not ended)
+      // TODO: Wire provider stop function here when integrating Daily/IVS
+      const { data, error } = await supabase
+        .from("shows")
+        .update({ stream_status: "starting" })
+        .eq("id", showId)
+        .select()
+        .maybeSingle();
+      
+      if (error) {
+        console.error("[StopBroadcast] supabase update failed", error);
+        throw error;
+      }
+      
+      console.log("✅ Broadcast stopped - stream_status now 'starting'");
+      return data;
+    },
+    onSuccess: () => {
+      setIsBroadcasting(false);
+      queryClient.invalidateQueries({ queryKey: ['show', showId] });
+    },
+    onError: (error) => {
+      console.error("❌ Error stopping broadcast:", error);
+      alert(`Failed to stop broadcast: ${error.message}`);
+    }
+  });
+
+  const handleToggleBroadcast = () => {
+    // Guard: Block broadcasting for ended/cancelled shows
+    if (show?.status === "ended" || show?.status === "cancelled") {
+      alert(`Cannot start broadcast. This show has been ${show.status}.`);
+      return;
+    }
+    
+    if (isBroadcasting) {
+      stopBroadcastMutation.mutate();
+    } else {
+      startBroadcastMutation.mutate();
+    }
+  };
+  
+  // Check if broadcasting is allowed based on show status
+  const isBroadcastBlocked = show?.status === "ended" || show?.status === "cancelled" || 
+                              startBroadcastMutation.isPending || stopBroadcastMutation.isPending;
+
   const handleSaveProduct = (productData) => {
     createProductMutation.mutate(productData);
   };
@@ -601,6 +777,7 @@ export default function HostConsole() {
   };
 
   // CRITICAL: End Show with proper navigation history reset
+  // CANONICAL END: Sets both status and stream_status to "ended"
   const endShowMutation = useMutation({
     mutationFn: async () => {
       console.log("⏹️ HostConsole - Ending show:", showId);
@@ -611,7 +788,36 @@ export default function HostConsole() {
       window.history.replaceState({}, '', showsUrl);
       console.log("✅ URL immediately changed to prevent refresh loading dead showId");
       
-      await base44.entities.Show.update(showId, { status: "ended" });
+      // TODO: Wire provider stop function here when integrating Daily/IVS
+      // For now, we just update DB state
+      
+      // Build payload - only set ended_at if not already set (avoid overwriting)
+      const payload = {
+        status: "ended",
+        stream_status: "ended",
+        ...(show?.ended_at ? {} : { ended_at: new Date().toISOString() })
+      };
+      
+      console.log("📝 End Show payload:", payload);
+      
+      const { data, error } = await supabase
+        .from("shows")
+        .update(payload)
+        .eq("id", showId)
+        .select()
+        .maybeSingle();
+      
+      if (error) {
+        console.error("[EndShow] supabase update failed", error);
+        throw error;
+      }
+      
+      if (!data) {
+        console.warn("[EndShow] update returned no row");
+      }
+      
+      console.log("✅ Show ended - status and stream_status now 'ended'");
+      return data;
     },
     onSuccess: () => {
       console.log("✅ Show ended successfully - completing navigation");
@@ -837,6 +1043,13 @@ export default function HostConsole() {
         winnerName={activeGIVI?.winner_names?.[0]}
         onDismiss={() => setShowWinnerBanner(false)}
       />
+
+      {/* Global Purchase Confirmation Banner */}
+      {showPurchaseBanner && (
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 bg-green-600 text-white px-5 py-2 rounded-full shadow-lg z-[9999] text-sm font-semibold pointer-events-none">
+          🎉 New purchase just made!
+        </div>
+      )}
 
       <div className="max-w-7xl mx-auto space-y-4 sm:space-y-6">
         {/* Header with Seller Verification */}
@@ -1071,11 +1284,20 @@ export default function HostConsole() {
           
           {/* Chat Overlay - Left Side, Transparent */}
           <div style={{ zIndex: 100 }}>
-            <LiveChatOverlay 
-              showId={showId} 
-              isSeller={true}
-              sellerId={currentSeller?.id}
-            />
+            {useSupabaseChat ? (
+              <SupabaseLiveChat
+                showId={showId}
+                sellerId={currentSeller?.id}
+                isSeller={true}
+                isOverlay={true}
+              />
+            ) : (
+              <LiveChatOverlay 
+                showId={showId} 
+                isSeller={true}
+                sellerId={currentSeller?.id}
+              />
+            )}
           </div>
           
           {/* Seller Product Detail Card (Overlay) */}
@@ -1176,18 +1398,22 @@ export default function HostConsole() {
               <ClipboardCheck className="w-5 h-5 text-white" />
             </Button>
 
-            {/* Broadcast Button (Icon Only) */}
-            <Button
-              onClick={() => setIsBroadcasting(!isBroadcasting)}
-              size="icon"
-              className={`h-10 w-10 rounded-full shadow-lg border border-white/20 ${
-                isBroadcasting 
-                  ? "bg-gradient-to-r from-red-600 to-pink-600 animate-pulse" 
-                  : "bg-gradient-to-r from-green-600 to-emerald-600"
-              }`}
-            >
-              <Radio className="w-5 h-5 text-white" />
-            </Button>
+                {/* Broadcast Button (Icon Only) - GATED: Disabled if show ended/cancelled */}
+                <Button
+                  onClick={handleToggleBroadcast}
+                  size="icon"
+                  disabled={isBroadcastBlocked}
+                  className={`h-10 w-10 rounded-full shadow-lg border border-white/20 ${
+                    isBroadcastBlocked
+                      ? "bg-gray-600 cursor-not-allowed opacity-50"
+                      : isBroadcasting 
+                        ? "bg-gradient-to-r from-red-600 to-pink-600 animate-pulse" 
+                        : "bg-gradient-to-r from-green-600 to-emerald-600"
+                  }`}
+                  title={isBroadcastBlocked ? `Cannot broadcast - show is ${show?.status}` : ""}
+                >
+                  <Radio className="w-5 h-5 text-white" />
+                </Button>
           </div>
         </div>
         
@@ -1195,14 +1421,27 @@ export default function HostConsole() {
         <div className="hidden sm:grid sm:grid-cols-[25%_50%_25%] h-screen bg-black fixed inset-0" style={{ top: 0, paddingTop: 0 }}>
           {/* LEFT COLUMN - Host Tools & Products */}
           <div className="bg-gray-900 overflow-y-auto p-4 space-y-4">
-            {/* Host Control Buttons */}
+            {/* Host Control Buttons - GATED: Broadcast disabled if show ended/cancelled */}
             <div className="space-y-2">
+              {/* Broadcast blocked warning */}
+              {isBroadcastBlocked && (
+                <div className="bg-red-500/20 border border-red-500/50 rounded-lg p-3 text-center">
+                  <AlertTriangle className="w-5 h-5 text-red-400 mx-auto mb-1" />
+                  <p className="text-red-300 text-sm font-medium">
+                    Show is {show?.status} - Broadcasting not allowed
+                  </p>
+                </div>
+              )}
+              
               <Button
-                onClick={() => setIsBroadcasting(!isBroadcasting)}
+                onClick={handleToggleBroadcast}
+                disabled={isBroadcastBlocked}
                 className={`w-full font-bold py-3 ${
-                  isBroadcasting 
-                    ? 'bg-gradient-to-r from-red-600 to-pink-600 hover:from-red-700 hover:to-pink-700' 
-                    : 'bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700'
+                  isBroadcastBlocked
+                    ? 'bg-gray-600 cursor-not-allowed opacity-50'
+                    : isBroadcasting 
+                      ? 'bg-gradient-to-r from-red-600 to-pink-600 hover:from-red-700 hover:to-pink-700' 
+                      : 'bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700'
                 } text-white`}
               >
                 <Radio className="w-4 h-4 mr-2" />
@@ -1300,9 +1539,9 @@ export default function HostConsole() {
                   >
                     <div className="flex gap-3">
                       <div className="relative w-20 h-20 flex-shrink-0">
-                        {Array.isArray(product.images) && product.images.length > 0 ? (
+                        {Array.isArray(product.image_urls) && product.image_urls.length > 0 ? (
                           <img
-                            src={product.images[0]}
+                            src={product.image_urls[0]}
                             alt={product.title}
                             className="w-full h-full object-cover rounded"
                           />
@@ -1446,7 +1685,7 @@ export default function HostConsole() {
                     <Users className="w-4 h-4 mr-1" />
                     {show.viewer_count || 0}
                   </Badge>
-                  {show.is_streaming && (
+                  {isShowLive(show) && (
                     <Badge className="bg-red-500 text-white border-0 animate-pulse">
                       <Radio className="w-4 h-4 mr-1" />
                       LIVE
@@ -1489,12 +1728,21 @@ export default function HostConsole() {
 
             {/* Chat Component */}
             <div className="flex-1 flex flex-col min-h-0 pb-6">
-              <LiveChat
-                showId={showId}
-                sellerId={currentSeller?.id}
-                isSeller={true}
-                isEmbedded={true}
-              />
+              {useSupabaseChat ? (
+                <SupabaseLiveChat
+                  showId={showId}
+                  sellerId={currentSeller?.id}
+                  isSeller={true}
+                  isOverlay={false}
+                />
+              ) : (
+                <LiveChat
+                  showId={showId}
+                  sellerId={currentSeller?.id}
+                  isSeller={true}
+                  isEmbedded={true}
+                />
+              )}
             </div>
           </div>
         </div>

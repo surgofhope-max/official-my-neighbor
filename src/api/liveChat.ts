@@ -202,8 +202,10 @@ export async function sendLiveShowMessage(
 /**
  * Check if live chat is available for a show.
  *
+ * AUTHORITATIVE: stream_status === "live" is the ONLY rule.
+ *
  * @param showId - The show ID to check
- * @returns True if chat is available (show is live)
+ * @returns True if chat is available (stream_status === "live")
  */
 export async function isLiveChatAvailable(showId: string): Promise<boolean> {
   if (!showId) {
@@ -213,7 +215,7 @@ export async function isLiveChatAvailable(showId: string): Promise<boolean> {
   try {
     const { data, error } = await supabase
       .from("shows")
-      .select("stream_status, is_streaming, status")
+      .select("stream_status")
       .eq("id", showId)
       .single();
 
@@ -221,11 +223,8 @@ export async function isLiveChatAvailable(showId: string): Promise<boolean> {
       return false;
     }
 
-    return (
-      data.stream_status === "live" ||
-      data.is_streaming === true ||
-      data.status === "live"
-    );
+    // AUTHORITATIVE: Chat available during "starting" or "live"
+    return data.stream_status === "live" || data.stream_status === "starting";
   } catch {
     return false;
   }

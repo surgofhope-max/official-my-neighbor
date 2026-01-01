@@ -21,9 +21,33 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { CheckCircle, XCircle, Ban, Search, AlertCircle, Info, Database, UserCog, ArrowLeft } from "lucide-react";
+import { CheckCircle, XCircle, Ban, Search, AlertCircle, Info, Database, UserCog, ArrowLeft, RefreshCw } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+
+// ═══════════════════════════════════════════════════════════════════════════
+// HELPER: Detect degraded Supabase errors (503/timeout)
+// ═══════════════════════════════════════════════════════════════════════════
+function isDegradedSupabaseError(error) {
+  if (!error) return false;
+  const msg = (error?.message || "").toLowerCase();
+  const code = error?.code || "";
+  const status = error?.status || error?.statusCode;
+  
+  return (
+    status === 503 ||
+    code === "503" ||
+    msg.includes("503") ||
+    msg.includes("service unavailable") ||
+    msg.includes("upstream connect error") ||
+    msg.includes("disconnect/reset before headers") ||
+    msg.includes("connection timeout") ||
+    msg.includes("fetch failed") ||
+    msg.includes("network error") ||
+    msg.includes("failed to fetch")
+  );
+}
 
 export default function AdminSellers() {
   const navigate = useNavigate();
@@ -34,39 +58,51 @@ export default function AdminSellers() {
   const [actionType, setActionType] = useState("");
   const [statusReason, setStatusReason] = useState("");
 
+  // Track degraded state for error-truth UI
+  const [isLoadDegraded, setIsLoadDegraded] = useState(false);
+
   // ═══════════════════════════════════════════════════════════════════════════
-  // SELLERS LIST (SUPABASE READ)
+  // SELLERS LIST (SUPABASE READ) - With error-truth handling
   // ═══════════════════════════════════════════════════════════════════════════
-  const { data: sellers = [], isLoading } = useQuery({
+  const { data: sellers, isLoading, error: sellersError, refetch: refetchSellers } = useQuery({
     queryKey: ['all-sellers'],
     queryFn: async () => {
-      console.log("[ADMIN SELLERS][SUPABASE] Loading sellers...");
-      
       const { data, error } = await supabase
         .from("sellers")
         .select("*")
         .order("created_at", { ascending: false });
 
       if (error) {
-        console.error("[ADMIN SELLERS][SUPABASE] Load failed:", error);
+        console.error("[ADMIN SELLERS] Load failed:", error);
+        // Check if degraded
+        if (isDegradedSupabaseError(error)) {
+          setIsLoadDegraded(true);
+        } else {
+          setIsLoadDegraded(false);
+        }
         throw error;
       }
       
-      console.log("[ADMIN SELLERS][SUPABASE] Loaded", data?.length || 0, "sellers");
+      // Success - clear degraded state
+      setIsLoadDegraded(false);
       return data || [];
+    },
+    retry: (failureCount, error) => {
+      // Don't retry on degraded errors
+      if (isDegradedSupabaseError(error)) return false;
+      return failureCount < 2;
     }
   });
+
+  // Safe sellers array - never null, but track if it's from error state
+  const sellersData = sellers ?? [];
+  const hasLoadError = !!sellersError;
 
   // ═══════════════════════════════════════════════════════════════════════════
   // UPDATE SELLER STATUS (ATOMIC EDGE FUNCTION)
   // ═══════════════════════════════════════════════════════════════════════════
   const updateSellerMutation = useMutation({
     mutationFn: async ({ id, data, sellerUserId }) => {
-      console.log("[ADMIN SELLERS] Updating seller status via Edge Function...");
-      console.log("   Seller ID:", id);
-      console.log("   New Status:", data.status);
-      console.log("   User ID:", sellerUserId);
-
       // Single atomic Edge Function call handles:
       // 1. sellers.status update
       // 2. user_metadata sync
@@ -90,7 +126,6 @@ export default function AdminSellers() {
         throw new Error(response?.error || "Unknown error updating seller status");
       }
 
-      console.log("[ADMIN SELLERS] Edge Function success:", response.message);
       return response;
     },
     onSuccess: () => {
@@ -143,8 +178,6 @@ export default function AdminSellers() {
   };
 
   const handleViewData = (seller) => {
-    console.log("[ADMIN SELLERS][SUPABASE] View Data:", seller.id, seller.business_name);
-    
     if (!seller?.id) {
       alert("Error: Seller ID is missing. Please contact support.");
       console.error("❌ Seller ID is null or undefined:", seller);
@@ -156,8 +189,6 @@ export default function AdminSellers() {
   };
 
   const handleImpersonate = (seller) => {
-    console.log("[ADMIN SELLERS][SUPABASE] Impersonate:", seller.id, seller.business_name);
-    
     // Use seller.user_id directly (no Base44 BuyerProfile lookup)
     const impersonatedUserId = seller.user_id || seller.created_by;
     
@@ -172,10 +203,15 @@ export default function AdminSellers() {
   // ═══════════════════════════════════════════════════════════════════════════
   // FILTERS & UI HELPERS
   // ═══════════════════════════════════════════════════════════════════════════
-  const filteredSellers = sellers.filter(seller =>
+  const filteredSellers = sellersData.filter(seller =>
     seller.business_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
     seller.contact_email?.toLowerCase().includes(searchTerm.toLowerCase())
   );
+
+  // Stats - show "—" when degraded, actual counts when loaded successfully
+  const pendingCount = hasLoadError ? "—" : sellersData.filter(s => s.status === "pending").length;
+  const approvedCount = hasLoadError ? "—" : sellersData.filter(s => s.status === "approved").length;
+  const declinedCount = hasLoadError ? "—" : sellersData.filter(s => s.status === "declined").length;
 
   const statusColors = {
     pending: "bg-gray-100 text-gray-800 border-gray-200",
@@ -208,6 +244,48 @@ export default function AdminSellers() {
           </div>
         </div>
 
+        {/* Degraded Mode Banner */}
+        {isLoadDegraded && (
+          <Alert className="border-orange-300 bg-orange-50">
+            <AlertCircle className="h-5 w-5 text-orange-600" />
+            <AlertDescription className="flex items-center justify-between w-full">
+              <span className="text-orange-900">
+                <strong>Backend temporarily unavailable</strong> (Supabase 503/timeout). Data may be incomplete. Retry in a moment.
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => refetchSellers()}
+                className="ml-4 border-orange-300 text-orange-700 hover:bg-orange-100"
+              >
+                <RefreshCw className="w-4 h-4 mr-1" />
+                Retry
+              </Button>
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {/* Generic Error Banner (non-degraded) */}
+        {hasLoadError && !isLoadDegraded && (
+          <Alert className="border-red-300 bg-red-50">
+            <AlertCircle className="h-5 w-5 text-red-600" />
+            <AlertDescription className="flex items-center justify-between w-full">
+              <span className="text-red-900">
+                <strong>Failed to load sellers:</strong> {sellersError?.message || "Unknown error"}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => refetchSellers()}
+                className="ml-4 border-red-300 text-red-700 hover:bg-red-100"
+              >
+                <RefreshCw className="w-4 h-4 mr-1" />
+                Retry
+              </Button>
+            </AlertDescription>
+          </Alert>
+        )}
+
         {/* Search & Stats */}
         <div className="grid sm:grid-cols-5 gap-4">
           <div className="sm:col-span-2">
@@ -225,7 +303,7 @@ export default function AdminSellers() {
             <CardContent className="p-4">
               <p className="text-sm text-gray-600">Pending</p>
               <p className="text-2xl font-bold text-gray-600">
-                {sellers.filter(s => s.status === "pending").length}
+                {pendingCount}
               </p>
             </CardContent>
           </Card>
@@ -233,7 +311,7 @@ export default function AdminSellers() {
             <CardContent className="p-4">
               <p className="text-sm text-gray-600">Approved</p>
               <p className="text-2xl font-bold text-green-600">
-                {sellers.filter(s => s.status === "approved").length}
+                {approvedCount}
               </p>
             </CardContent>
           </Card>
@@ -241,7 +319,7 @@ export default function AdminSellers() {
             <CardContent className="p-4">
               <p className="text-sm text-gray-600">Declined</p>
               <p className="text-2xl font-bold text-red-600">
-                {sellers.filter(s => s.status === "declined").length}
+                {declinedCount}
               </p>
             </CardContent>
           </Card>
@@ -267,6 +345,26 @@ export default function AdminSellers() {
                     <TableRow>
                       <TableCell colSpan={6} className="text-center py-8">
                         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-600 mx-auto"></div>
+                      </TableCell>
+                    </TableRow>
+                  ) : hasLoadError ? (
+                    <TableRow>
+                      <TableCell colSpan={6} className="text-center py-8">
+                        <div className="flex flex-col items-center gap-3">
+                          <AlertCircle className="w-12 h-12 text-orange-500" />
+                          <p className="text-orange-700 font-medium">
+                            {isLoadDegraded ? "Unable to load sellers (backend unavailable)" : "Failed to load sellers"}
+                          </p>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => refetchSellers()}
+                            className="border-orange-300 text-orange-700 hover:bg-orange-100"
+                          >
+                            <RefreshCw className="w-4 h-4 mr-1" />
+                            Retry
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ) : filteredSellers.length === 0 ? (

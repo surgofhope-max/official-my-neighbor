@@ -1,5 +1,6 @@
 import { useEffect } from "react";
-import { supabaseApi as base44 } from "@/api/supabaseClient";
+import { supabase } from "@/lib/supabase/supabaseClient";
+import { supabaseApi as base44 } from "@/api/supabaseClient"; // Keep for functions
 
 /**
  * GIVI Tracker Component
@@ -28,7 +29,10 @@ export default function GiviTracker({ type, id }) {
       // Get current user (if logged in)
       let currentUser = null;
       try {
-        currentUser = await base44.auth.me();
+        const { data, error } = await supabase.auth.getUser();
+        if (!error && data?.user) {
+          currentUser = data.user;
+        }
       } catch (error) {
         // User not logged in, that's ok
       }

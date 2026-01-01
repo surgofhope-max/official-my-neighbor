@@ -5,6 +5,39 @@
  */
 
 import { supabase } from "@/lib/supabase/supabaseClient";
+import { emitAnalyticsEvent } from "./fulfillment";
+
+// TEMP DEBUG FLAG — set to false to silence debug logs
+const DEBUG_ORDERS = true;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// VALID ORDER PREDICATE (READ-SIDE ENFORCEMENT)
+// ═══════════════════════════════════════════════════════════════════════════════
+// An order is VALID if ALL are true:
+// 1) buyer_id !== seller_id (no self-purchase)
+// 2) status is one of: 'paid', 'fulfilled', 'completed'
+//
+// This filter excludes legacy self-purchase orders from all live reads.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Apply the valid-order status filter to a Supabase query.
+ * Filters orders to only include valid transaction statuses.
+ */
+const applyValidOrderStatusFilter = (query: ReturnType<typeof supabase.from>) => {
+  return query.in("status", ["paid", "fulfilled", "completed"]);
+};
+
+/**
+ * Filter out self-purchase orders from results.
+ * Applied client-side because Supabase/PostgREST doesn't support
+ * column-to-column comparison directly in query filters.
+ */
+const filterOutSelfPurchaseOrders = <T extends { buyer_id?: string; seller_id?: string }>(
+  orders: T[]
+): T[] => {
+  return orders.filter((order) => order.buyer_id !== order.seller_id);
+};
 
 // Error types for order creation
 export type OrderErrorType = 
@@ -92,7 +125,7 @@ export interface Order {
   buyer_name?: string;
   buyer_email?: string;
   buyer_phone?: string;
-  created_date?: string;
+  created_at?: string;
   paid_at?: string;
   ready_at?: string;
   picked_up_at?: string;
@@ -105,6 +138,9 @@ export interface CreateOrderInput {
   buyer_name: string;
   buyer_email: string;
   buyer_phone: string;
+  /** Legacy: seller's auth.users.id — FK target for orders.seller_id (DB constraint) */
+  seller_user_id: string;
+  /** Canonical: seller's entity ID (sellers.id) — written to orders.seller_entity_id */
   seller_id: string;
   show_id: string;
   product_id: string;
@@ -140,17 +176,20 @@ export async function getOrdersByBatchId(
   }
 
   try {
-    const { data, error } = await supabase
+    const baseQuery = supabase
       .from("orders")
       .select("*")
       .eq("batch_id", batchId);
+
+    const { data, error } = await applyValidOrderStatusFilter(baseQuery);
 
     if (error) {
       console.warn("Failed to fetch orders by batch ID:", error.message);
       return [];
     }
 
-    return (data as Order[]) ?? [];
+    // Apply self-purchase filter client-side
+    return filterOutSelfPurchaseOrders((data as Order[]) ?? []);
   } catch (err) {
     console.warn("Unexpected error fetching orders:", err);
     return [];
@@ -161,7 +200,7 @@ export async function getOrdersByBatchId(
  * Get all orders for a given buyer user ID.
  *
  * @param buyerId - The buyer's user ID
- * @returns Array of orders, sorted by created_date DESC
+ * @returns Array of orders, sorted by created_at DESC
  *
  * This function:
  * - Never throws
@@ -176,18 +215,21 @@ export async function getOrdersByBuyerId(
   }
 
   try {
-    const { data, error } = await supabase
+    const baseQuery = supabase
       .from("orders")
       .select("*")
       .eq("buyer_id", buyerId)
-      .order("created_date", { ascending: false });
+      .order("created_at", { ascending: false });
+
+    const { data, error } = await applyValidOrderStatusFilter(baseQuery);
 
     if (error) {
       console.warn("Failed to fetch orders by buyer ID:", error.message);
       return [];
     }
 
-    return (data as Order[]) ?? [];
+    // Apply self-purchase filter client-side
+    return filterOutSelfPurchaseOrders((data as Order[]) ?? []);
   } catch (err) {
     console.warn("Unexpected error fetching orders:", err);
     return [];
@@ -213,14 +255,20 @@ export async function getOrderById(
   }
 
   try {
-    const { data, error } = await supabase
+    const baseQuery = supabase
       .from("orders")
       .select("*")
-      .eq("id", orderId)
-      .maybeSingle();
+      .eq("id", orderId);
+
+    const { data, error } = await applyValidOrderStatusFilter(baseQuery).maybeSingle();
 
     if (error) {
       console.warn("Failed to fetch order by ID:", error.message);
+      return null;
+    }
+
+    // Apply self-purchase filter: return null if order is self-purchase
+    if (data && data.buyer_id === data.seller_id) {
       return null;
     }
 
@@ -234,7 +282,7 @@ export async function getOrderById(
 /**
  * Get all orders (for admin dashboard).
  *
- * @returns Array of all orders, sorted by created_date DESC
+ * @returns Array of all orders, sorted by created_at DESC
  *
  * This function:
  * - Never throws
@@ -243,17 +291,20 @@ export async function getOrderById(
  */
 export async function getAllOrders(): Promise<Order[]> {
   try {
-    const { data, error } = await supabase
+    const baseQuery = supabase
       .from("orders")
       .select("*")
-      .order("created_date", { ascending: false });
+      .order("created_at", { ascending: false });
+
+    const { data, error } = await applyValidOrderStatusFilter(baseQuery);
 
     if (error) {
       console.warn("Failed to fetch all orders:", error.message);
       return [];
     }
 
-    return (data as Order[]) ?? [];
+    // Apply self-purchase filter client-side
+    return filterOutSelfPurchaseOrders((data as Order[]) ?? []);
   } catch (err) {
     console.warn("Unexpected error fetching all orders:", err);
     return [];
@@ -300,6 +351,51 @@ export async function createOrder(
 export async function createOrderWithResult(
   input: CreateOrderInput
 ): Promise<CreateOrderResult> {
+  if (DEBUG_ORDERS) {
+    console.log("[ORDER] ========================================");
+    console.log("[ORDER] createOrderWithResult START");
+    console.log("[ORDER] input:", JSON.stringify(input, null, 2));
+    console.log("[ORDER] input.batch_id:", input.batch_id, "type:", typeof input.batch_id);
+    console.log("[ORDER] input.buyer_id:", input.buyer_id, "type:", typeof input.buyer_id);
+    console.log("[ORDER] input.seller_user_id:", input.seller_user_id, "type:", typeof input.seller_user_id);
+    console.log("[ORDER] input.seller_id:", input.seller_id, "type:", typeof input.seller_id);
+    console.log("[ORDER] input.show_id:", input.show_id, "type:", typeof input.show_id);
+    console.log("[ORDER] input.product_id:", input.product_id, "type:", typeof input.product_id);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // DUAL-WRITE VALIDATION (Step T3.6)
+  // Both seller identifiers are required for new orders
+  // ═══════════════════════════════════════════════════════════════════════════
+  if (!input.seller_user_id) {
+    console.error("[ORDER] Missing seller_user_id (legacy auth user ID) - cannot create order");
+    return { order: null, error: { type: "VALIDATION_ERROR", message: "Missing seller user ID", isSoldOut: false } };
+  }
+  if (!input.seller_id) {
+    console.error("[ORDER] Missing seller_id (entity ID) - cannot create order");
+    return { order: null, error: { type: "VALIDATION_ERROR", message: "Missing seller entity ID", isSoldOut: false } };
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SELF-PURCHASE GUARD (HARD BLOCK)
+  // A user cannot purchase from their own seller account.
+  // This preserves integrity across reviews, notifications, and analytics.
+  // ═══════════════════════════════════════════════════════════════════════════
+  if (input.buyer_id === input.seller_user_id) {
+    console.warn("[ORDER] Self-purchase blocked: buyer_id === seller_user_id", {
+      buyer_id: input.buyer_id,
+      seller_user_id: input.seller_user_id,
+    });
+    return {
+      order: null,
+      error: {
+        type: "VALIDATION_ERROR",
+        message: "You cannot purchase from your own store.",
+        isSoldOut: false,
+      },
+    };
+  }
+
   try {
     // QA HARDENING: Check for existing pending order to prevent duplicates
     // This handles double-click scenarios
@@ -314,7 +410,7 @@ export async function createOrderWithResult(
 
     if (existingOrder) {
       // Return existing pending order - allows payment retry
-      console.log("Returning existing pending order:", existingOrder.id);
+      if (DEBUG_ORDERS) console.log("[ORDER] Returning existing pending order:", existingOrder.id);
       return { order: existingOrder as Order, error: null };
     }
 
@@ -323,41 +419,85 @@ export async function createOrderWithResult(
     const orderStatus = isLivePayment ? "pending" : "paid";
     const paidAt = isLivePayment ? null : new Date().toISOString();
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // DUAL-WRITE (Step T3.6): Write both seller identifiers
+    // - seller_id: legacy auth.users.id (DB FK constraint)
+    // - seller_entity_id: canonical sellers.id (new canonical reference)
+    // ═══════════════════════════════════════════════════════════════════════════
+    const insertPayload = {
+      batch_id: input.batch_id,
+      buyer_id: input.buyer_id,
+      seller_id: input.seller_user_id,        // Legacy: auth.users.id (DB FK)
+      seller_entity_id: input.seller_id,      // Canonical: sellers.id (entity PK)
+      product_id: input.product_id,
+      show_id: input.show_id,
+      completion_code: input.completion_code,
+      price: input.price,
+      delivery_fee: input.delivery_fee ?? 0,
+      status: orderStatus,
+    };
+
+    if (DEBUG_ORDERS) {
+      console.log("[ORDER] INSERT payload:", JSON.stringify(insertPayload, null, 2));
+    }
+
     const { data, error } = await supabase
       .from("orders")
-      .insert({
-        batch_id: input.batch_id,
-        buyer_id: input.buyer_id,
-        buyer_name: input.buyer_name,
-        buyer_email: input.buyer_email,
-        buyer_phone: input.buyer_phone,
-        seller_id: input.seller_id,
-        show_id: input.show_id,
-        product_id: input.product_id,
-        product_title: input.product_title,
-        product_image_url: input.product_image_url || null,
-        price: input.price,
-        delivery_fee: input.delivery_fee || 0,
-        pickup_code: input.pickup_code,
-        pickup_location: input.pickup_location || "",
-        pickup_notes: input.pickup_notes || "",
-        group_code: input.group_code,
-        completion_code: input.completion_code,
-        quantity: 1, // Explicit quantity for inventory trigger
-        status: orderStatus,
-        paid_at: paidAt,
-      })
+      .insert(insertPayload)
       .select()
       .single();
 
     if (error) {
+      if (DEBUG_ORDERS) {
+        console.error("[ORDER] INSERT FAILED - Full error object:");
+        console.error("[ORDER]   message:", error.message);
+        console.error("[ORDER]   code:", error.code);
+        console.error("[ORDER]   details:", error.details);
+        console.error("[ORDER]   hint:", error.hint);
+        console.error("[ORDER]   full:", JSON.stringify(error, null, 2));
+      }
       const parsedError = parseOrderError(error);
       console.warn("Failed to create order:", parsedError.message);
+      if (DEBUG_ORDERS) {
+        console.log("[ORDER] createOrderWithResult END: FAILED");
+        console.log("[ORDER] ========================================");
+      }
       return { order: null, error: parsedError };
     }
 
+    if (DEBUG_ORDERS) {
+      console.log("[ORDER] INSERT SUCCESS - order.id:", data?.id);
+      console.log("[ORDER] createOrderWithResult END: SUCCESS");
+      console.log("[ORDER] ========================================");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // ANALYTICS: Emit order_created event (fail-open, non-blocking)
+    // Emits EXACTLY once per successful order insert
+    // Payload includes price for GMV calculation
+    // ─────────────────────────────────────────────────────────────────────────
+    emitAnalyticsEvent("order_created", {
+      order_id: data.id,
+      buyer_id: input.buyer_id,
+      seller_user_id: input.seller_user_id,  // Legacy: auth.users.id
+      seller_id: input.seller_id,            // Canonical: sellers.id (entity PK)
+      show_id: input.show_id,
+      batch_id: input.batch_id,
+      actor_user_id: input.buyer_id,  // Buyer is the actor
+      metadata: {
+        price: input.price,
+        product_id: input.product_id,
+        delivery_fee: input.delivery_fee ?? 0,
+      },
+    });
+
     return { order: data as Order, error: null };
   } catch (err) {
+    if (DEBUG_ORDERS) {
+      console.error("[ORDER] EXCEPTION:", err);
+      console.log("[ORDER] createOrderWithResult END: EXCEPTION");
+      console.log("[ORDER] ========================================");
+    }
     console.warn("Unexpected error creating order:", err);
     return {
       order: null,

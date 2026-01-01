@@ -1,12 +1,15 @@
 import React, { useState, useEffect, useRef } from "react";
-import { supabaseApi as base44 } from "@/api/supabaseClient";
+import { supabase } from "@/lib/supabase/supabaseClient";
 import { useQuery } from "@tanstack/react-query";
-import { getProductsByShowId, getProductById } from "@/api/products";
+import { getProductById } from "@/api/products";
+import { getShowProductsByShowId } from "@/api/showProducts";
+import { adaptShowProductsForBuyer } from "@/lib/adapters/buyerShowProductsAdapter";
 import { getShowById } from "@/api/shows";
 import { getSellerById } from "@/api/sellers";
 import { getBuyerProfileByUserId } from "@/api/buyers";
 import { getEffectiveUserContext } from "@/lib/auth/effectiveUser";
 import { isAdmin } from "@/lib/auth/routeGuards";
+import { isShowLive } from "@/api/streamSync";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -63,7 +66,10 @@ export default function LiveShow() {
   const [showChatOverlay, setShowChatOverlay] = useState(true);
   const [showSellerProfile, setShowSellerProfile] = useState(false);
   const [showWinnerBanner, setShowWinnerBanner] = useState(false);
+  const [showPurchaseBanner, setShowPurchaseBanner] = useState(false);
+  const [__auditSalesCount, set__auditSalesCount] = useState(null);
   const carouselRef = useRef(null);
+  const lastSalesCountRef = useRef(null); // null = not initialized yet
 
   // Product state (replacing React Query)
   const [allShowProducts, setAllShowProducts] = useState([]);
@@ -90,12 +96,22 @@ export default function LiveShow() {
   const useIvsPlayer = Boolean(show?.ivs_channel_arn && show?.ivs_playback_url);
 
   // Determine which chat system to use:
-  // - If using IVS Player → use Supabase-based live chat
-  // - Otherwise → use legacy Base44 chat
-  const useSupabaseChat = useIvsPlayer;
+  // SupabaseLiveChat renders when show is starting or live (lifecycle-based)
+  // Legacy chat is fallback for other states
+  const useSupabaseChat =
+    show?.stream_status === 'starting' ||
+    show?.stream_status === 'live';
 
   useEffect(() => {
     console.log("🎬 [LiveShow] MOUNT - showId:", showId);
+    
+    // AUDIT LOG - TEMPORARY: Verify Supabase client origin
+    console.log("[SUPABASE_CLIENT_AUDIT]", {
+      clientFile: "LiveShow.jsx imports from @/lib/supabase/supabaseClient",
+      hasServiceRole: false,
+      showId: showId
+    });
+    
     window.scrollTo(0, 0);
     
     // Minimal overscroll prevention
@@ -121,8 +137,10 @@ export default function LiveShow() {
 
   const loadUser = async () => {
     try {
-      const currentUser = await base44.auth.me();
-      if (!currentUser) {
+      const { data, error } = await supabase.auth.getUser();
+      const currentUser = data?.user ?? null;
+      
+      if (error || !currentUser) {
         setUser(null);
         setBuyerProfile(null);
         setIsAdminUser(false);
@@ -168,7 +186,15 @@ export default function LiveShow() {
         return;
       }
 
-      setShow(showData);
+      console.log("[SHOW_FETCH]", {
+        showId,
+        gotId: showData?.id,
+        sales_count: showData?.sales_count,
+        updated_at: showData?.updated_at
+      });
+
+      setShow({ ...showData });
+      set__auditSalesCount(showData?.sales_count ?? null);
       setShowError(null);
       setShowLoading(false);
 
@@ -216,7 +242,7 @@ export default function LiveShow() {
     }
   };
 
-  // Load show on mount and poll every 15 seconds
+  // Load show on mount and poll every 5 seconds (for sales_count updates / purchase banner)
   useEffect(() => {
     if (!showId) return;
 
@@ -224,7 +250,7 @@ export default function LiveShow() {
 
     const interval = setInterval(() => {
       loadShow();
-    }, 15000);
+    }, 5000);
 
     return () => clearInterval(interval);
   }, [showId]);
@@ -251,15 +277,19 @@ export default function LiveShow() {
     staleTime: 5000
   });
 
-  // Load products using Supabase API
+  // Load products using show_products table (via adapter for compatibility)
   const loadProducts = async () => {
     if (!showId) return;
 
     try {
-      const allProducts = await getProductsByShowId(showId);
+      // Fetch from show_products JOIN products (ordered by box_number)
+      const showProductsRaw = await getShowProductsByShowId(showId);
+      
+      // Adapt to flattened shape matching existing UI expectations
+      const allProducts = adaptShowProductsForBuyer(showProductsRaw);
 
       // Filter to available products:
-      // - Not a GIVI product
+      // - Not a GIVI product (now read from show_products.is_givi)
       // - Has quantity > 0
       // - Not sold out or hidden
       const availableProducts = allProducts.filter(product => {
@@ -302,6 +332,34 @@ export default function LiveShow() {
 
     return () => clearInterval(interval);
   }, [showId]);
+
+  // Listen for instant inventory refresh signal (from checkout success)
+  useEffect(() => {
+    const handler = () => loadProducts();
+    window.addEventListener("lm:inventory_updated", handler);
+    return () => window.removeEventListener("lm:inventory_updated", handler);
+  }, [showId]);
+
+  // Detect sales_count changes and show global purchase banner
+  useEffect(() => {
+    if (!show || typeof show.sales_count !== "number") return;
+
+    // Initialize on first load
+    if (lastSalesCountRef.current === null) {
+      lastSalesCountRef.current = show.sales_count;
+      console.log("[BANNER] init sales_count:", show.sales_count);
+      return;
+    }
+
+    // Detect increment
+    if (show.sales_count > lastSalesCountRef.current) {
+      console.log("[BANNER] sales_count changed:", { from: lastSalesCountRef.current, to: show.sales_count });
+      setShowPurchaseBanner(true);
+      setTimeout(() => setShowPurchaseBanner(false), 2000);
+    }
+
+    lastSalesCountRef.current = show.sales_count;
+  }, [show?.sales_count]);
 
   // Poll for featured product every 8 seconds
   useEffect(() => {
@@ -386,6 +444,14 @@ export default function LiveShow() {
   }, [featuredProduct?.id]);
 
   const handleBuyNow = (product) => {
+    // ═══════════════════════════════════════════════════════════════════════════
+    // LIFECYCLE GATING: Only allow buying when show is actually live
+    // ═══════════════════════════════════════════════════════════════════════════
+    if (!isShowLive(show)) {
+      console.warn("[LiveShow] Buy blocked - show is not live (stream_status !== 'live')");
+      return;
+    }
+    
     if (!user) {
       // Store return URL for post-login redirect
       sessionStorage.setItem('login_return_url', window.location.href);
@@ -508,7 +574,20 @@ export default function LiveShow() {
     );
   }
 
-  // Show ended or cancelled - graceful handling
+  // ═══════════════════════════════════════════════════════════════════════════
+  // LIFECYCLE GATING: Explicit handling of show states
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  // AUTHORITATIVE: stream_status === "live" is the ONLY rule for "is live"
+  const isShowActuallyLive = isShowLive(show);
+  
+  // UI FLAGS (derived, not stored):
+  // - canShowProducts: Show products during "starting" and "live" (NOT "ended")
+  // - canBuy: Only allow purchasing when stream_status === "live"
+  const canShowProducts = show?.stream_status === "starting" || show?.stream_status === "live";
+  const canBuy = isShowActuallyLive; // stream_status === "live"
+  
+  // Show ended or cancelled - graceful handling (no video, no buying)
   if (show.status === "ended" || show.status === "cancelled") {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-900 via-purple-900 to-blue-900 p-4">
@@ -532,6 +611,105 @@ export default function LiveShow() {
             </Button>
           </CardContent>
         </Card>
+      </div>
+    );
+  }
+  
+  // Scheduled show - preview-only UI (no video player, no product rail, no buying)
+  if (show.status === "scheduled" && !isShowActuallyLive) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-blue-900 p-4">
+        <GiviTracker type="show" id={showId} />
+        
+        {/* Header */}
+        <div className="fixed top-0 left-0 right-0 z-50 bg-gradient-to-b from-black/80 via-black/40 to-transparent p-3">
+          <div className="flex items-center justify-between max-w-7xl mx-auto">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="text-white hover:bg-white/20 rounded-full h-9 w-9 flex-shrink-0"
+              onClick={() => navigate(createPageUrl("Marketplace"))}
+            >
+              <ArrowLeft className="w-4 h-4" />
+            </Button>
+            <div className="flex-1 text-center px-2">
+              <h1 className="text-white font-bold text-sm line-clamp-1 leading-tight">{show.title}</h1>
+              <p className="text-purple-300 text-xs font-medium">
+                {seller?.business_name || "Loading..."}
+              </p>
+            </div>
+            <div className="w-9" /> {/* Spacer for alignment */}
+          </div>
+        </div>
+        
+        {/* Preview Content */}
+        <div className="flex flex-col items-center justify-center min-h-screen pt-16 pb-8">
+          {/* Show Preview Image */}
+          <div className="relative w-full max-w-2xl aspect-video rounded-2xl overflow-hidden mb-8">
+            {show.thumbnail_url ? (
+              <img
+                src={show.thumbnail_url}
+                alt={show.title}
+                className="w-full h-full object-cover"
+              />
+            ) : (
+              <div className="w-full h-full bg-gradient-to-br from-purple-800 to-blue-800 flex items-center justify-center">
+                <Radio className="w-20 h-20 text-white/30" />
+              </div>
+            )}
+            <div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent" />
+            
+            {/* Scheduled Badge */}
+            <div className="absolute top-4 left-4">
+              <Badge className="bg-blue-500/90 text-white border-0 px-3 py-1">
+                <Radio className="w-3 h-3 mr-1" />
+                SCHEDULED
+              </Badge>
+            </div>
+          </div>
+          
+          {/* Show Details */}
+          <Card className="max-w-md w-full bg-white/10 backdrop-blur-md border-white/20">
+            <CardContent className="p-6 text-center">
+              <h2 className="text-2xl font-bold text-white mb-2">{show.title}</h2>
+              <p className="text-white/70 mb-4">{show.description || "No description provided"}</p>
+              
+              {/* Seller Info */}
+              <div className="flex items-center justify-center gap-3 mb-6">
+                {seller?.profile_image_url && (
+                  <img
+                    src={seller.profile_image_url}
+                    alt={seller.business_name}
+                    className="w-10 h-10 rounded-full object-cover"
+                  />
+                )}
+                <div className="text-left">
+                  <p className="text-white font-medium">{seller?.business_name}</p>
+                  {seller?.pickup_city && (
+                    <p className="text-white/60 text-xs flex items-center gap-1">
+                      <MapPin className="w-3 h-3" />
+                      {seller.pickup_city}, {seller.pickup_state}
+                    </p>
+                  )}
+                </div>
+              </div>
+              
+              {/* Scheduled Time */}
+              {show.scheduled_start_time && (
+                <div className="bg-white/10 rounded-lg p-4 mb-4">
+                  <p className="text-white/60 text-sm mb-1">Starting at</p>
+                  <p className="text-white font-bold text-lg">
+                    {new Date(show.scheduled_start_time).toLocaleString()}
+                  </p>
+                </div>
+              )}
+              
+              <p className="text-white/60 text-sm">
+                Products and buying will be available once the show goes live.
+              </p>
+            </CardContent>
+          </Card>
+        </div>
       </div>
     );
   }
@@ -582,6 +760,23 @@ export default function LiveShow() {
         winnerName={activeGIVI?.winner_names?.[0]}
         onDismiss={() => setShowWinnerBanner(false)}
       />
+
+      {/* Global Purchase Confirmation Banner */}
+      {showPurchaseBanner && (
+        <div
+          style={{
+            position: "fixed",
+            top: "16px",
+            left: "50%",
+            transform: "translateX(-50%)",
+            zIndex: 99999,
+            pointerEvents: "none"
+          }}
+          className="bg-green-600 text-white px-5 py-2 rounded-full shadow-lg text-sm font-semibold"
+        >
+          🎉 New purchase just made!
+        </div>
+      )}
 
       {/* CRITICAL: GIVI Overlay - Rendered BEFORE stream elements with high z-index */}
       {/* Must appear even when "Waiting for Stream" is shown */}
@@ -646,7 +841,7 @@ export default function LiveShow() {
                 <Users className="w-3 h-3 mr-1" />
                 {show.viewer_count || 0}
               </Badge>
-              {show.is_streaming && (
+              {isShowActuallyLive && (
                 <Badge className="bg-red-500 text-white border-0 animate-pulse text-xs px-2 py-0.5">
                   <Radio className="w-3 h-3 mr-1" />
                   LIVE
@@ -680,8 +875,8 @@ export default function LiveShow() {
           )
         )}
 
-        {/* Product Carousel */}
-        {allShowProducts.length > 0 && (
+        {/* Product Carousel - Show during "starting" and "live", hide when "ended" */}
+        {canShowProducts && allShowProducts.length > 0 && (
           <div 
             className="fixed left-0 right-0 z-[90] animate-fade-in"
             style={{ 
@@ -869,19 +1064,22 @@ export default function LiveShow() {
                 <div className="mt-2 relative z-20">
                   <button
                     className={`w-full h-12 relative group flex items-center justify-center gap-3 transition-all rounded-xl overflow-hidden
-                      ${expandedProduct.status === 'locked' ? 'bg-gray-800/80 cursor-not-allowed' : 
+                      ${!canBuy ? 'bg-gray-800/80 cursor-not-allowed' :
+                        expandedProduct.status === 'locked' ? 'bg-gray-800/80 cursor-not-allowed' : 
                         expandedProduct.status === 'sold' ? 'bg-gray-800/80 cursor-not-allowed' : 
                         'hover:scale-[1.02] active:scale-95'
                       }`}
                     onClick={() => handleBuyNow(expandedProduct)}
-                    disabled={expandedProduct.status === "locked" || expandedProduct.status === "sold"}
+                    disabled={!canBuy || expandedProduct.status === "locked" || expandedProduct.status === "sold"}
                   >
                     {/* Background Aura for Active State */}
-                    {expandedProduct.status !== 'locked' && expandedProduct.status !== 'sold' && (
+                    {canBuy && expandedProduct.status !== 'locked' && expandedProduct.status !== 'sold' && (
                        <div className="absolute inset-0 bg-gradient-to-r from-[#00FF2A]/10 to-[#4D9FFF]/10 animate-pulse-slow"></div>
                     )}
 
-                    {expandedProduct.status === "locked" ? (
+                    {!canBuy ? (
+                       <span className="text-gray-400 font-bold text-sm">Waiting for host to go live...</span>
+                    ) : expandedProduct.status === "locked" ? (
                        <span className="text-gray-400 font-bold flex items-center gap-2"><Lock className="w-4 h-4"/> LOCKED</span>
                     ) : expandedProduct.status === "sold" ? (
                        <span className="text-gray-400 font-bold">SOLD OUT</span>
@@ -944,11 +1142,19 @@ export default function LiveShow() {
 
       {/* DESKTOP VIEW - 3-Column Whatnot Layout */}
       <div className="hidden sm:grid sm:grid-cols-[25%_50%_25%] h-screen bg-black">
-        {/* LEFT COLUMN - Products Panel */}
+        {/* LEFT COLUMN - Products Panel - GATED: Only show when live */}
         <div className="bg-gray-900 overflow-y-auto p-4 space-y-4">
           <h2 className="text-white font-bold text-lg mb-4">Products</h2>
           
-          {allShowProducts.map((product) => {
+          {/* Show waiting message if show ended */}
+          {!canShowProducts && (
+            <div className="text-center py-8">
+              <ShoppingBag className="w-12 h-12 text-gray-500 mx-auto mb-3" />
+              <p className="text-gray-400 text-sm">This show has ended</p>
+            </div>
+          )}
+          
+          {canShowProducts && allShowProducts.map((product) => {
             const isFeatured = product.id === featuredProduct?.id;
             return (
               <div
@@ -1074,7 +1280,7 @@ export default function LiveShow() {
                   <Users className="w-4 h-4 mr-1" />
                   {show.viewer_count || 0}
                 </Badge>
-                {show.is_streaming && (
+                {isShowActuallyLive && (
                   <Badge className="bg-red-500 text-white border-0 animate-pulse">
                     <Radio className="w-4 h-4 mr-1" />
                     LIVE
@@ -1135,8 +1341,8 @@ export default function LiveShow() {
         />
       )}
 
-      {/* Checkout Overlay */}
-      {showCheckout && selectedProduct && seller && (
+      {/* Checkout Overlay - GATED: Only render when canBuy (stream_status === "live") */}
+      {canBuy && showCheckout && selectedProduct && seller && (
         <div className="fixed inset-0 z-[200]">
           <CheckoutOverlay
             product={selectedProduct}
@@ -1202,6 +1408,27 @@ export default function LiveShow() {
           animation: pulse-slow 3s ease-in-out infinite;
         }
       `}</style>
+
+      {/* TEMPORARY AUDIT INDICATOR - REMOVE AFTER TESTING */}
+      {__auditSalesCount !== null && (
+        <div
+          style={{
+            position: "fixed",
+            bottom: "8px",
+            right: "8px",
+            zIndex: 99999,
+            background: "rgba(0,0,0,0.75)",
+            color: "#00ff99",
+            fontSize: "11px",
+            padding: "4px 6px",
+            borderRadius: "4px",
+            pointerEvents: "none",
+            fontFamily: "monospace"
+          }}
+        >
+          AUDIT sales_count: {__auditSalesCount}
+        </div>
+      )}
     </div>
   );
 }

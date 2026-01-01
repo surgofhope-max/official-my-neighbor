@@ -143,8 +143,10 @@ export async function hasIvsConfigured(showId: string): Promise<boolean> {
 /**
  * Check the current stream status for a show.
  *
+ * AUTHORITATIVE: Returns stream_status directly. "live" means live.
+ *
  * @param showId - The show ID to check
- * @returns The stream status or null
+ * @returns The stream_status value or null
  */
 export async function getStreamStatus(
   showId: string
@@ -156,7 +158,7 @@ export async function getStreamStatus(
   try {
     const { data, error } = await supabase
       .from("shows")
-      .select("stream_status, is_streaming")
+      .select("stream_status")
       .eq("id", showId)
       .single();
 
@@ -164,11 +166,7 @@ export async function getStreamStatus(
       return null;
     }
 
-    // Prioritize is_streaming flag if true
-    if (data.is_streaming) {
-      return "live";
-    }
-
+    // AUTHORITATIVE: Return stream_status directly
     return data.stream_status || null;
   } catch {
     return null;

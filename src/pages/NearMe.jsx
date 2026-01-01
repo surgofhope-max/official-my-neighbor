@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect } from "react";
-import { supabaseApi as base44 } from "@/api/supabaseClient";
+import { supabase } from "@/lib/supabase/supabaseClient";
+import { supabaseApi as base44 } from "@/api/supabaseClient"; // Keep for non-Seller entities
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -12,6 +13,51 @@ import { createPageUrl } from "@/utils";
 import LiveShowCard from "../components/marketplace/LiveShowCard";
 import SellerCard from "../components/marketplace/SellerCard";
 import CommunityCard from "../components/marketplace/CommunityCard";
+import { getLiveShows, getScheduledShows } from "@/api/shows";
+
+// LIGHT CARD fields for seller_cards (Near Me display)
+const SELLER_CARD_LIGHT_FIELDS = `
+  seller_id,
+  display_name,
+  avatar_url,
+  buyer_avatar_url,
+  banner_url,
+  short_bio,
+  city,
+  state,
+  follower_count,
+  rating_average,
+  rating_count,
+  total_items_sold,
+  is_accepting_orders,
+  live_show_id
+`.replace(/\s+/g, '');
+
+/**
+ * Maps seller_cards row to legacy Seller shape expected by SellerCard/LiveShowCard
+ */
+function mapSellerCardToLegacy(card) {
+  if (!card) return null;
+  
+  // Compute effective avatar: seller override > buyer fallback > null
+  const effective_profile_image_url = card.avatar_url || card.buyer_avatar_url || null;
+  
+  return {
+    id: card.seller_id,
+    business_name: card.display_name,
+    profile_image_url: effective_profile_image_url,
+    background_image_url: card.banner_url,
+    bio: card.short_bio,
+    pickup_city: card.city,
+    pickup_state: card.state,
+    follower_count: card.follower_count || 0,
+    rating_average: card.rating_average || 0,
+    rating_count: card.rating_count || 0,
+    total_sales: card.total_items_sold || 0,
+    stripe_connected: card.is_accepting_orders || false,
+    live_show_id: card.live_show_id,
+  };
+}
 
 export default function NearMe() {
   const navigate = useNavigate();
@@ -42,37 +88,82 @@ export default function NearMe() {
 
   const loadUser = async () => {
     try {
-      const currentUser = await base44.auth.me();
-      setUser(currentUser);
+      const { data, error } = await supabase.auth.getUser();
+      if (error) {
+        setUser(null);
+        return;
+      }
+      setUser(data?.user ?? null);
     } catch (error) {
       setUser(null);
     }
   };
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STEP C6-E.7: Aligned to use Supabase API (same as Marketplace)
+  // Uses status === "live" for discovery (show lifecycle state)
+  // ═══════════════════════════════════════════════════════════════════════════
   const { data: liveShows = [] } = useQuery({
     queryKey: ['nearme-live-shows'],
-    queryFn: () => base44.entities.Show.filter({ status: "live" }, '-viewer_count'),
+    queryFn: async () => {
+      const shows = await getLiveShows();
+      // Sort by viewer_count descending (matching legacy behavior)
+      return [...shows].sort((a, b) => (b.viewer_count || 0) - (a.viewer_count || 0));
+    },
     refetchInterval: 5000
   });
 
   const { data: upcomingShows = [] } = useQuery({
     queryKey: ['nearme-upcoming-shows'],
-    queryFn: () => base44.entities.Show.filter({ status: "scheduled" }, '-scheduled_start'),
+    queryFn: async () => {
+      const shows = await getScheduledShows();
+      // Sort by scheduled_start descending (matching legacy behavior)
+      return [...shows].sort((a, b) => 
+        new Date(b.scheduled_start_time || 0).getTime() - new Date(a.scheduled_start_time || 0).getTime()
+      );
+    },
   });
 
+  // Single seller_cards query replaces both Seller.filter and Seller.list
   const { data: sellers = [] } = useQuery({
-    queryKey: ['nearme-sellers'],
-    queryFn: () => base44.entities.Seller.filter({ status: "approved" }, '-total_sales'),
+    queryKey: ['nearme-seller-cards'],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('seller_cards')
+        .select(SELLER_CARD_LIGHT_FIELDS)
+        .order('follower_count', { ascending: false })
+        .limit(100);
+      
+      if (error) {
+        console.error("[NearMe] seller_cards query error:", error.message);
+        return [];
+      }
+      
+      console.log("NearMe: seller_cards fetched count =", data?.length || 0);
+      
+      // Map to legacy shape for downstream components
+      return (data || []).map(mapSellerCardToLegacy);
+    },
   });
 
-  const { data: allSellers = [] } = useQuery({
-    queryKey: ['all-sellers-nearme'],
-    queryFn: () => base44.entities.Seller.list(),
-  });
-
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STEP C6-E.1: Fetch communities from Supabase (replaces Base44)
+  // ═══════════════════════════════════════════════════════════════════════════
   const { data: communities = [] } = useQuery({
     queryKey: ['nearme-communities'],
-    queryFn: () => base44.entities.Community.filter({ is_active: true }, 'sort_order'),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("communities")
+        .select("id, name, label, icon_name, bg_image_url, color_gradient, zip_code, sort_order")
+        .eq("is_active", true)
+        .order("sort_order", { ascending: true });
+      
+      if (error) {
+        console.error("[NearMe] Communities query error:", error.message);
+        return [];
+      }
+      return data ?? [];
+    },
   });
 
   const { data: followedSellers = [] } = useQuery({
@@ -95,7 +186,8 @@ export default function NearMe() {
     enabled: !!user
   });
 
-  const sellersMap = allSellers.reduce((acc, seller) => {
+  // Build sellersMap from seller_cards (now mapped to legacy shape)
+  const sellersMap = sellers.reduce((acc, seller) => {
     acc[seller.id] = seller;
     return acc;
   }, {});

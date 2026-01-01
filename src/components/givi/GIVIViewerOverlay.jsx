@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { supabaseApi as base44 } from "@/api/supabaseClient";
+import { supabase } from "@/lib/supabase/supabaseClient";
+import { supabaseApi as base44 } from "@/api/supabaseClient"; // Keep for entities
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -28,8 +29,12 @@ export default function GIVIViewerOverlay({ show, seller }) {
 
   const loadUser = async () => {
     try {
-      const currentUser = await base44.auth.me();
-      setUser(currentUser);
+      const { data, error } = await supabase.auth.getUser();
+      if (error) {
+        setUser(null);
+        return;
+      }
+      setUser(data?.user ?? null);
     } catch (error) {
       setUser(null);
     }
@@ -458,12 +463,13 @@ export default function GIVIViewerOverlay({ show, seller }) {
   const handleEnterGIVI = async () => {
     if (!user) {
       console.log("🔐 User not logged in - redirecting to login");
-      base44.auth.redirectToLogin(window.location.href);
+      sessionStorage.setItem("login_return_url", window.location.href);
+      window.location.href = "/Login";
       return;
     }
 
     // SAFETY CHECK: Verify buyer safety agreement before entering GIVI
-    if (user.buyer_safety_agreed !== true) {
+    if (user.user_metadata?.buyer_safety_agreed !== true) {
       console.log("🛡️ User hasn't agreed to buyer safety - redirecting");
       window.location.href = `/BuyerSafetyAgreement?redirect=LiveShow`;
       return;

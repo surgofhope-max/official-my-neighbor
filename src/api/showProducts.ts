@@ -68,7 +68,7 @@ export async function getShowProductsByShowId(
           original_price,
           quantity,
           quantity_sold,
-          images,
+          image_urls,
           category,
           status,
           givi_type

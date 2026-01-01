@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
-import { supabaseApi as base44 } from "@/api/supabaseClient";
+import { supabase } from "@/lib/supabase/supabaseClient";
 import { useQuery } from "@tanstack/react-query";
+import { SHOWS_ADMIN_FIELDS } from "@/api/shows";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -28,6 +29,7 @@ import {
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
+import { isAdmin } from "@/lib/auth/routeGuards";
 import SellerAnalyticsTab from "../components/analytics/SellerAnalyticsTab";
 import BuyerAnalyticsTab from "../components/analytics/BuyerAnalyticsTab";
 import CommunityAnalyticsTab from "../components/analytics/CommunityAnalyticsTab";
@@ -46,9 +48,19 @@ export default function AdminAnalytics() {
 
   const loadUser = async () => {
     try {
-      const currentUser = await base44.auth.me();
-      if (currentUser.role !== "admin") {
-        alert("Unauthorized - Admin access required");
+      const { data, error } = await supabase.auth.getUser();
+      if (error) {
+        console.error("[AdminAnalytics] auth load failed", error);
+        navigate(createPageUrl("Login"));
+        return;
+      }
+      const currentUser = data?.user ?? null;
+      if (!currentUser) {
+        navigate(createPageUrl("Login"));
+        return;
+      }
+      // ADMIN GATING: Uses DB truth (public.users.role), allows 'admin' OR 'super_admin'
+      if (!isAdmin(currentUser)) {
         navigate(createPageUrl("Marketplace"));
         return;
       }
@@ -77,62 +89,163 @@ export default function AdminAnalytics() {
 
   const { start: startDate, end: endDate } = getDateRange();
 
-  // Fetch overview metrics
-  const { data: payments = [] } = useQuery({
-    queryKey: ['admin-payments'],
-    queryFn: () => base44.entities.Payment.list(),
-    enabled: !!user
+  // ─────────────────────────────────────────────────────────────────────────
+  // ANALYTICS KPIs from admin_analytics_kpis view (Supabase)
+  // Provides high-level totals for overview stats
+  // ─────────────────────────────────────────────────────────────────────────
+  const { data: analyticsKpis } = useQuery({
+    queryKey: ['admin-analytics-kpis'],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("admin_analytics_kpis")
+        .select("*")
+        .limit(1)
+        .maybeSingle();
+      
+      if (error) {
+        console.warn("[AdminAnalytics] Failed to load analytics KPIs:", error.message);
+        return null;
+      }
+      return data;
+    },
+    enabled: !!user,
+    staleTime: 30000,
   });
 
-  const { data: refunds = [] } = useQuery({
-    queryKey: ['admin-refunds'],
-    queryFn: () => base44.entities.Refund.list(),
-    enabled: !!user
+  // ─────────────────────────────────────────────────────────────────────────
+  // ORDER FULFILLMENT ANALYTICS from admin_order_fulfillment_analytics view
+  // Provides per-order data with seller/buyer/show context
+  // ─────────────────────────────────────────────────────────────────────────
+  const { data: orderAnalytics = [] } = useQuery({
+    queryKey: ['admin-order-fulfillment-analytics'],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("admin_order_fulfillment_analytics")
+        .select("*");
+      
+      if (error) {
+        console.warn("[AdminAnalytics] Failed to load order analytics:", error.message);
+        return [];
+      }
+      return data || [];
+    },
+    enabled: !!user,
+    staleTime: 30000,
   });
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // ENTITY DATA for child tabs (Supabase direct queries)
+  // These replace broken base44.entities.* queries
+  // ─────────────────────────────────────────────────────────────────────────
   const { data: sellers = [] } = useQuery({
     queryKey: ['admin-sellers'],
-    queryFn: () => base44.entities.Seller.list(),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("sellers")
+        .select("*");
+      if (error) {
+        console.warn("[AdminAnalytics] Failed to load sellers:", error.message);
+        return [];
+      }
+      return data || [];
+    },
     enabled: !!user
   });
 
   const { data: buyers = [] } = useQuery({
     queryKey: ['admin-buyers'],
-    queryFn: () => base44.entities.BuyerProfile.list(),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("buyer_profiles")
+        .select("*");
+      if (error) {
+        console.warn("[AdminAnalytics] Failed to load buyers:", error.message);
+        return [];
+      }
+      return data || [];
+    },
     enabled: !!user
   });
 
   const { data: orders = [] } = useQuery({
     queryKey: ['admin-orders'],
-    queryFn: () => base44.entities.Order.list(),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("orders")
+        .select("*");
+      if (error) {
+        console.warn("[AdminAnalytics] Failed to load orders:", error.message);
+        return [];
+      }
+      return data || [];
+    },
     enabled: !!user
   });
 
+  // Shows query (ADMIN context - full access)
   const { data: shows = [] } = useQuery({
     queryKey: ['admin-shows'],
-    queryFn: () => base44.entities.Show.list(),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("shows")
+        .select(SHOWS_ADMIN_FIELDS);
+      if (error) {
+        console.warn("[AdminAnalytics] Failed to load shows:", error.message);
+        return [];
+      }
+      return data || [];
+    },
     enabled: !!user
   });
 
   const { data: communities = [] } = useQuery({
     queryKey: ['admin-communities'],
-    queryFn: () => base44.entities.Community.list(),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("communities")
+        .select("*");
+      if (error) {
+        console.warn("[AdminAnalytics] Failed to load communities:", error.message);
+        return [];
+      }
+      return data || [];
+    },
     enabled: !!user
   });
 
-  // Calculate overview metrics
-  const totalGMV = payments
-    .filter(p => new Date(p.created_date) >= startDate && new Date(p.created_date) <= endDate)
-    .reduce((sum, p) => sum + (p.amount || 0), 0);
+  // ─────────────────────────────────────────────────────────────────────────
+  // DERIVED DATA for child tabs
+  // Transform analytics data into shapes expected by child tabs
+  // ─────────────────────────────────────────────────────────────────────────
+  
+  // Build payments-like array from order analytics for child tabs
+  // Child tabs expect: { seller_id, seller_entity_id, buyer_id, amount, ... }
+  // Include both seller IDs for canonical + legacy fallback matching
+  const payments = orderAnalytics.map(o => ({
+    id: o.order_id,
+    order_id: o.order_id,
+    seller_id: o.seller_user_id || o.seller_entity_id || null, // Legacy fallback
+    seller_entity_id: o.seller_entity_id || null,              // Canonical (new orders)
+    seller_name: o.seller_name || null,                        // For direct display
+    buyer_id: o.buyer_id,
+    amount: parseFloat(o.order_amount) || 0,                   // Correct field from view
+    application_fee: 0, // Platform fee not tracked in analytics_events yet
+    created_date: o.order_created_at,
+    created_at: o.order_created_at,
+    stripe_charge_id: null, // Not available from analytics
+    status: "succeeded",
+  }));
 
-  const totalRefunds = refunds
-    .filter(r => new Date(r.created_date) >= startDate && new Date(r.created_date) <= endDate)
-    .reduce((sum, r) => sum + (r.amount || 0), 0);
+  // Empty refunds array - refunds not yet tracked in analytics_events
+  const refunds = [];
 
-  const platformFees = payments
-    .filter(p => new Date(p.created_date) >= startDate && new Date(p.created_date) <= endDate)
-    .reduce((sum, p) => sum + (p.application_fee || 0), 0);
-
+  // ─────────────────────────────────────────────────────────────────────────
+  // OVERVIEW STATS from admin_analytics_kpis view
+  // Uses analytics-backed totals instead of client-side aggregation
+  // ─────────────────────────────────────────────────────────────────────────
+  const totalGMV = parseFloat(analyticsKpis?.total_gmv || 0);
+  const totalRefunds = 0; // Refunds not yet tracked
+  const platformFees = 0; // Platform fees not yet tracked in analytics_events
   const netRevenue = totalGMV - totalRefunds;
 
   const overviewStats = [
@@ -143,20 +256,20 @@ export default function AdminAnalytics() {
       color: "from-green-500 to-emerald-500"
     },
     {
-      title: "Platform Fees",
-      value: `$${platformFees.toFixed(2)}`,
-      icon: DollarSign,
+      title: "Total Orders",
+      value: analyticsKpis?.total_orders ?? 0,
+      icon: ShoppingBag,
       color: "from-purple-500 to-pink-500"
     },
     {
-      title: "Total Refunds",
-      value: `$${totalRefunds.toFixed(2)}`,
+      title: "Fulfilled Orders",
+      value: analyticsKpis?.fulfilled_orders ?? 0,
       icon: RefreshCw,
       color: "from-orange-500 to-red-500"
     },
     {
-      title: "Net Revenue",
-      value: `$${netRevenue.toFixed(2)}`,
+      title: "Batches Picked Up",
+      value: analyticsKpis?.batches_picked_up ?? 0,
       icon: DollarSign,
       color: "from-blue-500 to-cyan-500"
     }
@@ -259,6 +372,26 @@ export default function AdminAnalytics() {
           ))}
         </div>
 
+        {/* Stripe Connect Notice - shown when GMV is 0 */}
+        {totalGMV === 0 && (
+          <Card className="border-0 shadow-md bg-amber-50 border-l-4 border-l-amber-400">
+            <CardContent className="p-4">
+              <div className="flex items-start gap-3">
+                <Layers className="w-5 h-5 text-amber-600 mt-0.5 flex-shrink-0" />
+                <div>
+                  <p className="text-sm font-medium text-amber-800">
+                    Stripe Connect Not Yet Enabled
+                  </p>
+                  <p className="text-sm text-amber-700 mt-1">
+                    Revenue analytics will populate after Stripe payments are active. 
+                    Platform fees are calculated from Stripe Connect application fees.
+                  </p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Tabs for Sellers, Buyers & Communities */}
         <Tabs defaultValue="sellers" className="space-y-6">
           <TabsList className="grid w-full max-w-2xl grid-cols-3">
@@ -297,6 +430,7 @@ export default function AdminAnalytics() {
               payments={payments}
               refunds={refunds}
               orders={orders}
+              sellers={sellers}
             />
           </TabsContent>
 

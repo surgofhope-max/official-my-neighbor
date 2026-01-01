@@ -3,7 +3,7 @@ import { supabaseApi as base44 } from "@/api/supabaseClient";
 import { supabase } from "@/lib/supabase/supabaseClient";
 import { useSupabaseAuth } from "@/lib/auth/SupabaseAuthProvider";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { isSuperAdmin } from "@/lib/auth/routeGuards";
+import { isSuperAdmin, requireSellerAsync, isAdmin } from "@/lib/auth/routeGuards";
 import { getShowsBySellerId, createShow } from "@/api/shows";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -37,6 +37,9 @@ import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import ShowForm from "../components/shows/ShowForm";
 import ProductForm from "../components/products/ProductForm";
+
+// Debug flag for goLive instrumentation logs
+const DEBUG_GO_LIVE = true;
 
 export default function SellerShows() {
   const navigate = useNavigate();
@@ -75,92 +78,83 @@ export default function SellerShows() {
       // Auth is already checked by useEffect - authUser is guaranteed to exist here
       const currentUser = authUser;
       setUser(currentUser);
-      const userRole = currentUser.user_metadata?.role || currentUser.role;
-      console.log("👤 SellerShows - Current user:", currentUser.email, "Role:", userRole);
 
-      // 🔐 SUPER_ADMIN BYPASS: Skip ALL checks
+      // ═══════════════════════════════════════════════════════════════════════════
+      // OPTION B SELLER GATING (STEP 3 REFACTOR)
+      // User is seller IFF: public.users.role='seller' AND sellers.status='approved'
+      // ═══════════════════════════════════════════════════════════════════════════
+
+      // 🔐 SUPER_ADMIN BYPASS: Full system authority
       if (isSuperAdmin(currentUser)) {
-        console.log("🔑 SUPER_ADMIN detected — bypassing all checks in SellerShows");
-        // Load seller if exists, but don't require it
+        console.log("[SellerGate] SUPER_ADMIN bypass - full access");
         const { data: sellerProfile } = await supabase
           .from("sellers")
           .select("*")
           .eq("user_id", currentUser.id)
           .maybeSingle();
-        
         if (sellerProfile) {
           setSeller(sellerProfile);
         }
         return;
       }
 
-      // CRITICAL: Check for onboarding reset - must complete full onboarding again
-      if (userRole !== "admin" && currentUser.user_metadata?.seller_onboarding_reset === true) {
-        console.log("🔄 Seller onboarding reset detected - redirecting to full onboarding");
-        navigate(createPageUrl("SellerSafetyAgreement"), { replace: true });
-        return;
-      }
-
-      // Check for seller safety agreement
-      if (userRole !== "admin" && currentUser.user_metadata?.seller_safety_agreed !== true) {
-        console.log("🛡️ Seller safety agreement required - redirecting");
-        navigate(createPageUrl("SellerSafetyAgreement"), { replace: true });
-        return;
-      }
-
-      // Check for seller onboarding completion
-      if (userRole !== "admin" && !currentUser.user_metadata?.seller_onboarding_completed) {
-        console.log("📋 Seller onboarding incomplete - redirecting");
-        navigate(createPageUrl("SellerOnboarding"), { replace: true });
-        return;
-      }
-
-      // Check if admin is impersonating
-      const impersonatingSellerId = sessionStorage.getItem('admin_impersonate_seller_id');
-
-      if (impersonatingSellerId && userRole === "admin") {
-        const { data: impersonatedSeller } = await supabase
+      // 🔐 ADMIN BYPASS: Admins can access seller routes
+      if (isAdmin(currentUser)) {
+        console.log("[SellerGate] Admin bypass - access granted");
+        // Check for impersonation
+        const impersonatingSellerId = sessionStorage.getItem('admin_impersonate_seller_id');
+        if (impersonatingSellerId) {
+          const { data: impersonatedSeller } = await supabase
+            .from("sellers")
+            .select("*")
+            .eq("id", impersonatingSellerId)
+            .maybeSingle();
+          if (impersonatedSeller) {
+            setSeller(impersonatedSeller);
+            console.log("🔧 Admin impersonating seller in Shows:", impersonatedSeller.business_name);
+            return;
+          }
+        }
+        // Admin's own seller profile
+        const { data: sellerProfile } = await supabase
           .from("sellers")
           .select("*")
-          .eq("id", impersonatingSellerId)
+          .eq("user_id", currentUser.id)
           .maybeSingle();
-
-        if (impersonatedSeller) {
-          setSeller(impersonatedSeller);
-          console.log("🔧 Admin impersonating seller in Shows:", impersonatedSeller.business_name);
-          return; // Exit loadSeller early if impersonating
+        if (sellerProfile) {
+          setSeller(sellerProfile);
         }
+        return;
       }
 
-      // Load seller by user_id
-      const { data: sellerProfile, error: sellerError } = await supabase
-        .from("sellers")
-        .select("*")
-        .eq("user_id", currentUser.id)
-        .maybeSingle();
+      // ═══════════════════════════════════════════════════════════════════════════
+      // OPTION B CHECK: Query DB for role + seller status
+      // ═══════════════════════════════════════════════════════════════════════════
+      const sellerCheck = await requireSellerAsync(currentUser.id);
+      
+      console.log("[SellerGate] SellerShows check:", {
+        ok: sellerCheck.ok,
+        role: sellerCheck.role,
+        sellerStatus: sellerCheck.sellerStatus,
+        reason: sellerCheck.reason
+      });
 
-      if (sellerError && sellerError.code !== "PGRST116") {
-        throw sellerError;
-      }
-
-      if (sellerProfile) {
-        setSeller(sellerProfile);
-        console.log("🏪 SellerShows - Loaded seller:", sellerProfile.business_name, "ID:", sellerProfile.id);
-
-        if (userRole !== "admin" && sellerProfile.status !== "approved") {
-          console.log("⚠️ Seller not approved - redirecting to BuyerProfile");
-          navigate(createPageUrl("BuyerProfile"), { replace: true, state: { sellerStatus: sellerProfile.status } });
-          return;
-        }
-      } else {
-        console.log("⚠️ SellerShows - No seller profile found, redirecting to BuyerProfile.");
+      if (!sellerCheck.ok) {
+        // NOT an approved seller - redirect
+        console.log("[SellerGate] Not approved seller - redirecting to BuyerProfile");
         navigate(createPageUrl("BuyerProfile"), { replace: true });
         return;
       }
+
+      // ═══════════════════════════════════════════════════════════════════════════
+      // APPROVED SELLER - Load shows
+      // ═══════════════════════════════════════════════════════════════════════════
+      console.log("[SellerGate] Approved seller verified:", sellerCheck.sellerRow?.business_name);
+      setSeller(sellerCheck.sellerRow);
+
     } catch (error) {
       console.error("Error loading seller:", error);
       navigate(createPageUrl("BuyerProfile"), { replace: true });
-      return;
     } finally {
       setIsLoadingSeller(false);
     }
@@ -174,7 +168,7 @@ export default function SellerShows() {
         return [];
       }
       console.log("📺 SellerShows - Fetching shows for seller_id:", seller.id);
-      const result = await getShowsBySellerId(seller.user_id);
+      const result = await getShowsBySellerId(seller.id);
       console.log("✅ SellerShows - Shows fetched:", result.length, "shows");
 
       // Log each show with its IDs
@@ -187,22 +181,62 @@ export default function SellerShows() {
     enabled: !!seller?.id
   });
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STEP C6-E.1 PART C: Fetch communities from Supabase for community_id resolution
+  // ═══════════════════════════════════════════════════════════════════════════
+  const { data: communities = [] } = useQuery({
+    queryKey: ['communities-for-show-create'],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("communities")
+        .select("id, name")
+        .eq("is_active", true);
+      
+      if (error) {
+        console.error("[SellerShows] Communities query error:", error.message);
+        return [];
+      }
+      return data ?? [];
+    },
+  });
+
   const createShowMutation = useMutation({
     mutationFn: async (showData) => {
       console.log("➕ SellerShows - Creating show:", showData);
       console.log("   Title:", showData.title);
+      console.log("   Community (slug):", showData.community);
       console.log("🧪 DEBUG - seller.id (sellers table PK):", seller.id);
-      console.log("🧪 DEBUG - seller.user_id (auth FK):", seller.user_id);
-      console.log("🧪 DEBUG - authUser.id (current auth):", authUser?.id);
-      console.log("🧪 DEBUG - seller.user_id === authUser.id?", seller.user_id === authUser?.id);
       console.log("   Seller Name:", seller.business_name);
       
+      // ═══════════════════════════════════════════════════════════════════════════
+      // STEP C4: Resolve community slug to community_id for DB write
+      // - "all" or not found → community_id = null
+      // - Found community → community_id = community.id
+      // ═══════════════════════════════════════════════════════════════════════════
+      let community_id = null;
+      if (showData.community && showData.community !== "all") {
+        const selectedCommunity = communities.find(
+          c => c.name?.toLowerCase() === showData.community?.toLowerCase()
+        );
+        if (selectedCommunity) {
+          community_id = selectedCommunity.id;
+          console.log("   Community resolved:", selectedCommunity.name, "→ ID:", community_id);
+        } else {
+          console.log("   Community not found in list, using null");
+        }
+      } else {
+        console.log("   Community is 'all' or empty, using null");
+      }
+      
+      // NORMALIZED: shows.seller_id references sellers.id (not user_id)
       const createdShow = await createShow({
-        seller_id: seller.user_id,
+        seller_id: seller.id,
         title: showData.title,
         description: showData.description,
         pickup_instructions: showData.pickup_instructions,
         scheduled_start: showData.scheduled_start,
+        community_id,  // STEP C4: Write community_id to DB
+        thumbnail_url: showData.thumbnail_url || null,  // PHASE S1: Persist thumbnail
       });
 
       if (!createdShow) {
@@ -211,6 +245,7 @@ export default function SellerShows() {
       }
 
       console.log("✅ Show created:", createdShow);
+      console.log("   community_id written:", createdShow.community_id);
       return createdShow;
     },
     onSuccess: (newShow) => {
@@ -229,8 +264,14 @@ export default function SellerShows() {
 
   const updateShowMutation = useMutation({
     mutationFn: ({ id, showData }) => {
-      console.log("✏️ SellerShows - Updating show:", id, showData);
-      return base44.entities.Show.update(id, showData);
+      // CRITICAL: Never overwrite status in generic show updates.
+      // Status changes are handled ONLY by goLive() and endShow().
+      const { status, ...safeShowData } = showData;
+      if (status !== undefined) {
+        console.warn("⚠️ Stripped 'status' from show update payload - use goLive()/endShow() instead");
+      }
+      console.log("✏️ SellerShows - Updating show:", id, safeShowData);
+      return base44.entities.Show.update(id, safeShowData);
     },
     onSuccess: (updatedShow) => {
       console.log("✅ SellerShows - Show updated:", updatedShow.id);
@@ -290,49 +331,66 @@ export default function SellerShows() {
   };
 
   const goLive = async (show) => {
-    console.log("🟢 goLive START", show);
-    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    console.log("🔴 GO LIVE - UNIVERSAL ROUTING (MOBILE + DESKTOP)");
-    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    console.log("📺 Show Title:", show.title);
-    console.log("🆔 Show ID:", show.id);
-    console.log("🏪 Show Seller ID:", show.seller_id);
-    console.log("👤 Current Seller:", seller.business_name);
-    console.log("🆔 Current Seller ID:", seller.id);
-    console.log("✅ ID Match:", show.seller_id === seller.id ? "YES" : "NO");
-    console.log("🖥️ Platform:", navigator.userAgent);
-
+    // Unique run ID for tracing this exact invocation
+    const runId = `goLive:${show?.id}:${Date.now()}`;
+    
+    if (DEBUG_GO_LIVE) console.log("[RUN] start", { runId, showId: show?.id, status: show?.status, stream_status: show?.stream_status });
+    
     try {
-      console.log("🟡 goLive TRY BLOCK ENTERED");
-      // Update show status
-      console.log("🟡 Calling supabase.update for show status...");
-      await supabase
-        .from("shows")
-        .update({ status: "live", started_at: new Date().toISOString() })
-        .eq("id", show.id);
-      console.log("✅ Show status updated to 'live'");
+      // DEFENSIVE GUARD: Only update if show is NOT already live
+      if (show.status !== 'live') {
+        // Build payload - stream_status="starting" means host is preparing to broadcast
+        // Only set started_at if not already set (avoid overwriting)
+        const payload = {
+          status: "live",
+          stream_status: "starting",
+          ...(show.started_at ? {} : { started_at: new Date().toISOString() })
+        };
+        
+        if (DEBUG_GO_LIVE) console.log("[RUN] before update", { runId, payload });
+        
+        // Execute Supabase update and capture full response
+        const res = await supabase
+          .from("shows")
+          .update(payload)
+          .eq("id", show.id)
+          .select()
+          .maybeSingle();
+        
+        if (DEBUG_GO_LIVE) console.log("[RUN] after update", { runId, data: res.data, error: res.error, status: res.status, statusText: res.statusText });
+        
+        // HARD GUARD: If update failed, do NOT navigate
+        if (res.error || !res.data) {
+          console.error("[RUN] update failed", runId, res.error);
+          console.error(`[goLive FAILED] ${runId} - ${res.error?.message || "No data returned"}`);
+          return;
+        }
+        
+        // SUCCESS VISIBILITY: Log with returned values
+        if (DEBUG_GO_LIVE) console.info(`[goLive OK] ${runId} - status=${res.data.status}, stream_status=${res.data.stream_status}, started_at=${res.data.started_at}`);
+        
+      } else {
+        if (DEBUG_GO_LIVE) console.log("[RUN] skipping update - show already live", { runId, status: show.status });
+      }
 
       // Invalidate queries
       queryClient.invalidateQueries({ queryKey: ['seller-shows', seller.id] });
       queryClient.invalidateQueries({ queryKey: ['all-shows'] });
       queryClient.invalidateQueries({ queryKey: ['marketplace-live-shows'] });
-      console.log("✅ Queries invalidated");
+      if (DEBUG_GO_LIVE) console.log("[RUN] after invalidate", { runId });
 
-      // UNIVERSAL NAVIGATION - Works on ALL devices
+      // Build navigation URL
       const hostConsoleUrl = createPageUrl("HostConsole") + `?showId=${show.id}`;
-      console.log("🔗 Navigating to:", hostConsoleUrl);
-      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-      console.log("🧭 GoLive hostConsoleUrl:", hostConsoleUrl);
-      console.log("🧭 window.location BEFORE:", window.location.pathname + window.location.search);
+      if (DEBUG_GO_LIVE) console.log("[RUN] before navigate", { runId, hostConsoleUrl });
 
-      // Use navigate with replace to prevent back button from returning to this page after show ends
-      console.log("🟡 CALLING navigate() NOW");
+      // Navigate to HostConsole
       navigate(hostConsoleUrl, { replace: true });
-      console.log("🟢 navigate() RETURNED - goLive END");
-    } catch (error) {
-      console.error("❌ Error going live:", error);
-      console.log("🔴 goLive CAUGHT ERROR:", error.message);
-      alert(`Failed to go live: ${error.message}`);
+      
+      if (DEBUG_GO_LIVE) console.log("[RUN] end", { runId });
+    } catch (e) {
+      console.error("[RUN] exception", runId, e);
+      console.error(`[goLive EXCEPTION] ${runId} - ${String(e?.message || e)}`);
+      return;
     }
   };
 
@@ -343,7 +401,15 @@ export default function SellerShows() {
     console.log("📺 Show:", show.title);
     console.log("🆔 ShowID:", show.id);
     console.log("🏪 SellerID:", show.seller_id);
+    console.log("📊 Show Status:", show.status);
     console.log("🖥️ Platform:", navigator.userAgent);
+
+    // DEFENSIVE GUARD: If show is NOT live, redirect through goLive() to ensure update
+    if (show.status !== 'live') {
+      console.log("⚠️ Show is NOT live - redirecting through goLive()");
+      goLive(show);
+      return;
+    }
 
     const hostConsoleUrl = createPageUrl("HostConsole") + `?showId=${show.id}`;
     console.log("🔗 Navigating to:", hostConsoleUrl);
@@ -357,9 +423,17 @@ export default function SellerShows() {
     console.log("⏹️ SellerShows - Ending show:", show.id);
     
     try {
+      // CANONICAL END: Same as HostConsole - set both status and stream_status
+      // Only set ended_at if not already set (avoid overwriting)
+      const payload = {
+        status: "ended",
+        stream_status: "ended",
+        ...(show.ended_at ? {} : { ended_at: new Date().toISOString() })
+      };
+      
       await supabase
         .from("shows")
-        .update({ status: "ended", ended_at: new Date().toISOString() })
+        .update(payload)
         .eq("id", show.id);
       
       queryClient.invalidateQueries({ queryKey: ['seller-shows', seller.id] });

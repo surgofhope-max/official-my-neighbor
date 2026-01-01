@@ -14,7 +14,8 @@
  */
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { supabaseApi as base44 } from "@/api/supabaseClient";
+import { supabase } from "@/lib/supabase/supabaseClient";
+import { useQuery } from "@tanstack/react-query";
 import {
   getLiveShowMessages,
   sendLiveShowMessage,
@@ -23,8 +24,9 @@ import {
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Send, MessageCircle, X, Radio, User } from "lucide-react";
+import { Send, MessageCircle, X, Radio, User, Ban } from "lucide-react";
 import { format } from "date-fns";
+import { checkAccountActiveAsync } from "@/lib/auth/accountGuards";
 
 /**
  * SupabaseLiveChat Component
@@ -62,6 +64,9 @@ export default function SupabaseLiveChat({
   const [isMinimized, setIsMinimized] = useState(false);
   const [fadeMessages, setFadeMessages] = useState(false);
 
+  // Buyer profile names cache (keyed by sender_id)
+  const [buyerNames, setBuyerNames] = useState({});
+
   // Refs
   const messagesEndRef = useRef(null);
   const pollingIntervalRef = useRef(null);
@@ -84,14 +89,85 @@ export default function SupabaseLiveChat({
 
   const loadUser = async () => {
     try {
-      const currentUser = await base44.auth.me();
-      if (mountedRef.current) {
-        setUser(currentUser);
+      const { data, error } = await supabase.auth.getUser();
+      if (error || !mountedRef.current) {
+        // Gracefully handle - user just can't chat
+        return;
       }
+      setUser(data?.user ?? null);
     } catch (error) {
+      // Swallow errors - chat is non-critical
       console.log("[CHAT] User not logged in - view only mode");
     }
   };
+
+  // ─────────────────────────────────────────────────────────────────────
+  // FETCH BUYER NAMES FOR VIEWER MESSAGES
+  // ─────────────────────────────────────────────────────────────────────
+  const fetchBuyerNames = useCallback(async (messageList) => {
+    // Get unique viewer sender_ids that we don't have names for yet
+    const viewerIds = messageList
+      .filter(m => m.sender_role === 'viewer' && !buyerNames[m.sender_id])
+      .map(m => m.sender_id);
+    
+    const uniqueIds = [...new Set(viewerIds)];
+    if (uniqueIds.length === 0) return;
+
+    try {
+      const { data, error } = await supabase
+        .from('buyer_profiles')
+        .select('user_id, full_name')
+        .in('user_id', uniqueIds);
+
+      if (error || !data) return;
+
+      // Build name map
+      const newNames = {};
+      data.forEach(profile => {
+        newNames[profile.user_id] = profile.full_name || 'Buyer';
+      });
+
+      // Merge with existing cache
+      if (Object.keys(newNames).length > 0 && mountedRef.current) {
+        setBuyerNames(prev => ({ ...prev, ...newNames }));
+      }
+    } catch (err) {
+      // Silently fail - names are non-critical
+    }
+  }, [buyerNames]);
+
+  // ─────────────────────────────────────────────────────────────────────
+  // CHECK VIEWER BAN STATUS
+  // ─────────────────────────────────────────────────────────────────────
+  const { data: viewerBan } = useQuery({
+    queryKey: ['viewer-ban-check', sellerId, user?.id],
+    queryFn: async () => {
+      if (!sellerId || !user?.id) return null;
+      const { data, error } = await supabase
+        .from('viewer_bans')
+        .select('id, ban_type, reason')
+        .eq('seller_id', sellerId)
+        .eq('viewer_id', user.id)
+        .maybeSingle();
+      
+      if (error) {
+        console.warn('[CHAT] Failed to check ban status:', error.message);
+        return null;
+      }
+      return data;
+    },
+    enabled: !!sellerId && !!user && !isSeller,
+    staleTime: 300000, // 5 minutes - ban status rarely changes
+    refetchInterval: false,
+    refetchOnWindowFocus: false
+  });
+
+  // Compute ban state (matches legacy behavior: chat, view, or full blocks chat)
+  const isChatBanned = viewerBan && (
+    viewerBan.ban_type === 'chat' || 
+    viewerBan.ban_type === 'view' || 
+    viewerBan.ban_type === 'full'
+  );
 
   // ─────────────────────────────────────────────────────────────────────
   // CHECK CHAT AVAILABILITY
@@ -125,6 +201,7 @@ export default function SupabaseLiveChat({
         if (lastNewId !== lastMessageIdRef.current) {
           lastMessageIdRef.current = lastNewId;
           setMessages(newMessages);
+          fetchBuyerNames(newMessages);
           resetFadeTimer();
         }
       }
@@ -193,6 +270,23 @@ export default function SupabaseLiveChat({
 
     const trimmedMessage = newMessage.trim();
     if (!trimmedMessage || !user || isSending) return;
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // SUSPENSION CHECK: Block chat for suspended accounts
+    // ═══════════════════════════════════════════════════════════════════════════
+    const { canProceed, error: guardError } = await checkAccountActiveAsync(supabase, user.id);
+    if (!canProceed) {
+      setSendError(guardError);
+      return;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // BAN CHECK: Block chat for banned viewers (matches legacy behavior)
+    // ═══════════════════════════════════════════════════════════════════════════
+    if (isChatBanned) {
+      setSendError("You have been banned from chatting in this seller's shows.");
+      return;
+    }
 
     // Prevent sending if chat is not available
     if (!isChatAvailable) {
@@ -314,6 +408,7 @@ export default function SupabaseLiveChat({
                 message={msg}
                 isCurrentUser={msg.sender_id === user?.id}
                 isOverlay={isOverlay}
+                buyerName={buyerNames[msg.sender_id]}
               />
             ))}
             <div ref={messagesEndRef} />
@@ -323,29 +418,44 @@ export default function SupabaseLiveChat({
 
       {/* Input Form */}
       {user ? (
-        <form onSubmit={handleSend} className="flex gap-2">
-          <div className="flex-1 relative">
-            <Input
-              value={newMessage}
-              onChange={(e) => setNewMessage(e.target.value)}
-              onKeyPress={handleKeyPress}
-              placeholder={isChatAvailable ? "Type a message..." : "Chat ended"}
-              disabled={isSending || !isChatAvailable}
-              maxLength={500}
-              className={`
-                ${isOverlay
-                  ? "bg-black/60 backdrop-blur-md border-white/20 text-white placeholder:text-white/50"
-                  : "bg-white/10 border-gray-600 text-white"
-                }
-                pr-12
-              `}
-            />
-            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-white/40">
-              {newMessage.length}/500
-            </span>
+        isChatBanned ? (
+          <div 
+            className={`
+              flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl w-full
+              ${isOverlay 
+                ? "bg-red-600/90 backdrop-blur-md border border-white/30" 
+                : "bg-red-600/80"
+              }
+            `}
+          >
+            <Ban className="w-4 h-4 text-white" />
+            <p className="text-xs text-white font-medium">You are banned from chatting</p>
           </div>
+        ) : (
+          <form onSubmit={handleSend} className="flex gap-2">
+            <div className="flex-1 relative">
+              <Input
+                value={newMessage}
+                onChange={(e) => setNewMessage(e.target.value)}
+                onKeyPress={handleKeyPress}
+                placeholder={isChatAvailable ? "Type a message..." : "Chat ended"}
+                disabled={isSending || !isChatAvailable}
+                maxLength={500}
+                className={`
+                  ${isOverlay
+                    ? "bg-black/60 backdrop-blur-md border-white/20 text-white placeholder:text-white/50"
+                    : "bg-white/10 border-gray-600 text-white"
+                  }
+                  pr-12
+                `}
+              />
+              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-white/40">
+                {newMessage.length}/500
+              </span>
+            </div>
           <Button
-            type="submit"
+            type="button"
+            onClick={handleSend}
             disabled={!newMessage.trim() || isSending || !isChatAvailable}
             className={`
               ${isOverlay
@@ -358,6 +468,7 @@ export default function SupabaseLiveChat({
             <Send className="w-4 h-4" />
           </Button>
         </form>
+        )
       ) : (
         <div className="text-center py-2">
           <p className="text-white/60 text-sm">Log in to chat</p>
@@ -383,8 +494,9 @@ export default function SupabaseLiveChat({
 /**
  * Individual Chat Message Component
  */
-function ChatMessage({ message, isCurrentUser, isOverlay }) {
+function ChatMessage({ message, isCurrentUser, isOverlay, buyerName }) {
   const isSeller = message.sender_role === "seller";
+  const displayName = isSeller ? "Host" : (buyerName || "Buyer");
 
   return (
     <div
@@ -421,12 +533,16 @@ function ChatMessage({ message, isCurrentUser, isOverlay }) {
           }
         `}
       >
-        {/* Sender Role Badge */}
+        {/* Sender Name & Badge */}
         <div className="flex items-center gap-1 mb-0.5">
-          {isSeller && (
+          {isSeller ? (
             <Badge className="bg-purple-500/30 text-purple-200 text-[10px] px-1 py-0">
-              Seller
+              Host
             </Badge>
+          ) : (
+            <span className="text-white/70 text-[10px] font-medium">
+              {displayName}
+            </span>
           )}
           <span className="text-white/50 text-[10px]">
             {format(new Date(message.created_at), "h:mm a")}

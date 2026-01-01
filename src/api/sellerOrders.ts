@@ -10,7 +10,10 @@ export interface SellerOrder {
   id: string;
   batch_id?: string;
   buyer_id: string;
+  /** Legacy: auth.users.id — used for DB FK (orders.seller_id -> users.id) */
   seller_id: string;
+  /** Canonical: sellers.id (entity PK) — preferred for reads, nullable for legacy orders */
+  seller_entity_id?: string | null;
   show_id?: string;
   product_id?: string;
   product_title: string;
@@ -24,22 +27,88 @@ export interface SellerOrder {
   buyer_name?: string;
   buyer_email?: string;
   buyer_phone?: string;
-  created_date?: string;
+  created_at?: string;
   paid_at?: string;
   ready_at?: string;
   picked_up_at?: string;
 }
 
 /**
- * Get all orders for a given seller ID.
+ * Get all orders for a given seller using BOTH canonical and legacy IDs.
  *
- * @param sellerId - The seller ID to look up orders for
- * @returns Array of orders, sorted by created_date DESC
+ * READ PATH STRATEGY (Step T3.5):
+ * - Primary: orders.seller_entity_id = seller.id (canonical, entity PK)
+ * - Fallback: orders.seller_id = seller.user_id (legacy, auth user ID)
+ *
+ * This handles:
+ * - New orders: have seller_entity_id set
+ * - Legacy orders: only have seller_id (auth user ID)
+ *
+ * @param sellerEntityId - The seller's entity ID (sellers.id) — CANONICAL
+ * @param sellerUserId - The seller's auth user ID (sellers.user_id) — LEGACY fallback
+ * @returns Array of orders, sorted by created_at DESC
  *
  * This function:
  * - Never throws
- * - Returns [] for null sellerId
+ * - Returns [] for null IDs
  * - Returns [] on any error
+ */
+export async function getOrdersBySeller(
+  sellerEntityId: string | null,
+  sellerUserId: string | null
+): Promise<SellerOrder[]> {
+  if (!sellerEntityId && !sellerUserId) {
+    return [];
+  }
+
+  try {
+    // ═══════════════════════════════════════════════════════════════════════════
+    // READ PATH: Prefer seller_entity_id (canonical), fallback to seller_id (legacy)
+    // 
+    // Query logic:
+    // - seller_entity_id = sellerEntityId (new orders)
+    // - OR seller_id = sellerUserId (legacy orders where seller_entity_id is NULL)
+    // ═══════════════════════════════════════════════════════════════════════════
+    
+    // Build OR condition using Supabase's .or() method
+    let orConditions: string[] = [];
+    
+    if (sellerEntityId) {
+      orConditions.push(`seller_entity_id.eq.${sellerEntityId}`);
+    }
+    
+    if (sellerUserId) {
+      // Legacy fallback: match seller_id (user_id) for orders without seller_entity_id
+      orConditions.push(`and(seller_entity_id.is.null,seller_id.eq.${sellerUserId})`);
+    }
+
+    const { data, error } = await supabase
+      .from("orders")
+      .select("*")
+      .or(orConditions.join(","))
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.warn("Failed to fetch orders by seller:", error.message);
+      return [];
+    }
+
+    return (data as SellerOrder[]) ?? [];
+  } catch (err) {
+    console.warn("Unexpected error fetching seller orders:", err);
+    return [];
+  }
+}
+
+/**
+ * @deprecated Use getOrdersBySeller() instead for canonical entity ID support.
+ * 
+ * Get all orders for a given seller ID (LEGACY - user_id only).
+ *
+ * @param sellerId - The seller's auth user ID (public.users.id)
+ *                   DB FK: orders.seller_id -> public.users.id
+ *                   Pass seller.user_id, NOT seller.id
+ * @returns Array of orders, sorted by created_at DESC
  */
 export async function getOrdersBySellerId(
   sellerId: string | null
@@ -49,11 +118,13 @@ export async function getOrdersBySellerId(
   }
 
   try {
+    // LEGACY: Query by seller_id (auth user ID) only
+    // This is kept for backwards compatibility during T3 migration
     const { data, error } = await supabase
       .from("orders")
       .select("*")
       .eq("seller_id", sellerId)
-      .order("created_date", { ascending: false });
+      .order("created_at", { ascending: false });
 
     if (error) {
       console.warn("Failed to fetch orders by seller ID:", error.message);

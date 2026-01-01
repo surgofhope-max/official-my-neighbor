@@ -10,10 +10,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { supabaseApi as base44 } from "@/api/supabaseClient";
+import { supabase } from "@/lib/supabase/supabaseClient";
+import { supabaseApi as base44 } from "@/api/supabaseClient"; // Keep for video upload (legacy)
 import { useQuery } from "@tanstack/react-query";
-import { Upload, Loader2, Video, X as CloseIcon, AlertCircle } from "lucide-react";
+import { Upload, Loader2, Video, X as CloseIcon, AlertCircle, Image as ImageIcon } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { uploadShowThumbnail } from "@/api/storage/showStorage";
 
 export default function ShowForm({ show, onSave, onCancel, isSubmitting }) {
   const [formData, setFormData] = useState({
@@ -31,12 +33,20 @@ export default function ShowForm({ show, onSave, onCancel, isSubmitting }) {
   const thumbnailInputRef = useRef(null);
   const videoInputRef = useRef(null);
 
-  // Fetch active communities from database
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STEP C6-E: Fetch communities from Supabase (replaces base44.entities.Community)
+  // ═══════════════════════════════════════════════════════════════════════════
   const { data: dbCommunities = [], isLoading: communitiesLoading } = useQuery({
-    queryKey: ['active-communities'],
+    queryKey: ['communities-for-show-form'],
     queryFn: async () => {
-      const communities = await base44.entities.Community.filter({ is_active: true }, 'sort_order');
-      return communities;
+      const { data, error } = await supabase
+        .from("communities")
+        .select("id, name, label")
+        .eq("is_active", true)
+        .order("sort_order", { ascending: true });
+
+      if (error) throw error;
+      return data ?? [];
     }
   });
 
@@ -49,14 +59,29 @@ export default function ShowForm({ show, onSave, onCancel, isSubmitting }) {
     }))
   ];
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PHASE S1: Thumbnail upload using Supabase Storage
+  // ═══════════════════════════════════════════════════════════════════════════
   const handleThumbnailUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
 
     setUploadingThumbnail(true);
     try {
-      const { file_url } = await base44.integrations.Core.UploadFile({ file });
-      setFormData(prev => ({ ...prev, thumbnail_url: file_url }));
+      // Upload to Supabase Storage (show?.id if editing, pending folder if new)
+      const result = await uploadShowThumbnail({
+        showId: show?.id,
+        file,
+      });
+
+      if (!result.success) {
+        console.error("Error uploading thumbnail:", result.error);
+        alert(result.error || "Failed to upload image. Please try again.");
+        setUploadingThumbnail(false);
+        return;
+      }
+
+      setFormData(prev => ({ ...prev, thumbnail_url: result.url }));
     } catch (error) {
       console.error("Error uploading thumbnail:", error);
       alert("Failed to upload image. Please try again.");

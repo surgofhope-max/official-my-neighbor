@@ -112,7 +112,8 @@ export default function SellerOnboardingSection({ user, sellerProfile }) {
   const [isExpanded, setIsExpanded] = useState(false);
 
   // Determine if user has seller onboarding data
-  const hasSellerData = user?.seller_safety_agreed || user?.seller_main_category || sellerProfile;
+  // Check sellers table (canonical) OR user metadata (legacy)
+  const hasSellerData = user?.seller_safety_agreed || sellerProfile?.main_category || user?.seller_main_category || sellerProfile;
 
   if (!hasSellerData) {
     return (
@@ -176,11 +177,52 @@ export default function SellerOnboardingSection({ user, sellerProfile }) {
       </div>
 
       <div className="space-y-2">
-        {/* A. Account Creation Information */}
+        {/* CANONICAL IDENTITY - From public.users and sellers tables */}
+        <CollapsibleSection
+          title="Canonical Identity"
+          icon={Store}
+          defaultOpen={true}
+          badge="Source of Truth"
+          badgeColor="bg-blue-100 text-blue-800"
+        >
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+            <InfoRow
+              label="Full Name"
+              value={user?.full_name}
+            />
+            <InfoRow
+              label="Phone"
+              value={user?.phone}
+              icon={Phone}
+            />
+            <InfoRow
+              label="Email"
+              value={user?.email}
+            />
+            {sellerProfile && (
+              <>
+                <InfoRow
+                  label="Business Name"
+                  value={sellerProfile?.business_name}
+                />
+                <InfoRow
+                  label="Seller Contact Phone"
+                  value={sellerProfile?.contact_phone}
+                  icon={Phone}
+                />
+                <InfoRow
+                  label="Seller Contact Email"
+                  value={sellerProfile?.contact_email}
+                />
+              </>
+            )}
+          </div>
+        </CollapsibleSection>
+
+        {/* A. Account Creation Information (Historical) */}
         <CollapsibleSection
           title="Account Creation Information"
           icon={Store}
-          defaultOpen={true}
         >
           <div className="grid grid-cols-2 gap-x-4 gap-y-1">
             <InfoRow
@@ -218,7 +260,8 @@ export default function SellerOnboardingSection({ user, sellerProfile }) {
           badgeColor={user?.phone_verified ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"}
         >
           <div className="space-y-2">
-            <InfoRow label="Phone Number" value={user?.phone_number} icon={Phone} />
+            {/* Canonical phone from public.users, fallback to sellerProfile.contact_phone */}
+            <InfoRow label="Phone Number" value={user?.phone || sellerProfile?.contact_phone} icon={Phone} />
             <StatusIndicator
               label="Phone Verified"
               status={user?.phone_verified}
@@ -256,18 +299,22 @@ export default function SellerOnboardingSection({ user, sellerProfile }) {
           icon={Grid3X3}
         >
           <div className="space-y-2">
-            <InfoRow label="Selected Category" value={user?.seller_main_category} />
+            {/* Read from sellers table (canonical), fallback to metadata for legacy data */}
+            <InfoRow label="Selected Category" value={sellerProfile?.main_category || user?.seller_main_category} />
             <div className="pt-2 border-t">
               <p className="text-xs text-gray-500 mb-2">Available Categories:</p>
               <div className="flex flex-wrap gap-1">
-                {CATEGORY_OPTIONS.map((cat) => (
-                  <Badge
-                    key={cat}
-                    className={`text-xs ${user?.seller_main_category === cat ? "bg-green-100 text-green-800" : "bg-gray-100 text-gray-600"}`}
-                  >
-                    {cat}
-                  </Badge>
-                ))}
+                {CATEGORY_OPTIONS.map((cat) => {
+                  const selectedCategory = sellerProfile?.main_category || user?.seller_main_category;
+                  return (
+                    <Badge
+                      key={cat}
+                      className={`text-xs ${selectedCategory === cat ? "bg-green-100 text-green-800" : "bg-gray-100 text-gray-600"}`}
+                    >
+                      {cat}
+                    </Badge>
+                  );
+                })}
               </div>
             </div>
           </div>
@@ -278,7 +325,8 @@ export default function SellerOnboardingSection({ user, sellerProfile }) {
           title="Subcategory"
           icon={Layers}
         >
-          <InfoRow label="Selected Subcategory" value={user?.seller_subcategory} />
+          {/* Read from sellers table (canonical), fallback to metadata for legacy data */}
+          <InfoRow label="Selected Subcategory" value={sellerProfile?.subcategory || user?.seller_subcategory} />
         </CollapsibleSection>
 
         {/* F. Seller Type */}
@@ -286,10 +334,15 @@ export default function SellerOnboardingSection({ user, sellerProfile }) {
           title="Seller Type"
           icon={Building2}
         >
-          <InfoRow
-            label="Type"
-            value={user?.seller_type === "individual" ? "Individual" : user?.seller_type === "registered_business" ? "Registered Business" : null}
-          />
+          {(() => {
+            const sellerType = sellerProfile?.seller_type || user?.seller_type;
+            return (
+              <InfoRow
+                label="Type"
+                value={sellerType === "individual" ? "Individual" : sellerType === "registered_business" ? "Registered Business" : null}
+              />
+            );
+          })()}
         </CollapsibleSection>
 
         {/* G. Revenue Range */}
@@ -297,10 +350,15 @@ export default function SellerOnboardingSection({ user, sellerProfile }) {
           title="Revenue Range"
           icon={DollarSign}
         >
-          <InfoRow
-            label="Estimated Monthly Revenue"
-            value={REVENUE_LABELS[user?.seller_revenue_range] || user?.seller_revenue_range}
-          />
+          {(() => {
+            const revenueRange = sellerProfile?.estimated_monthly_revenue || user?.seller_revenue_range;
+            return (
+              <InfoRow
+                label="Estimated Monthly Revenue"
+                value={REVENUE_LABELS[revenueRange] || revenueRange}
+              />
+            );
+          })()}
         </CollapsibleSection>
 
         {/* H. Sales Channels */}
@@ -309,16 +367,19 @@ export default function SellerOnboardingSection({ user, sellerProfile }) {
           icon={ShoppingCart}
         >
           <div className="space-y-1">
-            {user?.seller_sales_channels && user.seller_sales_channels.length > 0 ? (
-              user.seller_sales_channels.map((channel) => (
-                <div key={channel} className="flex items-center gap-2 py-1">
-                  <CheckCircle className="w-4 h-4 text-green-600" />
-                  <span className="text-sm">{SALES_CHANNEL_LABELS[channel] || channel}</span>
-                </div>
-              ))
-            ) : (
-              <p className="text-sm text-gray-400 italic">No sales channels selected</p>
-            )}
+            {/* Read from sellers table (canonical), fallback to metadata for legacy data */}
+            {(() => {
+              const salesChannels = sellerProfile?.sales_channels || user?.seller_sales_channels;
+              if (salesChannels && salesChannels.length > 0) {
+                return salesChannels.map((channel) => (
+                  <div key={channel} className="flex items-center gap-2 py-1">
+                    <CheckCircle className="w-4 h-4 text-green-600" />
+                    <span className="text-sm">{SALES_CHANNEL_LABELS[channel] || channel}</span>
+                  </div>
+                ));
+              }
+              return <p className="text-sm text-gray-400 italic">No sales channels selected</p>;
+            })()}
           </div>
         </CollapsibleSection>
 
@@ -328,13 +389,15 @@ export default function SellerOnboardingSection({ user, sellerProfile }) {
           icon={MapPin}
         >
           <div className="space-y-1">
-            <InfoRow label="Full Name" value={user?.seller_return_full_name} />
-            <InfoRow label="Address Line 1" value={user?.seller_return_address_1} />
+            {/* Canonical full_name from public.users, fallback to sellerProfile business_name */}
+            <InfoRow label="Full Name" value={user?.full_name || sellerProfile?.business_name} />
+            {/* Address fields from sellerProfile (seller-specific) */}
+            <InfoRow label="Address Line 1" value={sellerProfile?.pickup_address || user?.seller_return_address_1} />
             <InfoRow label="Address Line 2" value={user?.seller_return_address_2} />
             <div className="grid grid-cols-3 gap-2">
-              <InfoRow label="City" value={user?.seller_return_city} />
-              <InfoRow label="State" value={user?.seller_return_state} />
-              <InfoRow label="ZIP" value={user?.seller_return_zip} />
+              <InfoRow label="City" value={sellerProfile?.pickup_city || user?.seller_return_city} />
+              <InfoRow label="State" value={sellerProfile?.pickup_state || user?.seller_return_state} />
+              <InfoRow label="ZIP" value={sellerProfile?.pickup_zip || user?.seller_return_zip} />
             </div>
             <InfoRow label="Country" value={user?.seller_return_country} />
           </div>

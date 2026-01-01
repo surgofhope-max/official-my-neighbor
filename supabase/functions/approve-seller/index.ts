@@ -280,6 +280,28 @@ Deno.serve(async (req) => {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // 7b. UPDATE PUBLIC.USERS.ROLE (CRITICAL FOR PLATFORM VISIBILITY)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // When approved: promote buyer → seller
+    // When declined/suspended: demote seller → buyer (restore access control)
+    const newUserRole = new_status === "approved" ? "seller" : "buyer";
+
+    const { error: userRoleError } = await adminClient
+      .from("users")
+      .update({
+        role: newUserRole,
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", seller_user_id);
+
+    if (userRoleError) {
+      console.error("❌ Failed to update public.users.role:", userRoleError);
+      console.warn("⚠️ Continuing without public.users.role update");
+    } else {
+      console.log("✅ Step 2b: public.users.role updated to", newUserRole);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // 8. CREATE NOTIFICATION
     // ═══════════════════════════════════════════════════════════════════════════
     let notificationTitle = "";

@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { supabaseApi as base44 } from "@/api/supabaseClient";
+import { supabase } from "@/lib/supabase/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { MessageCircle, Loader2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
@@ -21,16 +21,17 @@ export default function MessageSellerButton({ seller, orderId = null, variant = 
     setIsLoading(true);
 
     try {
-      const user = await base44.auth.me();
+      const { data: authData, error: authError } = await supabase.auth.getUser();
+      const user = authData?.user ?? null;
       
-      if (!user) {
+      if (authError || !user) {
         // Not logged in - redirect to login
         navigate(createPageUrl("Login"));
         return;
       }
       
       // SAFETY CHECK: Verify buyer safety agreement before messaging
-      if (user.buyer_safety_agreed !== true) {
+      if (user.user_metadata?.buyer_safety_agreed !== true) {
         setIsLoading(false);
         navigate(createPageUrl(`BuyerSafetyAgreement?redirect=Messages`));
         return;

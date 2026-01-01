@@ -27,6 +27,22 @@
  * - Add audit logging for stream key access
  */
 
+/*
+ * ═══════════════════════════════════════════════════════════════════════════
+ * STRATEGY A — IMPLEMENTED
+ * ═══════════════════════════════════════════════════════════════════════════
+ * 
+ * stream_status lifecycle: starting | live | ended
+ * 
+ * This function provisions IVS channels and stream keys only.
+ * It does NOT write to stream_status or any lifecycle fields.
+ * 
+ * Human actions (Start Broadcast, End Show) are the ONLY authority
+ * for lifecycle transitions.
+ * 
+ * ═══════════════════════════════════════════════════════════════════════════
+ */
+
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { createHmac } from "https://deno.land/std@0.168.0/crypto/mod.ts";
@@ -648,14 +664,15 @@ serve(async (req: Request) => {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // UPDATE SHOW RECORD
+    // UPDATE SHOW RECORD (IVS provisioning fields only)
     // ─────────────────────────────────────────────────────────────────────
+    // STRATEGY A: Only write IVS provisioning fields.
+    // stream_status is NOT written here — it is controlled by human actions only.
     const { error: updateError } = await supabaseAdmin
       .from("shows")
       .update({
         ivs_stream_key_arn: streamKeyArn,
         ivs_ingest_endpoint: ingestEndpoint,
-        stream_status: "ready",
       })
       .eq("id", showId);
 

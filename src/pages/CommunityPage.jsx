@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
-import { supabaseApi as base44 } from "@/api/supabaseClient";
+import { supabase } from "@/lib/supabase/supabaseClient";
 import { useQuery } from "@tanstack/react-query";
+import { SHOWS_PUBLIC_FIELDS } from "@/api/shows";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -86,96 +87,146 @@ export default function CommunityPage() {
     }
   };
 
-  // FIXED: Fetch community data with case-insensitive matching
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STEP C6-E.1 PART A: Fetch community from Supabase by slug (communities.name)
+  // ═══════════════════════════════════════════════════════════════════════════
   const { data: dbCommunity, isLoading: communityLoading, error: communityError } = useQuery({
-    queryKey: ['community', communityName],
+    queryKey: ['community-by-slug', communityName],
     queryFn: async () => {
       if (!communityName) return null;
       
       console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-      console.log("📡 Querying Community entity for:", communityName);
-      console.log("   Searching (case-insensitive):", communityName.toLowerCase());
+      console.log("📡 [CommunityPage] Querying Supabase for slug:", communityName);
       
-      // CRITICAL FIX: Fetch ALL communities and do case-insensitive match
-      const allCommunities = await base44.entities.Community.list();
-      console.log("✅ Total communities in database:", allCommunities.length);
+      // Query Supabase directly by slug (communities.name), case-insensitive via ilike
+      const { data, error } = await supabase
+        .from("communities")
+        .select("id,name,label,bio,icon_name,bg_image_url,color_gradient,zip_code")
+        .ilike("name", communityName)
+        .eq("is_active", true)
+        .maybeSingle();
       
-      allCommunities.forEach((comm, idx) => {
-        console.log(`   ${idx + 1}. Name: "${comm.name}" | Label: "${comm.label}" | Active: ${comm.is_active}`);
-      });
+      if (error) {
+        console.error("❌ [CommunityPage] Supabase query error:", error.message);
+        return null;
+      }
       
-      // Case-insensitive match
-      const matchedCommunity = allCommunities.find(
-        comm => comm.name?.toLowerCase() === communityName.toLowerCase() && comm.is_active !== false
-      );
-      
-      if (matchedCommunity) {
-        console.log("✅ MATCH FOUND (case-insensitive):");
-        console.log("   Database name:", matchedCommunity.name);
-        console.log("   URL param:", communityName);
-        console.log("   Label:", matchedCommunity.label);
+      if (data) {
+        console.log("✅ [CommunityPage] MATCH FOUND in Supabase:");
+        console.log("   ID:", data.id);
+        console.log("   Name:", data.name);
+        console.log("   Label:", data.label);
       } else {
-        console.log("❌ NO MATCH FOUND");
-        console.log("   Searched for:", communityName);
-        console.log("   Available names:", allCommunities.map(c => c.name).join(', '));
+        console.log("❌ [CommunityPage] No community found for slug:", communityName);
       }
       console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
       
-      return matchedCommunity || null;
+      return data || null;
     },
     enabled: !!communityName
   });
 
-  // Use database community or fallback to hardcoded data
+  // Use database community or fallback to hardcoded data ONLY if DB returns null
   const community = dbCommunity || (communityName ? fallbackCommunities[communityName?.toLowerCase()] : null);
 
-  console.log("🎯 Final community data:", community);
-  console.log("💾 From database?", !!dbCommunity);
-  console.log("🔧 Using fallback?", !dbCommunity && !!fallbackCommunities[communityName?.toLowerCase()]);
+  // Log source of truth
+  if (dbCommunity) {
+    console.log("🎯 [CommunityPage] Using DB community | ID:", dbCommunity.id);
+  } else if (community) {
+    console.warn("[CommunityPage] community not found in DB, using fallback");
+  }
 
-  // FIXED: Fetch shows with case-insensitive community matching
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STEP C5: Community matching helper
+  // Prefer community_id (canonical), fallback to legacy string matching
+  // ═══════════════════════════════════════════════════════════════════════════
+  const matchesCommunity = (show, communityId, communityNameStr) => {
+    // Canonical: show.community_id === community.id
+    if (show.community_id && communityId) {
+      return show.community_id === communityId;
+    }
+    // Legacy fallback: show.community_id is null, match by string name
+    if (!show.community_id && communityNameStr) {
+      return show.community?.toLowerCase() === communityNameStr.toLowerCase();
+    }
+    return false;
+  };
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STEP C6-E.1 PART A: Fetch shows from Supabase with community_id + legacy fallback
+  // ═══════════════════════════════════════════════════════════════════════════
   const { data: liveShows = [], isLoading: liveShowsLoading } = useQuery({
-    queryKey: ['community-live-shows', communityName],
+    queryKey: ['community-live-shows', communityName, dbCommunity?.id],
     queryFn: async () => {
       if (!communityName) return [];
-      console.log("📡 Fetching live shows for community:", communityName);
+      console.log("📡 [CommunityPage] Fetching live shows | community:", communityName, "| ID:", dbCommunity?.id);
       
-      // Fetch all live shows and filter case-insensitively
-      const allLiveShows = await base44.entities.Show.filter({ status: "live" }, '-viewer_count');
-      const filtered = allLiveShows.filter(
-        show => show.community?.toLowerCase() === communityName.toLowerCase()
+      // Fetch all live shows from Supabase
+      const { data, error } = await supabase
+        .from("shows")
+        .select(SHOWS_PUBLIC_FIELDS)
+        .eq("status", "live")
+        .order("viewer_count", { ascending: false });
+      
+      if (error) {
+        console.error("❌ [CommunityPage] Live shows query error:", error.message);
+        return [];
+      }
+      
+      // Filter by community_id (canonical) with legacy fallback
+      const filtered = (data || []).filter(show => 
+        matchesCommunity(show, dbCommunity?.id, communityName)
       );
       
-      console.log("✅ Live shows found:", filtered.length);
+      console.log("✅ [CommunityPage] Live shows found:", filtered.length);
       return filtered;
     },
     enabled: !!communityName,
     refetchInterval: 5000
   });
 
-  // FIXED: Fetch upcoming shows with case-insensitive matching
   const { data: upcomingShows = [], isLoading: upcomingShowsLoading } = useQuery({
-    queryKey: ['community-upcoming-shows', communityName],
+    queryKey: ['community-upcoming-shows', communityName, dbCommunity?.id],
     queryFn: async () => {
       if (!communityName) return [];
-      console.log("📡 Fetching upcoming shows for community:", communityName);
+      console.log("📡 [CommunityPage] Fetching upcoming shows | community:", communityName, "| ID:", dbCommunity?.id);
       
-      // Fetch all upcoming shows and filter case-insensitively
-      const allUpcomingShows = await base44.entities.Show.filter({ status: "scheduled" }, '-scheduled_start');
-      const filtered = allUpcomingShows.filter(
-        show => show.community?.toLowerCase() === communityName.toLowerCase()
+      // Fetch all scheduled shows from Supabase
+      const { data, error } = await supabase
+        .from("shows")
+        .select(SHOWS_PUBLIC_FIELDS)
+        .eq("status", "scheduled")
+        .order("scheduled_start_time", { ascending: true });
+      
+      if (error) {
+        console.error("❌ [CommunityPage] Upcoming shows query error:", error.message);
+        return [];
+      }
+      
+      // Filter by community_id (canonical) with legacy fallback
+      const filtered = (data || []).filter(show =>
+        matchesCommunity(show, dbCommunity?.id, communityName)
       );
       
-      console.log("✅ Upcoming shows found:", filtered.length);
+      console.log("✅ [CommunityPage] Upcoming shows found:", filtered.length);
       return filtered;
     },
     enabled: !!communityName
   });
 
-  // Fetch sellers for shows
+  // Fetch sellers for shows (from Supabase)
   const { data: allSellers = [] } = useQuery({
     queryKey: ['all-sellers-map-community'],
-    queryFn: () => base44.entities.Seller.list()
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("sellers")
+        .select("id, user_id, business_name, profile_image_url, pickup_city, pickup_state, status");
+      if (error) {
+        console.error("[CommunityPage] Sellers query error:", error.message);
+        return [];
+      }
+      return data ?? [];
+    }
   });
 
   const sellersMap = allSellers.reduce((acc, seller) => {

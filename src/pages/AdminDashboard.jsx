@@ -1,7 +1,9 @@
 import React, { useState, useRef } from "react";
 import { supabaseApi as base44 } from "@/api/supabaseClient";
+import { supabase } from "@/lib/supabase/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { getAllSellers } from "@/api/sellers";
+import { SHOWS_ADMIN_FIELDS } from "@/api/shows";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -64,34 +66,113 @@ export default function AdminDashboard() {
     queryFn: () => getAllSellers()
   });
 
-  const { data: shows = [] } = useQuery({
-    queryKey: ['all-shows'],
-    queryFn: () => base44.entities.Show.list()
-  });
-
-  const { data: orders = [] } = useQuery({
-    queryKey: ['all-orders'],
-    queryFn: () => base44.entities.Order.list()
+  // ─────────────────────────────────────────────────────────────────────────
+  // ANALYTICS KPIs from admin_analytics_kpis view (Supabase)
+  // Replaces broken base44.entities.* queries for analytics overview
+  // ─────────────────────────────────────────────────────────────────────────
+  const { data: analyticsKpis } = useQuery({
+    queryKey: ['admin-analytics-kpis'],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("admin_analytics_kpis")
+        .select("*")
+        .limit(1)
+        .maybeSingle();
+      
+      if (error) {
+        console.warn("[AdminDashboard] Failed to load analytics KPIs:", error.message);
+        return null;
+      }
+      return data;
+    },
+    staleTime: 30000, // Cache for 30 seconds
   });
 
   const { data: reports = [] } = useQuery({
     queryKey: ['all-reports'],
-    queryFn: () => base44.entities.Report.list()
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("reports")
+        .select("*");
+      if (error) {
+        console.warn("[AdminDashboard] Failed to load reports:", error.message);
+        return [];
+      }
+      return data || [];
+    }
+  });
+
+  // Shows query for data export (ADMIN context - full access)
+  const { data: shows = [] } = useQuery({
+    queryKey: ['all-shows'],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("shows")
+        .select(SHOWS_ADMIN_FIELDS);
+      if (error) {
+        console.warn("[AdminDashboard] Failed to load shows:", error.message);
+        return [];
+      }
+      return data || [];
+    }
+  });
+
+  // Orders query for data export (converted from Base44)
+  const { data: orders = [] } = useQuery({
+    queryKey: ['all-orders'],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("orders")
+        .select("*");
+      if (error) {
+        console.warn("[AdminDashboard] Failed to load orders:", error.message);
+        return [];
+      }
+      return data || [];
+    }
   });
 
   const { data: products = [] } = useQuery({
     queryKey: ['all-products'],
-    queryFn: () => base44.entities.Product.list()
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("products")
+        .select("*");
+      if (error) {
+        console.warn("[AdminDashboard] Failed to load products:", error.message);
+        return [];
+      }
+      return data || [];
+    }
   });
 
   const { data: buyerProfiles = [] } = useQuery({
     queryKey: ['all-buyer-profiles'],
-    queryFn: () => base44.entities.BuyerProfile.list()
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("buyer_profiles")
+        .select("*");
+      if (error) {
+        console.warn("[AdminDashboard] Failed to load buyer profiles:", error.message);
+        return [];
+      }
+      return data || [];
+    }
   });
 
   const { data: communities = [] } = useQuery({
     queryKey: ['all-communities'],
-    queryFn: () => base44.entities.Community.list('sort_order')
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("communities")
+        .select("*")
+        .order("sort_order", { ascending: true });
+      if (error) {
+        console.warn("[AdminDashboard] Failed to load communities:", error.message);
+        return [];
+      }
+      return data || [];
+    }
   });
 
   // Fetch email settings from PlatformSettings
@@ -128,8 +209,30 @@ export default function AdminDashboard() {
     },
   });
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STEP C6-C: Community CRUD — Direct Supabase (replaces base44.entities.Community)
+  // ═══════════════════════════════════════════════════════════════════════════
   const createCommunityMutation = useMutation({
-    mutationFn: (data) => base44.entities.Community.create(data),
+    mutationFn: async (data) => {
+      const { data: created, error } = await supabase
+        .from("communities")
+        .insert({
+          name: data.name,
+          label: data.label,
+          bio: data.bio ?? null,
+          icon_name: data.icon_name ?? null,
+          bg_image_url: data.bg_image_url ?? null,
+          color_gradient: data.color_gradient ?? null,
+          sort_order: data.sort_order ?? 0,
+          is_active: data.is_active ?? true,
+          zip_code: data.zip_code ?? null,
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+      return created;
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['all-communities'] });
       queryClient.invalidateQueries({ queryKey: ['communities'] });
@@ -140,7 +243,28 @@ export default function AdminDashboard() {
   });
 
   const updateCommunityMutation = useMutation({
-    mutationFn: ({ id, data }) => base44.entities.Community.update(id, data),
+    mutationFn: async ({ id, data }) => {
+      const { data: updated, error } = await supabase
+        .from("communities")
+        .update({
+          name: data.name,
+          label: data.label,
+          bio: data.bio ?? null,
+          icon_name: data.icon_name ?? null,
+          bg_image_url: data.bg_image_url ?? null,
+          color_gradient: data.color_gradient ?? null,
+          sort_order: data.sort_order ?? 0,
+          is_active: data.is_active ?? true,
+          zip_code: data.zip_code ?? null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", id)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return updated;
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['all-communities'] });
       queryClient.invalidateQueries({ queryKey: ['communities'] });
@@ -151,7 +275,15 @@ export default function AdminDashboard() {
   });
 
   const deleteCommunityMutation = useMutation({
-    mutationFn: (id) => base44.entities.Community.delete(id),
+    mutationFn: async (id) => {
+      const { error } = await supabase
+        .from("communities")
+        .delete()
+        .eq("id", id);
+
+      if (error) throw error;
+      return true;
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['all-communities'] });
       queryClient.invalidateQueries({ queryKey: ['communities'] });
@@ -214,14 +346,35 @@ export default function AdminDashboard() {
     if (!file) return;
 
     setUploadingImage(true);
+
     try {
-      const { file_url } = await base44.integrations.Core.UploadFile({ file });
-      setCommunityForm(prev => ({ ...prev, bg_image_url: file_url }));
-    } catch (error) {
-      console.error("Error uploading image:", error);
+      const fileExt = file.name.split(".").pop();
+      const fileName = `${crypto.randomUUID()}.${fileExt}`;
+
+      const { error } = await supabase.storage
+        .from("communities")
+        .upload(fileName, file, { upsert: true });
+
+      if (error) {
+        console.error("Error uploading community image:", error);
+        alert("Failed to upload image. Please try again.");
+        return;
+      }
+
+      const { data } = supabase.storage
+        .from("communities")
+        .getPublicUrl(fileName);
+
+      setCommunityForm(prev => ({
+        ...prev,
+        bg_image_url: data.publicUrl
+      }));
+    } catch (err) {
+      console.error("Unexpected error uploading community image:", err);
       alert("Failed to upload image. Please try again.");
+    } finally {
+      setUploadingImage(false);
     }
-    setUploadingImage(false);
   };
 
   const handleSaveCommunity = () => {
@@ -386,27 +539,32 @@ export default function AdminDashboard() {
     }
   };
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // ANALYTICS OVERVIEW STATS
+  // Uses admin_analytics_kpis view for accurate metrics
+  // Falls back to 0 if KPIs not yet loaded
+  // ─────────────────────────────────────────────────────────────────────────
   const stats = [
     {
       title: "Total Sellers",
-      value: sellers.length,
+      value: analyticsKpis?.active_sellers ?? sellers.length,
       subtitle: `${sellers.filter(s => s.status === "pending").length} pending approval`,
       icon: Users,
       color: "from-blue-500 to-cyan-500",
       action: () => navigate(createPageUrl("AdminSellers"))
     },
     {
-      title: "Live Shows",
-      value: shows.filter(s => s.status === "live").length,
-      subtitle: `${shows.filter(s => s.status === "scheduled").length} scheduled`,
-      icon: Video,
+      title: "Total Buyers",
+      value: analyticsKpis?.active_buyers ?? 0,
+      subtitle: "Active buyers",
+      icon: Users,
       color: "from-purple-500 to-pink-500",
       action: () => {}
     },
     {
       title: "Total Orders",
-      value: orders.length,
-      subtitle: `${orders.filter(o => o.status === "paid").length} pending pickup`,
+      value: analyticsKpis?.total_orders ?? 0,
+      subtitle: `${analyticsKpis?.fulfilled_orders ?? 0} fulfilled`,
       icon: Package,
       color: "from-green-500 to-emerald-500",
       action: () => {}
@@ -421,19 +579,24 @@ export default function AdminDashboard() {
     },
     {
       title: "Platform Revenue",
-      value: `$${orders.reduce((sum, o) => sum + (o.price || 0), 0).toFixed(2)}`,
+      value: `$${parseFloat(analyticsKpis?.total_gmv || 0).toFixed(2)}`,
       subtitle: "Total GMV",
       icon: DollarSign,
       color: "from-yellow-500 to-orange-500",
-      action: () => navigate(createPageUrl("AdminAnalytics"))
+      action: () => navigate(createPageUrl("AdminAnalytics")),
+      // Show helper text when revenue is 0
+      helperText: parseFloat(analyticsKpis?.total_gmv || 0) === 0 
+        ? "Revenue will appear once Stripe Connect is enabled." 
+        : null,
+      tooltip: "Platform revenue is calculated from Stripe application fees."
     },
     {
-      title: "Connected Sellers",
-      value: sellers.filter(s => s.stripe_connected).length,
-      subtitle: `${sellers.filter(s => !s.stripe_connected).length} not connected`,
+      title: "Batches Picked Up",
+      value: analyticsKpis?.batches_picked_up ?? 0,
+      subtitle: "Completed fulfillments",
       icon: TrendingUp,
       color: "from-indigo-500 to-purple-500",
-      action: () => navigate(createPageUrl("AdminSellers"))
+      action: () => {}
     }
   ];
 
@@ -539,7 +702,7 @@ export default function AdminDashboard() {
                   <div>
                     <h3 className="text-xl font-bold text-green-900 mb-1">Analytics Overview</h3>
                     <p className="text-sm text-gray-600">
-                      6 key metrics • {sellers.length} sellers • {orders.length} orders
+                      6 key metrics • {analyticsKpis?.active_sellers ?? 0} sellers • {analyticsKpis?.total_orders ?? 0} orders
                     </p>
                   </div>
                 </div>
@@ -585,6 +748,7 @@ export default function AdminDashboard() {
                     key={index}
                     className="relative overflow-hidden border-0 shadow-lg hover:shadow-xl transition-all duration-300 cursor-pointer"
                     onClick={stat.action}
+                    title={stat.tooltip || ""}
                   >
                     <div className={`absolute inset-0 bg-gradient-to-br ${stat.color} opacity-5`}></div>
                     <CardContent className="p-6">
@@ -596,6 +760,9 @@ export default function AdminDashboard() {
                       <p className="text-sm font-medium text-gray-600 mb-1">{stat.title}</p>
                       <p className="text-3xl font-bold text-gray-900 mb-2">{stat.value}</p>
                       <p className="text-sm text-gray-500">{stat.subtitle}</p>
+                      {stat.helperText && (
+                        <p className="text-xs text-amber-600 mt-2 italic">{stat.helperText}</p>
+                      )}
                     </CardContent>
                   </Card>
                 ))}

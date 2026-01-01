@@ -3,8 +3,9 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Radio, Users, Calendar, Clock } from "lucide-react";
 import { format, formatDistanceToNow } from "date-fns";
-import { supabaseApi as base44 } from "@/api/supabaseClient";
+import { supabase } from "@/lib/supabase/supabaseClient";
 import BookmarkButton from "./BookmarkButton";
+import { isShowLive } from "@/api/streamSync";
 
 export default function LiveShowCard({ show, seller, onClick, isUpcoming = false }) {
   const [user, setUser] = useState(null);
@@ -17,12 +18,68 @@ export default function LiveShowCard({ show, seller, onClick, isUpcoming = false
 
   const loadUser = async () => {
     try {
-      const currentUser = await base44.auth.me();
-      setUser(currentUser);
+      const { data, error } = await supabase.auth.getUser();
+      if (error) {
+        setUser(null);
+        return;
+      }
+      setUser(data?.user ?? null);
     } catch (error) {
       setUser(null);
     }
   };
+
+  // Derive badge state using authoritative isShowLive (stream_status === "live")
+  const getBadgeInfo = () => {
+    // AUTHORITATIVE: stream_status === "live" is the only rule for live
+    if (isShowLive(show)) {
+      return {
+        type: 'liveActive',
+        label: 'LIVE',
+        sublabel: 'Now streaming',
+        bgColor: 'bg-red-500',
+        icon: Radio,
+        animate: true
+      };
+    }
+    
+    // Show has status "live" but stream not yet active (waiting state)
+    if (show.status === 'live') {
+      return {
+        type: 'liveWaiting',
+        label: 'LIVE',
+        sublabel: 'Starting soon',
+        bgColor: 'bg-orange-500',
+        icon: Radio,
+        animate: true
+      };
+    }
+    
+    // Scheduled or upcoming
+    if (show.status === 'scheduled' || isUpcoming) {
+      return {
+        type: 'upcoming',
+        label: 'Upcoming',
+        sublabel: null,
+        bgColor: 'bg-blue-500',
+        icon: Calendar,
+        animate: false
+      };
+    }
+    
+    // Fallback
+    return {
+      type: 'upcoming',
+      label: 'Upcoming',
+      sublabel: null,
+      bgColor: 'bg-blue-500',
+      icon: Calendar,
+      animate: false
+    };
+  };
+
+  const badgeInfo = getBadgeInfo();
+  const BadgeIcon = badgeInfo.icon;
 
   // Handle video hover play/pause
   useEffect(() => {
@@ -107,21 +164,18 @@ export default function LiveShowCard({ show, seller, onClick, isUpcoming = false
         
         <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent pointer-events-none"></div>
         
-        {/* Live Badge */}
-        {!isUpcoming && (
-          <Badge className="absolute top-3 left-3 bg-red-500 text-white border-0 px-3 py-1 animate-pulse z-10">
-            <Radio className="w-3 h-3 mr-1" />
-            LIVE
+        {/* Status Badge - respects show.status and show.stream_status */}
+        <div className="absolute top-3 left-3 z-10 flex flex-col gap-1">
+          <Badge className={`${badgeInfo.bgColor} text-white border-0 px-3 py-1 ${badgeInfo.animate ? 'animate-pulse' : ''}`}>
+            <BadgeIcon className="w-3 h-3 mr-1" />
+            {badgeInfo.label}
           </Badge>
-        )}
-        
-        {/* Upcoming Badge */}
-        {isUpcoming && (
-          <Badge className="absolute top-3 left-3 bg-blue-500 text-white border-0 px-3 py-1 z-10">
-            <Calendar className="w-3 h-3 mr-1" />
-            Upcoming
-          </Badge>
-        )}
+          {badgeInfo.sublabel && (
+            <span className="text-xs text-white bg-black/50 backdrop-blur-sm px-2 py-0.5 rounded">
+              {badgeInfo.sublabel}
+            </span>
+          )}
+        </div>
 
         {/* Top Right Actions - Bookmark Only */}
         <div className="absolute top-3 right-3 z-10" onClick={(e) => e.stopPropagation()}>
@@ -135,15 +189,15 @@ export default function LiveShowCard({ show, seller, onClick, isUpcoming = false
         {/* Viewer Count / Time */}
         <div className="absolute bottom-3 left-3 right-3 z-10">
           <div className="flex items-center justify-between text-white">
-            {!isUpcoming ? (
-              <div className="flex items-center gap-1 bg-black/40 backdrop-blur-sm px-2 py-1 rounded">
-                <Users className="w-4 h-4" />
-                <span className="text-sm font-medium">{show.viewer_count || 0} watching</span>
-              </div>
-            ) : (
+            {badgeInfo.type === 'upcoming' ? (
               <div className="flex items-center gap-1 bg-black/40 backdrop-blur-sm px-2 py-1 rounded">
                 <Clock className="w-4 h-4" />
                 <span className="text-sm font-medium">{getTimeUntilStart()}</span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1 bg-black/40 backdrop-blur-sm px-2 py-1 rounded">
+                <Users className="w-4 h-4" />
+                <span className="text-sm font-medium">{show.viewer_count || 0} watching</span>
               </div>
             )}
           </div>
@@ -169,7 +223,7 @@ export default function LiveShowCard({ show, seller, onClick, isUpcoming = false
 
         {/* Stats */}
         <div className="flex items-center justify-between text-xs text-gray-500">
-          {isUpcoming ? (
+          {badgeInfo.type === 'upcoming' ? (
             <span className="leading-none">
               {(show.scheduled_start_time || show.started_at)
                 ? format(new Date(show.scheduled_start_time || show.started_at), "MMM d 'at' h:mm a")
@@ -179,7 +233,7 @@ export default function LiveShowCard({ show, seller, onClick, isUpcoming = false
             <span className="leading-none">{show.total_sales || 0} sales</span>
           )}
           <span className="text-purple-600 font-medium leading-none">
-            {isUpcoming ? "Set Reminder" : "Watch Now"}
+            {badgeInfo.type === 'upcoming' ? "Set Reminder" : "Watch Now"}
           </span>
         </div>
       </CardContent>

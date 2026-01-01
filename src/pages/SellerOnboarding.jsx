@@ -77,6 +77,11 @@ export default function SellerOnboarding() {
   const [loading, setLoading] = useState(true);
   const [activeStep, setActiveStep] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  // ═══════════════════════════════════════════════════════════════════════════
+  // FAIL-SAFE: Track if canonical user query failed to prevent redirect loops
+  // ═══════════════════════════════════════════════════════════════════════════
+  const [canonicalUserLoadFailed, setCanonicalUserLoadFailed] = useState(false);
+  const [loadError, setLoadError] = useState(null);
   
   // Form States
   const [phoneData, setPhoneData] = useState({ number: "", code: "" });
@@ -124,63 +129,71 @@ export default function SellerOnboarding() {
 
       // 🔐 SUPER_ADMIN BYPASS: Skip all onboarding, go directly to AdminDashboard
       if (isSuperAdmin(currentUser)) {
-        console.log("🔑 SUPER_ADMIN detected — bypassing onboarding, redirecting to AdminDashboard");
         navigate(createPageUrl("AdminDashboard"), { replace: true });
         return;
       }
 
-      // 🔒 HARD STOP: Application already submitted — block re-entry
-      // Check both seller_onboarding_completed AND seller_application_status
-      if (
-        userMeta.seller_onboarding_completed === true ||
-        userMeta.seller_application_status === "pending" ||
-        userMeta.seller_application_status === "approved" ||
-        userMeta.seller_application_status === "declined"
-      ) {
-        // Only allow re-entry if approved (they'd go to SellerDashboard)
-        // or if admin wants to reset
-        if (userMeta.seller_approved === true || userMeta.role === "admin") {
-          // Approved sellers should go to dashboard
-          if (userMeta.seller_approved === true) {
-            navigate(createPageUrl("SellerDashboard"), { replace: true });
-            return;
-          }
-        } else {
-          console.log("⏳ Seller application already submitted — blocking re-onboarding");
-          console.log("   Status:", userMeta.seller_application_status);
-          console.log("   Onboarding completed:", userMeta.seller_onboarding_completed);
+      // ═══════════════════════════════════════════════════════════════════════════
+      // CANONICAL GATING: Query public.users for seller_onboarding_completed
+      // This is the ONLY source of truth for re-entry blocking
+      // Also fetch canonical identity fields (full_name, email) for prefill
+      // NOTE: phone column may not exist - query only confirmed columns
+      // ═══════════════════════════════════════════════════════════════════════════
+      const { data: canonicalUser, error: userQueryError } = await supabase
+        .from("users")
+        .select("seller_onboarding_completed, seller_safety_agreed, full_name, email")
+        .eq("id", currentUser.id)
+        .maybeSingle();
 
-          navigate(createPageUrl("BuyerProfile"), {
-            replace: true,
-            state: {
-              sellerStatus: userMeta.seller_application_status || "pending"
-            }
-          });
-
-          return;
-        }
+      // ═══════════════════════════════════════════════════════════════════════════
+      // FAIL-SAFE: If query fails, DO NOT redirect — render error state instead
+      // This prevents infinite redirect loops when schema is wrong
+      // ═══════════════════════════════════════════════════════════════════════════
+      if (userQueryError) {
+        console.error("[SellerOnboarding] Failed to query canonical user:", userQueryError);
+        setCanonicalUserLoadFailed(true);
+        setLoadError(userQueryError.message || "Failed to load user data");
+        // Allow form to render in degraded mode — no redirects
+        setUser({ ...currentUser, ...userMeta });
+        setLoading(false);
+        return; // EXIT — do not proceed with redirect logic
       }
+
+      // ═══════════════════════════════════════════════════════════════════════════
+      // REDIRECT LOGIC: Only runs when query SUCCEEDED and returned valid data
+      // ═══════════════════════════════════════════════════════════════════════════
       
-      // Check if seller entity exists
-      const { data: sellerProfile } = await supabase
-        .from("sellers")
-        .select("id")
-        .eq("user_id", currentUser.id)
-        .single();
-
-      const hasSellerEntity = !!sellerProfile;
-
-      // Redirect if already completed (prevent loop)
-      if ((userMeta.seller_onboarding_completed || hasSellerEntity) && userMeta.role !== "admin") {
-        console.log("✅ Onboarding already complete - redirecting to BuyerProfile");
+      // ONLY block if canonical seller_onboarding_completed === true
+      if (canonicalUser?.seller_onboarding_completed === true) {
+        console.log("[SellerOnboarding] Onboarding already complete — redirecting to BuyerProfile");
         navigate(createPageUrl("BuyerProfile"), { replace: true });
         return;
       }
 
-      setUser({ ...currentUser, ...userMeta });
+      // If safety agreement not done, redirect to safety agreement first
+      // Only redirect if we have a DEFINITIVE false/null, not undefined from error
+      if (canonicalUser && canonicalUser.seller_safety_agreed !== true) {
+        console.log("[SellerOnboarding] Safety agreement not complete — redirecting to SellerSafetyAgreement");
+        navigate(createPageUrl("SellerSafetyAgreement"), { replace: true });
+        return;
+      }
+
+      // ALLOW onboarding to render — approved sellers with incomplete onboarding CAN continue
+      // Store canonical user data for final submission
+      setUser({ ...currentUser, ...userMeta, canonicalUser });
       
-      // Pre-fill form data from user metadata
-      setPhoneData(prev => ({ ...prev, number: userMeta.phone_number || "" }));
+      // ═══════════════════════════════════════════════════════════════════════════
+      // PRE-FILL IDENTITY FIELDS FROM CANONICAL public.users (NOT metadata)
+      // - Full Name: public.users.full_name is canonical identity
+      // - Phone: Use metadata as phone column may not exist in users table
+      // Metadata is ONLY used for in-progress seller-specific data storage
+      // ═══════════════════════════════════════════════════════════════════════════
+      setPhoneData(prev => ({ 
+        ...prev, 
+        number: userMeta.phone_number || "" 
+      }));
+      
+      // Guidelines from metadata (seller-specific, in-progress storage)
       setGuidelines({
         honor: userMeta.seller_guideline_honor_purchases || false,
         counterfeit: userMeta.seller_guideline_no_counterfeit || false,
@@ -193,8 +206,10 @@ export default function SellerOnboarding() {
       setSellerType(userMeta.seller_type || "individual");
       setRevenueRange(userMeta.seller_revenue_range || "");
       setChannels(userMeta.seller_sales_channels || []);
+      
+      // Address: Pre-fill name from canonical, rest from metadata (seller-specific)
       setAddress({
-        fullName: userMeta.seller_return_full_name || "",
+        fullName: canonicalUser?.full_name || userMeta.seller_return_full_name || "",
         line1: userMeta.seller_return_address_1 || "",
         line2: userMeta.seller_return_address_2 || "",
         city: userMeta.seller_return_city || "",
@@ -326,6 +341,51 @@ export default function SellerOnboarding() {
     </div>
   );
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // FAIL-SAFE ERROR STATE: Render stable error UI instead of redirecting
+  // This prevents infinite redirect loops when canonical user query fails
+  // ═══════════════════════════════════════════════════════════════════════════
+  if (canonicalUserLoadFailed) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-purple-50 to-blue-50 p-4 sm:p-8">
+        <div className="max-w-md mx-auto mt-20">
+          <Card className="border-amber-200 bg-amber-50">
+            <CardHeader>
+              <CardTitle className="text-amber-800 flex items-center gap-2">
+                <AlertCircle className="w-5 h-5" />
+                Unable to Load Onboarding
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-amber-700">
+                We couldn't verify your onboarding status. This may be a temporary issue.
+              </p>
+              {loadError && (
+                <p className="text-sm text-amber-600 font-mono bg-amber-100 p-2 rounded">
+                  {loadError}
+                </p>
+              )}
+              <div className="flex gap-3">
+                <Button 
+                  onClick={() => window.location.reload()} 
+                  className="bg-amber-600 hover:bg-amber-700"
+                >
+                  Try Again
+                </Button>
+                <Button 
+                  variant="outline"
+                  onClick={() => navigate(createPageUrl("BuyerProfile"), { replace: true })}
+                >
+                  Go to Profile
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-purple-50 to-blue-50 p-4 sm:p-8">
       <div className="max-w-2xl mx-auto space-y-6">
@@ -402,126 +462,131 @@ export default function SellerOnboarding() {
               ? "bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700" 
               : "bg-gray-300 cursor-not-allowed"
           }`}
-          disabled={!allComplete}
+          disabled={!allComplete || submitting}
           onClick={async () => {
-            // Force update completion flag to ensure consistency and prevent loops
-            console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            console.log("🔘 COMPLETION BUTTON CLICKED");
-            console.log("   allComplete:", allComplete);
-            console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            
+            // ═══════════════════════════════════════════════════════════════════════════
+            // RELIABLE SUBMISSION: public.sellers is the authoritative submission record
+            // Order: 1) UPSERT sellers → 2) Only on success, update user_metadata
+            // If sellers upsert fails: DO NOT show "submitted", DO NOT update metadata
+            // ═══════════════════════════════════════════════════════════════════════════
             if (allComplete) {
-              setSubmitting(true); // Show loading state
+              setSubmitting(true);
               try {
-                console.log("📝 Step 1: Updating user_metadata...");
+                // Get fresh user data with all metadata
+                const { data: { user: currentUser }, error: userError } = await supabase.auth.getUser();
+                if (userError || !currentUser) {
+                  throw new Error("Unable to get current user");
+                }
                 
-                // 1. Update the user record - THIS is the ONLY place onboarding is marked complete
-                const { error } = await supabase.auth.updateUser({
+                // ═══════════════════════════════════════════════════════════════════════════
+                // CANONICAL IDENTITY MODEL:
+                // - Personal identity (full_name, phone) → stays in public.users
+                // - Seller-specific data → goes to public.sellers only
+                // - Metadata is used for in-progress storage ONLY, NOT as final source
+                // ═══════════════════════════════════════════════════════════════════════════
+                
+                // Fetch canonical identity from public.users (in case form state is stale)
+                const { data: canonicalIdentity } = await supabase
+                  .from("users")
+                  .select("full_name, phone, email")
+                  .eq("id", currentUser.id)
+                  .maybeSingle();
+
+                // Build seller payload using FORM STATE and CANONICAL data, NOT metadata
+                const sellerPayload = {
+                  user_id: currentUser.id,
+                  created_by: currentUser.email,
+                  status: "pending",
+                  // Business name from form (address.fullName) or canonical, NOT metadata
+                  business_name: address.fullName || canonicalIdentity?.full_name || currentUser.email?.split("@")[0] || "New Seller",
+                  contact_email: canonicalIdentity?.email || currentUser.email,
+                  // Phone from form state, NOT metadata
+                  contact_phone: phoneData.number || canonicalIdentity?.phone || null,
+                  // Address from form state, NOT metadata
+                  pickup_address: address.line1 || null,
+                  pickup_city: address.city || null,
+                  pickup_state: address.state || null,
+                  pickup_zip: address.zip || null,
+                  // ═══════════════════════════════════════════════════════════════════════════
+                  // SELLER ONBOARDING FIELDS: Persisted to sellers table for Admin review
+                  // These are seller-specific business details, NOT personal identity
+                  // ═══════════════════════════════════════════════════════════════════════════
+                  main_category: category || null,
+                  subcategory: subcategory || null,
+                  seller_type: sellerType || "individual",
+                  estimated_monthly_revenue: revenueRange || null,
+                  sales_channels: channels.length > 0 ? channels : null
+                };
+
+                // UPSERT keyed on user_id for idempotency (safe retries)
+                const { data: upsertedSeller, error: upsertError } = await supabase
+                  .from("sellers")
+                  .upsert(sellerPayload, { onConflict: "user_id" })
+                  .select()
+                  .single();
+
+                if (upsertError) {
+                  // ═══════════════════════════════════════════════════════════════════════════
+                  // CRITICAL: Sellers upsert FAILED - DO NOT claim submission success
+                  // ═══════════════════════════════════════════════════════════════════════════
+                  console.error("[ApplySeller] sellers upsert failed", upsertError);
+                  console.error("   Code:", upsertError.code);
+                  console.error("   Message:", upsertError.message);
+                  console.error("   Details:", upsertError.details);
+                  
+                  // Show error, keep form data intact, allow retry
+                  setSubmitting(false);
+                  alert("Submission failed. Please try again.\n\nError: " + (upsertError.message || "Unknown error"));
+                  return; // EXIT - do not proceed
+                }
+
+                // ═══════════════════════════════════════════════════════════════════════════
+                // STEP 2: Write canonical flags to public.users (gate reads from here)
+                // - seller_onboarding_completed = true (unlocks seller dashboard)
+                // - role = 'seller' (canonical role promotion)
+                // ═══════════════════════════════════════════════════════════════════════════
+                const { error: usersUpdateError } = await supabase
+                  .from("users")
+                  .update({
+                    seller_onboarding_completed: true,
+                    role: "seller"
+                  })
+                  .eq("id", currentUser.id);
+
+                if (usersUpdateError) {
+                  // Log but don't block - sellers row is the submission truth
+                  console.error("[ApplySeller] public.users update failed:", usersUpdateError);
+                } else {
+                  console.log("[ApplySeller] Role promoted to 'seller' in public.users");
+                }
+
+                // ═══════════════════════════════════════════════════════════════════════════
+                // STEP 3: Also update user_metadata (for compatibility/UI convenience)
+                // If this fails, submission is still valid because sellers row exists
+                // ═══════════════════════════════════════════════════════════════════════════
+                const { error: metadataError } = await supabase.auth.updateUser({
                   data: {
-                    // Onboarding lifecycle
                     seller_onboarding_completed: true,
                     seller_onboarding_completed_at: new Date().toISOString(),
-
-                    // 🔒 CRITICAL: lock application state
                     seller_application_status: "pending",
-
-                    // cleanup
                     seller_onboarding_steps_remaining: []
                   }
                 });
 
-                if (error) {
-                  console.error("❌ user_metadata update FAILED:", error);
-                  throw error;
+                if (metadataError) {
+                  // Non-blocking - public.users + sellers row are authoritative
+                  console.error("[ApplySeller] metadata update failed (non-blocking):", metadataError);
                 }
                 
-                console.log("✅ Step 1 Complete: user_metadata updated successfully");
-                console.log("   seller_onboarding_completed: true");
-                console.log("   seller_application_status: pending");
-
-                // 2. Create seller row in database so AdminSellers can see the application
-                // Get fresh user data with all metadata
-                console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                console.log("📝 SELLER INSERT BLOCK - STARTING");
-                console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                // Brief delay for backend propagation
+                await new Promise(resolve => setTimeout(resolve, 500));
                 
-                const { data: { user: currentUser } } = await supabase.auth.getUser();
-                console.log("   Current User ID:", currentUser?.id);
-                console.log("   Current User Email:", currentUser?.email);
-                
-                const userMeta = currentUser?.user_metadata || {};
-                console.log("   User Metadata Keys:", Object.keys(userMeta));
-
-                // Check if seller already exists (guard against duplicates)
-                const { data: existingSeller, error: checkError } = await supabase
-                  .from("sellers")
-                  .select("id")
-                  .eq("user_id", currentUser.id)
-                  .single();
-
-                console.log("   Existing Seller Check:", existingSeller ? "FOUND" : "NOT FOUND");
-                if (checkError && checkError.code !== "PGRST116") {
-                  console.error("   Seller Check Error:", checkError);
-                }
-
-                if (!existingSeller) {
-                  // Create seller row with pending status
-                  // Note: created_at is handled automatically by Supabase
-                  const sellerData = {
-                    user_id: currentUser.id,
-                    created_by: currentUser.email,
-                    status: "pending",
-                    business_name: userMeta.seller_return_full_name || currentUser.email.split("@")[0],
-                    contact_email: currentUser.email,
-                    contact_phone: userMeta.phone_number || null,
-                    pickup_address: userMeta.seller_return_address_1 || null,
-                    pickup_city: userMeta.seller_return_city || null,
-                    pickup_state: userMeta.seller_return_state || null,
-                    pickup_zip: userMeta.seller_return_zip || null
-                  };
-
-                  console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                  console.log("📤 INSERT ATTEMPT START");
-                  console.log("   Seller Data:", JSON.stringify(sellerData, null, 2));
-                  console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-
-                  const { data: insertedSeller, error: insertError } = await supabase
-                    .from("sellers")
-                    .insert(sellerData)
-                    .select()
-                    .single();
-
-                  if (insertError) {
-                    console.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                    console.error("❌ INSERT FAILED");
-                    console.error("   Error Code:", insertError.code);
-                    console.error("   Error Message:", insertError.message);
-                    console.error("   Error Details:", insertError.details);
-                    console.error("   Error Hint:", insertError.hint);
-                    console.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                    // Don't block onboarding completion - admin can create manually if needed
-                  } else {
-                    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                    console.log("✅ INSERT SUCCESS");
-                    console.log("   Seller ID:", insertedSeller?.id);
-                    console.log("   User ID:", insertedSeller?.user_id);
-                    console.log("   Business Name:", insertedSeller?.business_name);
-                    console.log("   Status:", insertedSeller?.status);
-                    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                  }
-                } else {
-                  console.log("ℹ️ Seller row already exists (ID:", existingSeller.id, "), skipping creation");
-                }
-                
-                // 3. Artificial delay to allow backend propagation and local cache update
-                await new Promise(resolve => setTimeout(resolve, 1000));
-                
-                // 4. Redirect to BuyerProfile (seller profile creation happens there)
-                console.log("✅ Onboarding complete, redirecting to BuyerProfile...");
+                // SUCCESS: Redirect to BuyerProfile with pending status
                 navigate(createPageUrl("BuyerProfile"), { replace: true });
+                
               } catch (error) {
-                console.error("Error completing onboarding:", error);
-                alert("Failed to complete setup. Please try again.");
+                console.error("[ApplySeller] exception", error);
+                alert("Submission failed. Please try again.\n\nError: " + (error?.message || "Unknown error"));
                 setSubmitting(false);
               }
             }

@@ -1,6 +1,4 @@
 import React from "react";
-import { supabaseApi as base44 } from "@/api/supabaseClient";
-import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,57 +10,74 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { ExternalLink, TrendingUp, DollarSign, RefreshCw, AlertCircle } from "lucide-react";
+import { ExternalLink, TrendingUp, DollarSign, RefreshCw, AlertCircle, Info } from "lucide-react";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SellerDetailView - Rewired to use analytics_events-backed data
+// 
+// Props:
+//   - seller: Seller entity for identity (name, stripe_account_id)
+//   - payments: Order analytics data mapped to payment-like shape
+//   - orders: Raw orders for delivery fee calculation
+//   - refunds: Empty array (refunds not yet tracked in analytics_events)
+//   - startDate/endDate: Date range for filtering
+//
+// Note: Transfer and Payout data removed - not yet tracked in analytics_events
+// ─────────────────────────────────────────────────────────────────────────────
 
 export default function SellerDetailView({ seller, startDate, endDate, payments, refunds, orders = [] }) {
-  // Filter seller-specific data
-  const sellerPayments = payments.filter(p =>
-    p.seller_id === seller.id &&
-    new Date(p.created_date) >= startDate &&
-    new Date(p.created_date) <= endDate
-  );
+  // Helper to get date from either created_at or created_date
+  const getDate = (item) => new Date(item.created_at || item.created_date);
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // READ PATH (Step T3.5): Prefer seller_entity_id (canonical), fallback to seller_id (legacy)
+  // Analytics data may have seller_id as entity ID (new) or user ID (legacy)
+  // ═══════════════════════════════════════════════════════════════════════════
+  const sellerPayments = payments.filter(p => {
+    // Canonical: seller_id or seller_entity_id matches seller.id (entity PK)
+    const matchesCanonical = p.seller_entity_id === seller.id || p.seller_id === seller.id;
+    // Legacy fallback: seller_id matches seller.user_id (when seller_entity_id is null)
+    const matchesLegacy = !p.seller_entity_id && p.seller_id === seller.user_id;
+    return (matchesCanonical || matchesLegacy) &&
+      getDate(p) >= startDate &&
+      getDate(p) <= endDate;
+  });
 
-  const sellerOrders = orders.filter(o =>
-    o.seller_id === seller.id &&
-    new Date(o.created_date) >= startDate &&
-    new Date(o.created_date) <= endDate
-  );
+  // ═══════════════════════════════════════════════════════════════════════════
+  // READ PATH (Step T3.5): Prefer seller_entity_id (canonical), fallback to seller_id (legacy)
+  // - New orders: seller_entity_id = seller.id
+  // - Legacy orders: seller_id = seller.user_id (seller_entity_id is null)
+  // ═══════════════════════════════════════════════════════════════════════════
+  const sellerOrders = orders.filter(o => {
+    // Canonical: seller_entity_id matches seller.id
+    const matchesCanonical = o.seller_entity_id === seller.id;
+    // Legacy fallback: seller_id matches seller.user_id (when seller_entity_id is null)
+    const matchesLegacy = !o.seller_entity_id && o.seller_id === seller.user_id;
+    return (matchesCanonical || matchesLegacy) &&
+      getDate(o) >= startDate &&
+      getDate(o) <= endDate;
+  });
 
+  // Refunds: filter by seller (refunds array is currently empty)
+  // Apply same canonical + legacy fallback for consistency
   const sellerRefunds = refunds.filter(r => {
-    const payment = payments.find(p => p.stripe_charge_id === r.stripe_charge_id);
-    return payment && payment.seller_id === seller.id &&
-      new Date(r.created_date) >= startDate &&
-      new Date(r.created_date) <= endDate;
+    const refundDate = getDate(r);
+    // Canonical: seller_entity_id or seller_id matches seller.id
+    const matchesCanonical = r.seller_entity_id === seller.id || r.seller_id === seller.id;
+    // Legacy fallback: seller_id matches seller.user_id
+    const matchesLegacy = !r.seller_entity_id && r.seller_id === seller.user_id;
+    return (matchesCanonical || matchesLegacy) &&
+      refundDate >= startDate &&
+      refundDate <= endDate;
   });
 
-  // Fetch transfers and payouts
-  const { data: transfers = [] } = useQuery({
-    queryKey: ['seller-transfers', seller.id],
-    queryFn: async () => {
-      const allTransfers = await base44.entities.Transfer.list();
-      return allTransfers.filter(t =>
-        t.stripe_destination_account === seller.stripe_account_id
-      );
-    }
-  });
-
-  const { data: payouts = [] } = useQuery({
-    queryKey: ['seller-payouts', seller.id],
-    queryFn: async () => {
-      const allPayouts = await base44.entities.Payout.list();
-      return allPayouts.filter(p =>
-        p.stripe_account_id === seller.stripe_account_id
-      );
-    }
-  });
-
-  // Calculate metrics
+  // Calculate metrics from analytics data
   const gmv = sellerPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
   const deliveryFees = sellerOrders.reduce((sum, o) => sum + (o.delivery_fee || 0), 0);
   const refundAmount = sellerRefunds.reduce((sum, r) => sum + (r.amount || 0), 0);
+  // Platform fees not tracked in analytics_events yet
   const platformFees = sellerPayments.reduce((sum, p) => sum + (p.application_fee || 0), 0);
   const netToSeller = gmv - refundAmount - platformFees;
-  const lastPayout = payouts.length > 0 ? payouts[payouts.length - 1] : null;
 
   const kpiCards = [
     {
@@ -74,7 +89,7 @@ export default function SellerDetailView({ seller, startDate, endDate, payments,
     {
       title: "Delivery Fees",
       value: `$${deliveryFees.toFixed(2)}`,
-      icon: AlertCircle, // Using AlertCircle as a placeholder for Truck if needed
+      icon: AlertCircle,
       color: "from-blue-500 to-cyan-500"
     },
     {
@@ -87,7 +102,8 @@ export default function SellerDetailView({ seller, startDate, endDate, payments,
       title: "Platform Fee",
       value: `$${platformFees.toFixed(2)}`,
       icon: DollarSign,
-      color: "from-purple-500 to-pink-500"
+      color: "from-purple-500 to-pink-500",
+      note: platformFees === 0 ? "Not tracked yet" : null
     },
     {
       title: "Net to Seller",
@@ -135,7 +151,7 @@ export default function SellerDetailView({ seller, startDate, endDate, payments,
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
         {kpiCards.map((kpi, index) => (
           <Card key={index} className="relative overflow-hidden border-0 shadow-lg">
             <div className={`absolute inset-0 bg-gradient-to-br ${kpi.color} opacity-5`}></div>
@@ -144,6 +160,9 @@ export default function SellerDetailView({ seller, startDate, endDate, payments,
                 <div>
                   <p className="text-xs font-medium text-gray-600 mb-1">{kpi.title}</p>
                   <p className="text-lg font-bold text-gray-900">{kpi.value}</p>
+                  {kpi.note && (
+                    <p className="text-xs text-gray-400 mt-1">{kpi.note}</p>
+                  )}
                 </div>
                 <div className={`w-8 h-8 rounded-lg bg-gradient-to-br ${kpi.color} flex items-center justify-center`}>
                   <kpi.icon className="w-4 h-4 text-white" />
@@ -154,30 +173,10 @@ export default function SellerDetailView({ seller, startDate, endDate, payments,
         ))}
       </div>
 
-      {/* Last Payout Info */}
-      {lastPayout && (
-        <Card className="border-0 shadow-lg bg-blue-50">
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-blue-900">Last Payout</p>
-                <p className="text-lg font-bold text-blue-900">${lastPayout.amount?.toFixed(2)}</p>
-                <p className="text-xs text-blue-700">
-                  {new Date(lastPayout.paid_at || lastPayout.created_date).toLocaleDateString()}
-                </p>
-              </div>
-              <Badge className="bg-blue-500 text-white border-0">
-                {lastPayout.status}
-              </Badge>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Payments Table */}
+      {/* Payments/Orders Table */}
       <Card className="border-0 shadow-lg">
         <CardHeader>
-          <CardTitle>Payments ({sellerPayments.length})</CardTitle>
+          <CardTitle>Orders ({sellerPayments.length})</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="overflow-x-auto">
@@ -185,12 +184,10 @@ export default function SellerDetailView({ seller, startDate, endDate, payments,
               <TableHeader>
                 <TableRow>
                   <TableHead>Order ID</TableHead>
-                  <TableHead>Charge ID</TableHead>
                   <TableHead className="text-right">Amount</TableHead>
                   <TableHead className="text-right">Fee</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Date</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -198,16 +195,11 @@ export default function SellerDetailView({ seller, startDate, endDate, payments,
                   <TableRow key={payment.id}>
                     <TableCell>
                       <code className="text-xs bg-gray-100 px-2 py-1 rounded">
-                        {payment.order_id?.substring(0, 8)}...
-                      </code>
-                    </TableCell>
-                    <TableCell>
-                      <code className="text-xs bg-gray-100 px-2 py-1 rounded">
-                        {payment.stripe_charge_id?.substring(0, 12)}...
+                        {payment.order_id?.substring(0, 8) || "—"}...
                       </code>
                     </TableCell>
                     <TableCell className="text-right font-semibold">
-                      ${payment.amount?.toFixed(2)}
+                      ${payment.amount?.toFixed(2) || "0.00"}
                     </TableCell>
                     <TableCell className="text-right text-purple-600">
                       ${payment.application_fee?.toFixed(2) || "0.00"}
@@ -215,32 +207,16 @@ export default function SellerDetailView({ seller, startDate, endDate, payments,
                     <TableCell>
                       <Badge
                         className={
-                          payment.status === "succeeded"
+                          payment.status === "succeeded" || payment.status === "fulfilled" || payment.status === "picked_up"
                             ? "bg-green-100 text-green-800 border-green-200"
                             : "bg-gray-100 text-gray-800 border-gray-200"
                         }
                       >
-                        {payment.status}
+                        {payment.status || "pending"}
                       </Badge>
                     </TableCell>
                     <TableCell>
-                      {new Date(payment.created_date).toLocaleDateString()}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      {payment.stripe_charge_id && (
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() =>
-                            window.open(
-                              `https://dashboard.stripe.com/payments/${payment.stripe_charge_id}`,
-                              "_blank"
-                            )
-                          }
-                        >
-                          <ExternalLink className="w-4 h-4" />
-                        </Button>
-                      )}
+                      {getDate(payment).toLocaleDateString()}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -248,7 +224,7 @@ export default function SellerDetailView({ seller, startDate, endDate, payments,
             </Table>
           </div>
           {sellerPayments.length === 0 && (
-            <div className="text-center py-8 text-gray-500">No payments in this period</div>
+            <div className="text-center py-8 text-gray-500">No orders in this period</div>
           )}
         </CardContent>
       </Card>
@@ -265,12 +241,10 @@ export default function SellerDetailView({ seller, startDate, endDate, payments,
                 <TableHeader>
                   <TableRow>
                     <TableHead>Refund ID</TableHead>
-                    <TableHead>Charge ID</TableHead>
                     <TableHead className="text-right">Amount</TableHead>
                     <TableHead>Reason</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Date</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -278,16 +252,11 @@ export default function SellerDetailView({ seller, startDate, endDate, payments,
                     <TableRow key={refund.id}>
                       <TableCell>
                         <code className="text-xs bg-gray-100 px-2 py-1 rounded">
-                          {refund.stripe_refund_id?.substring(0, 12)}...
-                        </code>
-                      </TableCell>
-                      <TableCell>
-                        <code className="text-xs bg-gray-100 px-2 py-1 rounded">
-                          {refund.stripe_charge_id?.substring(0, 12)}...
+                          {refund.id?.substring(0, 12) || "—"}...
                         </code>
                       </TableCell>
                       <TableCell className="text-right font-semibold text-red-600">
-                        ${refund.amount?.toFixed(2)}
+                        ${refund.amount?.toFixed(2) || "0.00"}
                       </TableCell>
                       <TableCell>{refund.reason || "N/A"}</TableCell>
                       <TableCell>
@@ -298,27 +267,11 @@ export default function SellerDetailView({ seller, startDate, endDate, payments,
                               : "bg-gray-100 text-gray-800 border-gray-200"
                           }
                         >
-                          {refund.status}
+                          {refund.status || "pending"}
                         </Badge>
                       </TableCell>
                       <TableCell>
-                        {new Date(refund.created_date).toLocaleDateString()}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        {refund.stripe_refund_id && (
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() =>
-                              window.open(
-                                `https://dashboard.stripe.com/refunds/${refund.stripe_refund_id}`,
-                                "_blank"
-                              )
-                            }
-                          >
-                            <ExternalLink className="w-4 h-4" />
-                          </Button>
-                        )}
+                        {getDate(refund).toLocaleDateString()}
                       </TableCell>
                     </TableRow>
                   ))}
@@ -329,75 +282,37 @@ export default function SellerDetailView({ seller, startDate, endDate, payments,
         </Card>
       )}
 
-      {/* Payouts Table */}
-      {payouts.length > 0 && (
-        <Card className="border-0 shadow-lg">
-          <CardHeader>
-            <CardTitle>Payouts ({payouts.length})</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Payout ID</TableHead>
-                    <TableHead className="text-right">Amount</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Arrival Date</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {payouts.map((payout) => (
-                    <TableRow key={payout.id}>
-                      <TableCell>
-                        <code className="text-xs bg-gray-100 px-2 py-1 rounded">
-                          {payout.stripe_payout_id?.substring(0, 12)}...
-                        </code>
-                      </TableCell>
-                      <TableCell className="text-right font-semibold">
-                        ${payout.amount?.toFixed(2)}
-                      </TableCell>
-                      <TableCell>
-                        <Badge
-                          className={
-                            payout.status === "paid"
-                              ? "bg-green-100 text-green-800 border-green-200"
-                              : payout.status === "failed"
-                              ? "bg-red-100 text-red-800 border-red-200"
-                              : "bg-yellow-100 text-yellow-800 border-yellow-200"
-                          }
-                        >
-                          {payout.status}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        {payout.arrival_date ? new Date(payout.arrival_date).toLocaleDateString() : "N/A"}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        {payout.stripe_payout_id && (
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() =>
-                              window.open(
-                                `https://dashboard.stripe.com/payouts/${payout.stripe_payout_id}`,
-                                "_blank"
-                              )
-                            }
-                          >
-                            <ExternalLink className="w-4 h-4" />
-                          </Button>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+      {/* Payouts Notice */}
+      <Card className="border-0 shadow-lg bg-gray-50">
+        <CardContent className="p-4">
+          <div className="flex items-center gap-3 text-gray-600">
+            <Info className="w-5 h-5" />
+            <div>
+              <p className="text-sm font-medium">Payout & Transfer History</p>
+              <p className="text-xs text-gray-500">
+                Stripe payout data will be available in a future update. 
+                View payout details directly in the{" "}
+                {seller.stripe_account_id ? (
+                  <Button
+                    variant="link"
+                    className="p-0 h-auto text-xs text-blue-600"
+                    onClick={() =>
+                      window.open(
+                        `https://dashboard.stripe.com/connect/accounts/${seller.stripe_account_id}`,
+                        "_blank"
+                      )
+                    }
+                  >
+                    Stripe Dashboard
+                  </Button>
+                ) : (
+                  "Stripe Dashboard"
+                )}
+              </p>
             </div>
-          </CardContent>
-        </Card>
-      )}
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }

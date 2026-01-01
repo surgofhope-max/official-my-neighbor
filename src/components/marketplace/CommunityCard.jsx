@@ -3,7 +3,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Users, Radio, Sparkles, Package, Store, Home, ShoppingCart, Truck, Leaf, Video, Key, UserPlus, UserCheck } from "lucide-react";
-import { supabaseApi as base44 } from "@/api/supabaseClient";
+import { supabase } from "@/lib/supabase/supabaseClient";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import ShareButton from "../sharing/ShareButton";
 
@@ -18,53 +18,110 @@ export default function CommunityCard({ community, onClick, followerCount = 0, l
   }, []);
 
   const loadUser = async () => {
+    let currentUser = null;
+
+    // Auth check — ONLY this section may set user = null
     try {
-      const currentUser = await base44.auth.me();
-      setUser(currentUser);
-      
-      const follows = await base44.entities.FollowedCommunity.filter({
-        user_id: currentUser.id,
-        community_id: community.id
-      });
-      
-      if (follows.length > 0) {
-        setIsFollowing(true);
-        setFollowRecordId(follows[0].id);
+      const { data, error } = await supabase.auth.getUser();
+      if (error || !data?.user) {
+        setUser(null);
+        return;
       }
-    } catch (error) {
+      currentUser = data.user;
+      setUser(currentUser);
+    } catch (err) {
       setUser(null);
+      return;
+    }
+
+    // Follow status check — MUST NOT affect auth state
+    try {
+      const { data: followRow, error: followErr } = await supabase
+        .from("followed_communities")
+        .select("id")
+        .eq("user_id", currentUser.id)
+        .eq("community_id", community.id)
+        .maybeSingle();
+
+      if (followErr) {
+        // Fail safely — user remains authenticated
+        return;
+      }
+
+      if (followRow?.id) {
+        setIsFollowing(true);
+        setFollowRecordId(followRow.id);
+      } else {
+        setIsFollowing(false);
+        setFollowRecordId(null);
+      }
+    } catch (err) {
+      // Swallow error — user remains authenticated
     }
   };
 
   const followMutation = useMutation({
     mutationFn: async () => {
       if (!user) {
-        base44.auth.redirectToLogin(window.location.href);
+        sessionStorage.setItem("login_return_url", window.location.href);
+        window.location.href = "/Login";
         return;
       }
       
-      const newFollow = await base44.entities.FollowedCommunity.create({
-        user_id: user.id,
-        community_id: community.id
-      });
-      return newFollow;
+      const { data, error } = await supabase
+        .from("followed_communities")
+        .insert({ user_id: user.id, community_id: community.id })
+        .select("id")
+        .maybeSingle();
+
+      if (error) {
+        throw error;
+      }
+      return data;
     },
     onSuccess: (newFollow) => {
       setIsFollowing(true);
-      setFollowRecordId(newFollow.id);
+      setFollowRecordId(newFollow?.id ?? null);
       queryClient.invalidateQueries({ queryKey: ['followed-communities'] });
+      queryClient.invalidateQueries({ queryKey: ['followed-communities', user?.id] });
+      queryClient.invalidateQueries({ queryKey: ['buyer-followed-communities', user?.id] });
+    },
+    onError: () => {
+      // Fail safely — do not redirect, do not modify auth state
     }
   });
 
   const unfollowMutation = useMutation({
     mutationFn: async () => {
-      if (!followRecordId) return;
-      await base44.entities.FollowedCommunity.delete(followRecordId);
+      let error;
+      if (followRecordId) {
+        const result = await supabase
+          .from("followed_communities")
+          .delete()
+          .eq("id", followRecordId);
+        error = result.error;
+      } else if (user?.id && community?.id) {
+        // Fallback: delete by user_id + community_id
+        const result = await supabase
+          .from("followed_communities")
+          .delete()
+          .eq("user_id", user.id)
+          .eq("community_id", community.id);
+        error = result.error;
+      }
+      if (error) {
+        throw error;
+      }
     },
     onSuccess: () => {
       setIsFollowing(false);
       setFollowRecordId(null);
       queryClient.invalidateQueries({ queryKey: ['followed-communities'] });
+      queryClient.invalidateQueries({ queryKey: ['followed-communities', user?.id] });
+      queryClient.invalidateQueries({ queryKey: ['buyer-followed-communities', user?.id] });
+    },
+    onError: () => {
+      // Fail safely — do not redirect, do not modify auth state
     }
   });
 

@@ -213,7 +213,7 @@ export interface CreateProductInput {
   price: number;
   original_price?: number;
   quantity: number;
-  images?: any[] | null;
+  image_urls?: string[] | null;
   category?: string;
   givi_type?: string;
   status?: "active" | "sold_out" | "hidden" | "deleted";
@@ -243,7 +243,7 @@ export async function createProduct(
         price: input.price,
         original_price: input.original_price ?? null,
         quantity: input.quantity,
-        images: input.images ?? [],
+        image_urls: input.image_urls ?? [],
         category: input.category ?? null,
         givi_type: input.givi_type ?? null,
         status: input.status ?? "active",

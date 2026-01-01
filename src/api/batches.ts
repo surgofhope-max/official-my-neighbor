@@ -3,61 +3,72 @@
  *
  * Provides queries and mutations for batch data.
  * Batches group orders by buyer + show.
+ *
+ * Schema (Supabase `batches` table):
+ * - id (uuid)
+ * - buyer_id (uuid) — FK to public.users.id
+ * - seller_id (uuid)
+ * - show_id (uuid)
+ * - batch_number (text)
+ * - completion_code (text)
+ * - status (text)
+ * - total_items (integer)
+ * - total_amount (numeric)
+ * - completed_at (timestamptz)
+ * - completed_by (text)
+ * - created_at (timestamptz)
+ * - updated_at (timestamptz)
+ *
+ * IDENTITY MODEL:
+ * - public.users.id === auth.users.id (same UUID)
+ * - auth_user_id maps DIRECTLY to buyer_id
+ * - public.users row is guaranteed at signup/login via auth trigger
+ * - No client-side identity provisioning required
  */
 
 import { supabase } from "@/lib/supabase/supabaseClient";
+import { emitAnalyticsEvent } from "./fulfillment";
+
+// TEMP DEBUG FLAG — set to false to silence debug logs
+const DEBUG_BATCH = true;
 
 export interface Batch {
   id: string;
-  buyer_id?: string; // Legacy field name
-  buyer_user_id?: string; // Newer field name
-  buyer_name?: string;
-  buyer_email?: string;
-  buyer_phone?: string;
+  buyer_id: string;
   seller_id: string;
   show_id: string;
-  show_title?: string;
-  seller_name?: string;
   batch_number?: string;
   completion_code?: string;
-  status: "pending" | "ready" | "completed" | "picked_up" | "cancelled";
+  status: "pending" | "active" | "ready" | "completed" | "picked_up" | "cancelled";
   total_items: number;
   total_amount: number;
-  pickup_notes?: string;
-  pickup_location?: string;
-  pickup_address?: string;
-  pickup_city?: string;
-  pickup_state?: string;
-  pickup_zip?: string;
-  created_date?: string;
-  ready_at?: string;
-  picked_up_at?: string;
+  completed_at?: string;
+  completed_by?: string;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface CreateBatchInput {
-  buyer_id: string;
-  buyer_name: string;
-  buyer_email: string;
-  buyer_phone: string;
+  /** The auth.users.id — maps directly to public.users.id / buyer_id */
+  auth_user_id: string;
   seller_id: string;
   show_id: string;
   batch_number: string;
   completion_code: string;
-  pickup_location?: string;
-  pickup_notes?: string;
 }
 
 export interface UpdateBatchInput {
   total_items?: number;
   total_amount?: number;
   status?: Batch["status"];
+  completed_at?: string;
 }
 
 /**
- * Get all batches for a given buyer user ID.
+ * Get all batches for a given buyer.
  *
- * @param buyerUserId - The buyer's user ID
- * @returns Array of batches, sorted by created_date DESC
+ * @param authUserId - The buyer's auth.users.id (= public.users.id)
+ * @returns Array of batches, sorted by created_at DESC
  *
  * This function:
  * - Never throws
@@ -65,9 +76,9 @@ export interface UpdateBatchInput {
  * - Returns [] on any error
  */
 export async function getBatchesByBuyerId(
-  buyerUserId: string | null
+  authUserId: string | null
 ): Promise<Batch[]> {
-  if (!buyerUserId) {
+  if (!authUserId) {
     return [];
   }
 
@@ -75,8 +86,8 @@ export async function getBatchesByBuyerId(
     const { data, error } = await supabase
       .from("batches")
       .select("*")
-      .eq("buyer_user_id", buyerUserId)
-      .order("created_date", { ascending: false });
+      .eq("buyer_id", authUserId)
+      .order("created_at", { ascending: false });
 
     if (error) {
       console.warn("Failed to fetch batches by buyer ID:", error.message);
@@ -130,7 +141,7 @@ export async function getBatchById(
 /**
  * Find an active batch for a buyer + seller + show combination.
  *
- * @param buyerId - The buyer's user ID
+ * @param authUserId - The buyer's auth.users.id (= public.users.id)
  * @param sellerId - The seller ID
  * @param showId - The show ID
  * @returns The active batch if found, null otherwise
@@ -141,11 +152,20 @@ export async function getBatchById(
  * - Returns null on any error
  */
 export async function findActiveBatch(
-  buyerId: string | null,
+  authUserId: string | null,
   sellerId: string | null,
   showId: string | null
 ): Promise<Batch | null> {
-  if (!buyerId || !sellerId || !showId) {
+  if (DEBUG_BATCH) {
+    console.log("[BATCH] findActiveBatch called", {
+      authUserId,
+      sellerId,
+      showId,
+    });
+  }
+
+  if (!authUserId || !sellerId || !showId) {
+    if (DEBUG_BATCH) console.log("[BATCH] findActiveBatch: missing params, returning null");
     return null;
   }
 
@@ -153,22 +173,27 @@ export async function findActiveBatch(
     const { data, error } = await supabase
       .from("batches")
       .select("*")
-      .eq("buyer_id", buyerId)
+      .eq("buyer_id", authUserId)
       .eq("seller_id", sellerId)
       .eq("show_id", showId)
-      .neq("status", "completed")
-      .neq("status", "picked_up")
-      .order("created_date", { ascending: false })
+      .eq("status", "active")
+      .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
 
     if (error) {
+      if (DEBUG_BATCH) console.error("[BATCH] findActiveBatch error:", error);
       console.warn("Failed to find active batch:", error.message);
       return null;
     }
 
+    if (DEBUG_BATCH) {
+      console.log("[BATCH] findActiveBatch result:", data ? "FOUND" : "NOT FOUND", data?.id);
+    }
+
     return data as Batch | null;
   } catch (err) {
+    if (DEBUG_BATCH) console.error("[BATCH] findActiveBatch exception:", err);
     console.warn("Unexpected error finding active batch:", err);
     return null;
   }
@@ -187,34 +212,51 @@ export async function findActiveBatch(
 export async function createBatch(
   input: CreateBatchInput
 ): Promise<Batch | null> {
+  const payload = {
+    buyer_id: input.auth_user_id,
+    seller_id: input.seller_id,
+    show_id: input.show_id,
+    batch_number: input.batch_number,
+    completion_code: input.completion_code,
+    status: "active",
+    total_items: 0,
+    total_amount: 0,
+  };
+
+  if (DEBUG_BATCH) {
+    console.log("[BATCH] createBatch called with input:", input);
+    console.log("[BATCH] createBatch INSERT payload:", payload);
+    console.log("[BATCH] createBatch buyer_id value:", payload.buyer_id, "type:", typeof payload.buyer_id);
+  }
+
   try {
     const { data, error } = await supabase
       .from("batches")
-      .insert({
-        buyer_id: input.buyer_id,
-        buyer_name: input.buyer_name,
-        buyer_email: input.buyer_email,
-        buyer_phone: input.buyer_phone,
-        seller_id: input.seller_id,
-        show_id: input.show_id,
-        batch_number: input.batch_number,
-        completion_code: input.completion_code,
-        pickup_location: input.pickup_location || "",
-        pickup_notes: input.pickup_notes || "",
-        total_items: 0,
-        total_amount: 0,
-        status: "pending",
-      })
+      .insert(payload)
       .select()
       .single();
 
     if (error) {
+      if (DEBUG_BATCH) {
+        console.error("[BATCH] createBatch FAILED:", {
+          errorMessage: error.message,
+          errorCode: error.code,
+          errorDetails: error.details,
+          errorHint: error.hint,
+          fullError: error,
+        });
+      }
       console.warn("Failed to create batch:", error.message);
       return null;
     }
 
+    if (DEBUG_BATCH) {
+      console.log("[BATCH] createBatch SUCCESS:", data?.id);
+    }
+
     return data as Batch;
   } catch (err) {
+    if (DEBUG_BATCH) console.error("[BATCH] createBatch exception:", err);
     console.warn("Unexpected error creating batch:", err);
     return null;
   }
@@ -224,7 +266,7 @@ export async function createBatch(
  * Update an existing batch.
  *
  * @param batchId - The batch ID to update
- * @param updates - The fields to update
+ * @param updates - The fields to update (total_items, total_amount, status, completed_at)
  * @returns The updated batch, or null on error
  *
  * This function:
@@ -239,6 +281,10 @@ export async function updateBatch(
     return null;
   }
 
+  if (DEBUG_BATCH) {
+    console.log("[BATCH] updateBatch called:", { batchId, updates });
+  }
+
   try {
     const { data, error } = await supabase
       .from("batches")
@@ -248,12 +294,16 @@ export async function updateBatch(
       .single();
 
     if (error) {
+      if (DEBUG_BATCH) console.error("[BATCH] updateBatch FAILED:", error);
       console.warn("Failed to update batch:", error.message);
       return null;
     }
 
+    if (DEBUG_BATCH) console.log("[BATCH] updateBatch SUCCESS:", data?.id);
+
     return data as Batch;
   } catch (err) {
+    if (DEBUG_BATCH) console.error("[BATCH] updateBatch exception:", err);
     console.warn("Unexpected error updating batch:", err);
     return null;
   }
@@ -266,25 +316,62 @@ export async function updateBatch(
  * @returns An object with the batch and whether it was newly created
  *
  * This function:
- * - Never throws
+ * - Never throws (catches and returns null batch)
  * - Returns null batch on any error
  */
 export async function findOrCreateBatch(
   input: CreateBatchInput
 ): Promise<{ batch: Batch | null; isNew: boolean }> {
+  if (DEBUG_BATCH) {
+    console.log("[BATCH] ========================================");
+    console.log("[BATCH] findOrCreateBatch START");
+    console.log("[BATCH] input:", JSON.stringify(input, null, 2));
+    console.log("[BATCH] auth_user_id:", input.auth_user_id);
+    console.log("[BATCH] seller_id:", input.seller_id);
+    console.log("[BATCH] show_id:", input.show_id);
+  }
+
   // First, try to find an existing active batch
   const existingBatch = await findActiveBatch(
-    input.buyer_id,
+    input.auth_user_id,
     input.seller_id,
     input.show_id
   );
 
   if (existingBatch) {
+    if (DEBUG_BATCH) {
+      console.log("[BATCH] findOrCreateBatch: FOUND existing batch:", existingBatch.id);
+      console.log("[BATCH] ========================================");
+    }
     return { batch: existingBatch, isNew: false };
+  }
+
+  if (DEBUG_BATCH) {
+    console.log("[BATCH] findOrCreateBatch: No existing batch, creating new...");
   }
 
   // No active batch found, create a new one
   const newBatch = await createBatch(input);
+
+  if (DEBUG_BATCH) {
+    console.log("[BATCH] findOrCreateBatch END:", newBatch ? "SUCCESS" : "FAILED");
+    console.log("[BATCH] ========================================");
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // ANALYTICS: Emit batch_created event (fail-open, non-blocking)
+  // Emits ONLY when a NEW batch is created, NOT when existing batch is reused
+  // ─────────────────────────────────────────────────────────────────────────
+  if (newBatch) {
+    emitAnalyticsEvent("batch_created", {
+      batch_id: newBatch.id,
+      buyer_id: input.auth_user_id,
+      seller_id: input.seller_id,  // Entity ID (public.sellers.id)
+      seller_user_id: null,        // Not available at batch creation
+      show_id: input.show_id,
+      actor_user_id: input.auth_user_id,  // Buyer is the actor
+    });
+  }
+
   return { batch: newBatch, isNew: true };
 }
-

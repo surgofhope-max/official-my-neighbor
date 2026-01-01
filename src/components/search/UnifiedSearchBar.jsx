@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { supabaseApi as base44 } from "@/api/supabaseClient";
+import { supabase } from "@/lib/supabase/supabaseClient";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -7,7 +7,7 @@ import { Search, Home, Store, Video, Package, Loader2, TrendingUp } from "lucide
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 
-export default function UnifiedSearchBar({ placeholder = "Search shows, sellers, products...", className = "", onCommunitySelect }) {
+export default function UnifiedSearchBar({ placeholder = "Search shows, sellers, products...", className = "" }) {
   const navigate = useNavigate();
   const [searchTerm, setSearchTerm] = useState("");
   const [isSearching, setIsSearching] = useState(false);
@@ -62,17 +62,25 @@ export default function UnifiedSearchBar({ placeholder = "Search shows, sellers,
     };
   }, [searchTerm]);
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STEP C6-E.1: Search using Supabase (replaces Base44)
+  // ═══════════════════════════════════════════════════════════════════════════
   const performSearch = async (query) => {
     const lowerQuery = query.toLowerCase();
 
     try {
-      // Fetch all data in parallel
-      const [communities, sellers, allShows, products] = await Promise.all([
-        base44.entities.Community.filter({ is_active: true }),
-        base44.entities.Seller.filter({ status: "approved" }),
-        base44.entities.Show.list(),
-        base44.entities.Product.list()
+      // Fetch all data in parallel from Supabase
+      const [communitiesRes, sellersRes, showsRes, productsRes] = await Promise.all([
+        supabase.from("communities").select("id, name, label, icon_name").eq("is_active", true),
+        supabase.from("sellers").select("id, user_id, business_name, profile_image_url, status").eq("status", "approved"),
+        supabase.from("shows").select("id, title, description, status, seller_id").in("status", ["scheduled", "live"]),
+        supabase.from("products").select("id, name, price, status, seller_id, show_id, image_urls")
       ]);
+
+      const communities = communitiesRes.data ?? [];
+      const sellers = sellersRes.data ?? [];
+      const allShows = showsRes.data ?? [];
+      const products = productsRes.data ?? [];
 
       // Create a Set of ended show IDs for quick lookup
       const endedShowIds = new Set(
@@ -164,11 +172,8 @@ export default function UnifiedSearchBar({ placeholder = "Search shows, sellers,
 
     switch (type) {
       case 'community':
-        if (onCommunitySelect) {
-          onCommunitySelect(data.name);
-        } else {
-          navigate(createPageUrl("Marketplace") + `?community=${data.name}`);
-        }
+        // STEP C6-E.2: Always navigate to canonical CommunityPage
+        navigate(createPageUrl(`CommunityPage?community=${data.name}`));
         break;
       case 'seller':
         navigate(createPageUrl("SellerStorefront") + `?sellerId=${data.id}`);

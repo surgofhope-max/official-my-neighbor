@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { supabase } from "@/lib/supabase/supabaseClient";
@@ -7,7 +7,60 @@ import { getUnreadNotificationCount } from "@/api/notifications";
 import { getUnreadMessageCount } from "@/api/messages";
 import { getEffectiveUserContext } from "@/lib/auth/effectiveUser";
 import { getSellerByUserId, getSellerById } from "@/api/sellers";
-import { canAccessRoute, getUnauthorizedRedirect, isSuperAdmin } from "@/lib/auth/routeGuards";
+import { canAccessRoute, getUnauthorizedRedirect, isSuperAdmin, requireSellerAsync } from "@/lib/auth/routeGuards";
+
+// ═══════════════════════════════════════════════════════════════════════════
+// IDENTITY CACHE: Session-scoped cache to reduce Supabase cold-start reads
+// Cache TTL: 10 minutes. Stored in sessionStorage for tab persistence.
+// ═══════════════════════════════════════════════════════════════════════════
+const IDENTITY_CACHE_KEY = "lm_identity_cache";
+const IDENTITY_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+/**
+ * Identity cache structure for session-scoped caching
+ */
+function readIdentityCache() {
+  try {
+    const raw = sessionStorage.getItem(IDENTITY_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    // Validate structure
+    if (typeof parsed?.userId !== "string" || typeof parsed?.timestamp !== "number") {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeIdentityCache(data) {
+  try {
+    sessionStorage.setItem(IDENTITY_CACHE_KEY, JSON.stringify({
+      ...data,
+      timestamp: Date.now()
+    }));
+  } catch {
+    // sessionStorage may be unavailable in some contexts
+  }
+}
+
+function clearIdentityCache() {
+  try {
+    sessionStorage.removeItem(IDENTITY_CACHE_KEY);
+  } catch {
+    // Ignore errors
+  }
+}
+
+function isIdentityCacheValid(cache, userId) {
+  if (!cache) return false;
+  // Must match current user
+  if (cache.userId !== userId) return false;
+  // Must be younger than TTL
+  const age = Date.now() - cache.timestamp;
+  return age < IDENTITY_CACHE_TTL_MS;
+}
 import {
   Video,
   ShoppingBag,
@@ -39,8 +92,93 @@ export default function Layout({ children, currentPageName }) {
   const { user, isLoadingAuth } = useSupabaseAuth();
   
   const [seller, setSeller] = useState(null);
+  // Option B: Track approved seller status from DB truth
+  const [isVerifiedApprovedSeller, setIsVerifiedApprovedSeller] = useState(false);
+  const [dbUserRole, setDbUserRole] = useState(null);
   const [unreadCount, setUnreadCount] = useState(0);
   const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ACCOUNT STATUS: Platform-level suspension state
+  // 'active' = full access, 'suspended' = viewer-only mode
+  // Canonical source: public.users.account_status
+  // ═══════════════════════════════════════════════════════════════════════════
+  const [accountStatus, setAccountStatus] = useState("active");
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // AUTH HYDRATION GATE: Prevents routing decisions until session is fully ready
+  // authHydrated becomes true ONLY when:
+  //   1. Auth provider has finished initial session check (isLoadingAuth = false)
+  //   2. Identity data (user role, seller status) has been loaded
+  // Until authHydrated is true, Layout renders a neutral loading state.
+  // ═══════════════════════════════════════════════════════════════════════════
+  const [authHydrated, setAuthHydrated] = useState(false);
+  const authHydratedLoggedRef = useRef(false); // One-time log tracker
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // IDENTITY CACHE STATE: Prevent repeated DB reads on route changes
+  // identityLoadedRef tracks if we've already loaded identity this session
+  // ═══════════════════════════════════════════════════════════════════════════
+  const identityLoadedRef = useRef(false);
+  const identityLoadingRef = useRef(false); // Prevent concurrent loads
+  const cacheLoggedRef = useRef(false); // One-time log tracker
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CIRCUIT BREAKER: Stop hammering Supabase when degraded (503/timeout)
+  // Non-critical queries pause when degraded. Critical flows still work.
+  // Manual refresh resets the flag.
+  // ═══════════════════════════════════════════════════════════════════════════
+  const [supabaseDegraded, setSupabaseDegraded] = useState(false);
+  const degradedLoggedRef = useRef(false);
+
+  // Helper to detect degraded state from error
+  const checkAndSetDegraded = (error) => {
+    if (!error) return false;
+    const msg = error?.message?.toLowerCase() || "";
+    const code = error?.code || "";
+    const status = error?.status || error?.statusCode;
+    
+    const isDegraded = 
+      status === 503 ||
+      code === "503" ||
+      msg.includes("503") ||
+      msg.includes("upstream connect error") ||
+      msg.includes("connection timeout") ||
+      msg.includes("fetch failed") ||
+      msg.includes("networkerror") ||
+      msg.includes("failed to fetch");
+
+    if (isDegraded && !supabaseDegraded) {
+      setSupabaseDegraded(true);
+      if (!degradedLoggedRef.current) {
+        console.warn("[Supabase] Entering degraded mode — pausing background queries");
+        degradedLoggedRef.current = true;
+      }
+    }
+    return isDegraded;
+  };
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // FORCE REFRESH: Explicit retry action to refresh identity from Supabase
+  // Call this when user clicks "Retry" or when we want to re-check after recovery
+  // ═══════════════════════════════════════════════════════════════════════════
+  const forceRefreshIdentity = useCallback(async () => {
+    if (!user) return;
+    
+    // Clear cache and reset flags
+    clearIdentityCache();
+    identityLoadedRef.current = false;
+    cacheLoggedRef.current = false;
+    authHydratedLoggedRef.current = false;
+    setSupabaseDegraded(false);
+    degradedLoggedRef.current = false;
+    // Note: Don't reset authHydrated to false here - we want to keep the app usable during refresh
+    
+    // Re-fetch from Supabase
+    await loadSellerData(user);
+    loadUnreadCount(user);
+    loadUnreadNotificationCount(user);
+  }, [user]);
 
   // Pages where header should be shown
   const pagesWithHeader = ['Marketplace', 'SellerDashboard', 'BuyerProfile', 'AdminDashboard'];
@@ -50,34 +188,100 @@ export default function Layout({ children, currentPageName }) {
   const impersonatingSellerId = sessionStorage.getItem('admin_impersonate_seller_id');
   const isImpersonating = !!impersonatingSellerId;
 
-  // Load seller data and counts when user changes (from SupabaseAuthProvider)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // AUTH HYDRATION GATE: Subscribe to auth state changes during initial hydration
+  // This prevents false logout cascades when getSession returns null during hydration
+  // ═══════════════════════════════════════════════════════════════════════════
+  useEffect(() => {
+    // Subscribe to auth state changes for hydration signals
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      // On SIGNED_IN or TOKEN_REFRESHED, auth is definitely hydrated
+      // Auth is valid - identity loading will handle authHydrated
+      
+      // On SIGNED_OUT, auth is also hydrated (just no session)
+      if (event === "SIGNED_OUT") {
+        authHydratedLoggedRef.current = true;
+        setAuthHydrated(true);
+      }
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // IDENTITY LOADING: Load ONCE per session, use cache when available
+  // Prevents repeated /users and /sellers reads on every route change
+  // ═══════════════════════════════════════════════════════════════════════════
   useEffect(() => {
     if (isLoadingAuth) return; // Wait for auth check to complete
     
     if (user) {
-      console.log("👤 User loaded:", user.email, "Role:", user.user_metadata?.role);
-      loadSellerData(user);
+      // Check if identity already loaded this session (prevents re-fetch on route change)
+      if (identityLoadedRef.current && !impersonatingSellerId) {
+        // ═══════════════════════════════════════════════════════════════════════════
+        // FIX: State may have been reset on component remount, restore from cache
+        // This prevents the "seller → buyer nav" bug during navigation
+        // ═══════════════════════════════════════════════════════════════════════════
+        if (dbUserRole === null) {
+          const cache = readIdentityCache();
+          if (cache && cache.userId === user.id) {
+            // Restore canonical role and seller state from cache
+            setDbUserRole(cache.dbRole);
+            setIsVerifiedApprovedSeller(cache.isApprovedSeller);
+            if (cache.sellerRow) {
+              setSeller(cache.sellerRow);
+            }
+            // Restore account status from cache, but update ref too
+            const cachedStatus = cache.accountStatus || "active";
+            authoritativeAccountStatusRef.current = cachedStatus;
+            setAccountStatus(cachedStatus);
+            console.log('[Layout] Restored account_status from cache:', cachedStatus);
+          }
+        }
+        
+        // Auth is already hydrated from previous load
+        if (!authHydrated) {
+          setAuthHydrated(true);
+        }
+        loadUnreadCount(user);
+        loadUnreadNotificationCount(user);
+        return;
+      }
+
+      loadIdentityWithCache(user);
       loadUnreadCount(user);
       loadUnreadNotificationCount(user);
     } else {
-      console.log("👤 No user logged in - visitor UI visible");
+      // Logged out - clear everything including cache
       setSeller(null);
+      setIsVerifiedApprovedSeller(false);
+      setDbUserRole(null);
+      setAccountStatus("active");
       setUnreadCount(0);
       setUnreadNotificationCount(0);
+      identityLoadedRef.current = false;
+      clearIdentityCache();
+      // Auth is hydrated even when logged out
+      markAuthHydrated("no user");
     }
   }, [user, isLoadingAuth]);
 
-  // Listen for impersonation changes
+  // Listen for impersonation changes (non-critical, skip when degraded)
+  // Impersonation is an explicit admin action - always re-fetch when it changes
   useEffect(() => {
-    if (!user) return;
+    if (!user || supabaseDegraded) return;
     
     const handleStorageChange = () => {
-      console.log("🔄 Impersonation state changed - reloading seller");
+      if (supabaseDegraded) return;
+      // Impersonation change is explicit - always re-fetch (bypass cache)
       loadSellerData(user);
     };
 
     // Poll for sessionStorage changes (since storage event doesn't fire for same-tab changes)
     const interval = setInterval(() => {
+      if (supabaseDegraded) return;
       const currentImpersonation = sessionStorage.getItem('admin_impersonate_seller_id');
       if (currentImpersonation !== impersonatingSellerId) {
         handleStorageChange();
@@ -85,7 +289,124 @@ export default function Layout({ children, currentPageName }) {
     }, 500);
 
     return () => clearInterval(interval);
-  }, [impersonatingSellerId, user]);
+  }, [impersonatingSellerId, user, supabaseDegraded]);
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ACCOUNT STATUS ENFORCEMENT: Realtime + Polling fallback
+  // When account is suspended, immediately force viewer-only mode
+  // This ensures suspended users are kicked out of seller routes in real-time
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // AUTHORITATIVE ACCOUNT STATUS REF: Prevents stale closures from overwriting
+  // This ref is the source of truth for account_status enforcement
+  // ═══════════════════════════════════════════════════════════════════════════
+  const authoritativeAccountStatusRef = useRef(accountStatus);
+  
+  // Keep ref in sync with state
+  useEffect(() => {
+    authoritativeAccountStatusRef.current = accountStatus;
+    console.log('[Layout] authoritative account_status:', accountStatus);
+  }, [accountStatus]);
+  
+  // Helper function to handle suspension enforcement
+  const handleAccountStatusChange = useCallback((newStatus) => {
+    if (!newStatus) return;
+    
+    // Use ref to avoid stale closure issues
+    const currentStatus = authoritativeAccountStatusRef.current;
+    if (newStatus === currentStatus) return;
+    
+    console.log(`[Layout] Account status changed: ${currentStatus} → ${newStatus}`);
+    
+    // Update BOTH ref and state immediately
+    authoritativeAccountStatusRef.current = newStatus;
+    setAccountStatus(newStatus);
+    
+    // Update cache with new status to prevent stale cache restoration
+    const existingCache = readIdentityCache();
+    if (existingCache && existingCache.userId === user?.id) {
+      writeIdentityCache({
+        ...existingCache,
+        accountStatus: newStatus
+      });
+    }
+    
+    // If suspended, redirect away from seller routes immediately
+    if (newStatus === 'suspended') {
+      console.log('[Layout] Account suspended - forcing viewer-only mode');
+      const currentPath = location.pathname.toLowerCase();
+      const sellerRoutes = ['sellerdashboard', 'sellerorders', 'sellerproducts', 'hostconsole', 'manageproducts'];
+      const isOnSellerRoute = sellerRoutes.some(route => currentPath.includes(route));
+      
+      if (isOnSellerRoute) {
+        navigate(createPageUrl("BuyerProfile"), { replace: true });
+      }
+    }
+  }, [location.pathname, navigate, user?.id]);
+  
+  // OPTION 1: Supabase Realtime subscription
+  useEffect(() => {
+    if (!user?.id) return;
+
+    // Create realtime channel for account status changes
+    const channel = supabase
+      .channel(`account_status_${user.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'users',
+          filter: `id=eq.${user.id}`
+        },
+        (payload) => {
+          const newStatus = payload.new?.account_status;
+          console.log(`[Layout] Realtime received: account_status = ${newStatus}`);
+          handleAccountStatusChange(newStatus);
+        }
+      )
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          console.log('[Layout] Realtime subscription active for account_status');
+        } else if (status === 'CHANNEL_ERROR') {
+          console.warn('[Layout] Realtime subscription error - falling back to polling');
+        }
+      });
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user?.id, handleAccountStatusChange]);
+  
+  // OPTION 2: Polling fallback (every 5 seconds) - ensures enforcement even if realtime fails
+  useEffect(() => {
+    if (!user?.id || supabaseDegraded) return;
+    
+    const pollAccountStatus = async () => {
+      try {
+        const { data, error } = await supabase
+          .from("users")
+          .select("account_status")
+          .eq("id", user.id)
+          .maybeSingle();
+        
+        if (!error && data?.account_status) {
+          if (data.account_status !== accountStatus) {
+            console.log(`[Layout] Poll detected status change: ${accountStatus} → ${data.account_status}`);
+            handleAccountStatusChange(data.account_status);
+          }
+        }
+      } catch (err) {
+        // Silently ignore polling errors
+      }
+    };
+    
+    // Poll every 5 seconds
+    const interval = setInterval(pollAccountStatus, 5000);
+    
+    return () => clearInterval(interval);
+  }, [user?.id, accountStatus, supabaseDegraded, handleAccountStatusChange]);
 
   useEffect(() => {
     // CRITICAL: Don't redirect on LiveShow page - wait for params to resolve
@@ -96,10 +417,22 @@ export default function Layout({ children, currentPageName }) {
     }
   }, [location.pathname, location.search, navigate]);
 
-  // Route protection - check access after auth is verified
+  // Route protection - check access after auth is fully hydrated
   useEffect(() => {
-    // Wait for auth check to complete
+    // ═══════════════════════════════════════════════════════════════════════════
+    // AUTH HYDRATION GATE: Block routing decisions until session is fully ready
+    // This prevents false redirects during login when identity hasn't loaded yet
+    // ═══════════════════════════════════════════════════════════════════════════
+    
+    // Wait for auth provider to finish initial check
     if (isLoadingAuth) return;
+    
+    // CRITICAL: Wait for auth to be fully hydrated (session + identity loaded)
+    // This prevents the "seller → buyerprofile bounce" during login
+    if (!authHydrated) {
+      // Auth not hydrated yet - render neutral loading state (handled below)
+      return;
+    }
 
     // Allow HostConsole to handle its own access checks
     if (currentPageName === "HostConsole") return;
@@ -112,45 +445,230 @@ export default function Layout({ children, currentPageName }) {
       const redirectTo = getUnauthorizedRedirect(currentPageName, user);
       navigate(createPageUrl(redirectTo), { replace: true });
     }
-  }, [isLoadingAuth, currentPageName, user, seller, navigate]);
+  }, [isLoadingAuth, authHydrated, currentPageName, user, seller, navigate]);
 
   useEffect(() => {
     window.scrollTo(0, 0);
   }, [location.pathname]);
 
-  // TEMP: Route navigation watcher
-  useEffect(() => {
-    console.log("🧭 ROUTE NOW:", window.location.pathname + window.location.search, "| currentPageName:", currentPageName);
-  }, [location.pathname, location.search, currentPageName]);
+  // ═══════════════════════════════════════════════════════════════════════════
+  // HELPER: Mark auth as hydrated (once per session)
+  // ═══════════════════════════════════════════════════════════════════════════
+  const markAuthHydrated = (source) => {
+    authHydratedLoggedRef.current = true;
+    setAuthHydrated(true);
+  };
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // IDENTITY LOADING WITH CACHE: Load identity ONCE, cache for session
+  // Sequenced reads: users FIRST, then sellers (if users succeeds)
+  // ═══════════════════════════════════════════════════════════════════════════
+  const loadIdentityWithCache = async (currentUser) => {
+    // Prevent concurrent loads
+    if (identityLoadingRef.current) {
+      return;
+    }
+    identityLoadingRef.current = true;
+
+    try {
+      // ═══════════════════════════════════════════════════════════════════════════
+      // STEP 1: Check cache FIRST (before any Supabase reads)
+      // ═══════════════════════════════════════════════════════════════════════════
+      const cache = readIdentityCache();
+      
+      if (isIdentityCacheValid(cache, currentUser.id)) {
+        // Cache hit - use cached identity immediately
+        cacheLoggedRef.current = true;
+        
+        // Apply cached state
+        setDbUserRole(cache.dbRole);
+        setIsVerifiedApprovedSeller(cache.isApprovedSeller);
+        if (cache.sellerRow) {
+          setSeller(cache.sellerRow);
+        } else {
+          setSeller(null);
+        }
+        
+        identityLoadedRef.current = true;
+        markAuthHydrated("from cache");
+        return;
+      }
+
+      // Cache miss or stale - need to fetch from Supabase
+      cacheLoggedRef.current = true;
+
+      // ═══════════════════════════════════════════════════════════════════════════
+      // STEP 2: Load identity from Supabase (sequenced reads)
+      // ═══════════════════════════════════════════════════════════════════════════
+      await loadSellerData(currentUser);
+      
+    } finally {
+      identityLoadingRef.current = false;
+    }
+  };
 
   const loadSellerData = async (currentUser) => {
     try {
-      // If impersonating, load the impersonated seller by ID
+      // If impersonating, load the impersonated seller by ID (admin bypass)
       if (impersonatingSellerId) {
         const targetSeller = await getSellerById(impersonatingSellerId);
         if (targetSeller) {
           setSeller(targetSeller);
-          console.log("🔧 Admin impersonating seller:", targetSeller.business_name);
+          // Impersonation bypasses Option B check - admin is viewing as seller
+          setIsVerifiedApprovedSeller(true);
+          setDbUserRole("seller"); // Treat as seller for impersonation
+          // Do NOT cache impersonation state
         } else {
-          console.warn("Impersonation target seller not found:", impersonatingSellerId);
+          console.error("Impersonation target seller not found:", impersonatingSellerId);
           sessionStorage.removeItem('admin_impersonate_seller_id');
+          setSeller(null);
+          setIsVerifiedApprovedSeller(false);
+          setDbUserRole(null);
         }
-      } else {
-        // Load seller by user ID
-        const sellerData = await getSellerByUserId(currentUser.id);
-        if (sellerData) {
-          setSeller(sellerData);
-          console.log("🏪 Seller profile found:", sellerData.business_name, "Status:", sellerData.status);
-        } else {
-          console.log("👤 Regular buyer - no seller profile");
+        identityLoadedRef.current = true;
+        markAuthHydrated("impersonation");
+        return;
+      }
+
+      // ═══════════════════════════════════════════════════════════════════════════
+      // SEQUENCED READS: Query public.users FIRST, then sellers
+      // If users fetch fails (503/timeout), do NOT attempt sellers fetch
+      // This prevents cascading failures
+      // ═══════════════════════════════════════════════════════════════════════════
+      
+      // STEP 1: Fetch public.users role and account_status
+      const { data: userRow, error: userError } = await supabase
+        .from("users")
+        .select("id, role, email, account_status")
+        .eq("id", currentUser.id)
+        .maybeSingle();
+
+      if (userError) {
+        console.error("[Layout] users query failed:", userError);
+        // Check if degraded
+        if (checkAndSetDegraded(userError)) {
+          console.warn("[Layout] Users fetch degraded — using cache fallback if available");
+          // Try to use cache as fallback
+          const fallbackCache = readIdentityCache();
+          if (fallbackCache && fallbackCache.userId === currentUser.id) {
+            cacheLoggedRef.current = true;
+            setDbUserRole(fallbackCache.dbRole);
+            setIsVerifiedApprovedSeller(fallbackCache.isApprovedSeller);
+            if (fallbackCache.sellerRow) {
+              setSeller(fallbackCache.sellerRow);
+            }
+            identityLoadedRef.current = true;
+            markAuthHydrated("degraded cache fallback");
+            return;
+          }
+          // No cache - fail closed (buyer view)
+          setDbUserRole(null);
+          setSeller(null);
+          setIsVerifiedApprovedSeller(false);
+          identityLoadedRef.current = true;
+          markAuthHydrated("degraded no cache");
+          return;
+        }
+        throw userError;
+      }
+
+      const dbRole = userRow?.role || null;
+      setDbUserRole(dbRole);
+      
+      // Set account status (default to 'active' if not present)
+      // IMPORTANT: Always use DB value as authoritative source
+      const status = userRow?.account_status || "active";
+      console.log('[Layout] loadSellerData: DB account_status =', status);
+      
+      // Update both state and ref
+      authoritativeAccountStatusRef.current = status;
+      setAccountStatus(status);
+
+      // STEP 2: If users succeeded, fetch sellers
+      const { data: sellerRow, error: sellerError } = await supabase
+        .from("sellers")
+        .select("*")
+        .eq("user_id", currentUser.id)
+        .maybeSingle();
+
+      if (sellerError) {
+        // Check if degraded - still have user role
+        if (checkAndSetDegraded(sellerError)) {
+          const fallbackCache = readIdentityCache();
+          if (fallbackCache && fallbackCache.userId === currentUser.id && fallbackCache.sellerRow) {
+            setSeller(fallbackCache.sellerRow);
+            setIsVerifiedApprovedSeller(
+              dbRole === "seller" && fallbackCache.sellerRow?.status === "approved"
+            );
+          } else {
+            // Fail closed - no seller access
+            setSeller(null);
+            setIsVerifiedApprovedSeller(false);
+          }
+          identityLoadedRef.current = true;
+          markAuthHydrated("seller degraded");
+          return;
         }
       }
+
+      // ═══════════════════════════════════════════════════════════════════════════
+      // OPTION B: User is seller IFF role='seller' AND status='approved'
+      // ═══════════════════════════════════════════════════════════════════════════
+      const sellerStatus = sellerRow?.status || null;
+      const isApproved = dbRole === "seller" && sellerStatus === "approved";
+
+      if (isApproved) {
+        setSeller(sellerRow);
+        setIsVerifiedApprovedSeller(true);
+      } else {
+        // NOT approved - still load seller row for UI (pending banner, etc)
+        if (sellerRow) {
+          setSeller(sellerRow);
+        } else {
+          setSeller(null);
+        }
+        setIsVerifiedApprovedSeller(false);
+      }
+
+      // ═══════════════════════════════════════════════════════════════════════════
+      // STEP 3: Cache successful identity load
+      // ═══════════════════════════════════════════════════════════════════════════
+      writeIdentityCache({
+        userId: currentUser.id,
+        dbRole,
+        accountStatus: status,
+        sellerStatus,
+        sellerId: sellerRow?.id || null,
+        sellerRow: sellerRow || null,
+        isApprovedSeller: isApproved,
+      });
+
+      identityLoadedRef.current = true;
+      markAuthHydrated("identity loaded");
+
     } catch (error) {
       console.error("Error loading seller data:", error);
+      // Check if degraded - but don't reset state if so (keep last known)
+      if (checkAndSetDegraded(error)) {
+        console.warn("[Layout] Seller data load failed due to degraded state - keeping last known state");
+        identityLoadedRef.current = true;
+        markAuthHydrated("error degraded");
+        return;
+      }
+      setSeller(null);
+      setIsVerifiedApprovedSeller(false);
+      setDbUserRole(null);
+      identityLoadedRef.current = true;
+      markAuthHydrated("error");
     }
   };
 
   const loadUnreadCount = async (currentUser) => {
+    // CIRCUIT BREAKER: Skip non-critical fetch when degraded
+    if (supabaseDegraded) {
+      return;
+    }
+
     try {
       if (!currentUser) {
         setUnreadCount(0);
@@ -163,8 +681,8 @@ export default function Layout({ children, currentPageName }) {
         impersonatedSellerId: effectiveSellerId,
       } = getEffectiveUserContext(currentUser);
 
-      // Determine role: seller if impersonating or has approved seller profile
-      const isSellerRole = isActivelyImpersonating || (seller && seller.status === "approved");
+      // Determine role: seller if impersonating or has approved seller profile (Option B verified)
+      const isSellerRole = isActivelyImpersonating || isVerifiedApprovedSeller;
       const role = isSellerRole ? "seller" : "buyer";
 
       // Get the seller ID to use
@@ -172,29 +690,49 @@ export default function Layout({ children, currentPageName }) {
         ? effectiveSellerId
         : seller?.id ?? null;
 
-      const count = await getUnreadMessageCount({
+      const result = await getUnreadMessageCount({
         effectiveUserId,
         effectiveSellerId: sellerIdForQuery,
         role,
       });
 
-      setUnreadCount(count);
-    } catch {
-      setUnreadCount(0);
+      // Check if result indicates failure (null = degraded/error)
+      if (result === null) {
+        // API indicated failure - don't update count, keep last known
+        return;
+      }
+      setUnreadCount(result);
+    } catch (err) {
+      // Check if this error indicates degraded state
+      checkAndSetDegraded(err);
+      // Don't set to 0 on error - keep last known value
     }
   };
 
   const loadUnreadNotificationCount = async (currentUser) => {
+    // CIRCUIT BREAKER: Skip non-critical fetch when degraded
+    if (supabaseDegraded) {
+      return;
+    }
+
     try {
       if (!currentUser) {
         setUnreadNotificationCount(0);
         return;
       }
       const { effectiveUserId } = getEffectiveUserContext(currentUser);
-      const count = await getUnreadNotificationCount(effectiveUserId);
-      setUnreadNotificationCount(count);
-    } catch {
-      setUnreadNotificationCount(0);
+      const result = await getUnreadNotificationCount(effectiveUserId);
+      
+      // Check if result indicates failure (null = degraded/error)
+      if (result === null) {
+        // API indicated failure - don't update count, keep last known
+        return;
+      }
+      setUnreadNotificationCount(result);
+    } catch (err) {
+      // Check if this error indicates degraded state
+      checkAndSetDegraded(err);
+      // Don't set to 0 on error - keep last known value
     }
   };
 
@@ -209,39 +747,51 @@ export default function Layout({ children, currentPageName }) {
     location.pathname.toLowerCase().includes('nearme') ||
     location.pathname.toLowerCase().includes('near-me');
 
-  // Poll for unread messages every 30 seconds (skip on LiveShow)
+  // Poll for unread messages every 30 seconds (skip on LiveShow or when degraded)
   useEffect(() => {
-    if (isLiveShowPage || !user) {
+    if (isLiveShowPage || !user || supabaseDegraded) {
       return;
     }
 
     const interval = setInterval(() => {
-      loadUnreadCount(user);
+      if (!supabaseDegraded) {
+        loadUnreadCount(user);
+      }
     }, 30000);
 
     return () => clearInterval(interval);
-  }, [isLiveShowPage, user]);
+  }, [isLiveShowPage, user, supabaseDegraded]);
 
-  // Poll for unread notifications every 30 seconds (skip on LiveShow)
+  // Poll for unread notifications every 30 seconds (skip on LiveShow or when degraded)
   useEffect(() => {
-    if (isLiveShowPage || !user) {
+    if (isLiveShowPage || !user || supabaseDegraded) {
       return;
     }
 
     const interval = setInterval(() => {
-      loadUnreadNotificationCount(user);
+      if (!supabaseDegraded) {
+        loadUnreadNotificationCount(user);
+      }
     }, 30000);
 
     return () => clearInterval(interval);
-  }, [isLiveShowPage, user]);
+  }, [isLiveShowPage, user, supabaseDegraded]);
 
   const handleLogout = async () => {
+    // Clear identity cache and refs on logout
+    clearIdentityCache();
+    identityLoadedRef.current = false;
+    cacheLoggedRef.current = false;
+    
     await supabase.auth.signOut();
     navigate(createPageUrl("Marketplace"), { replace: true });
   };
 
   const handleUserClick = () => {
-    const userRole = user?.user_metadata?.role || user?.role;
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CANONICAL ROLE: Use dbUserRole (from public.users.role), NOT metadata
+    // ═══════════════════════════════════════════════════════════════════════════
+    const canonicalRole = dbUserRole || user?.user_metadata?.role || user?.role;
 
     // 1. SUPER_ADMIN → AdminDashboard
     if (isSuperAdmin(user)) {
@@ -250,13 +800,13 @@ export default function Layout({ children, currentPageName }) {
     }
 
     // 2. Admin → AdminDashboard (admins manage platform, not sell)
-    if (userRole === "admin") {
+    if (canonicalRole === "admin") {
       navigate(createPageUrl("AdminDashboard"));
       return;
     }
 
-    // 3. Approved Seller → SellerDashboard
-    if (seller && seller.status === "approved") {
+    // 3. Approved Seller → SellerDashboard (Option B verified)
+    if (isVerifiedApprovedSeller) {
       navigate(createPageUrl("SellerDashboard"));
       return;
     }
@@ -266,16 +816,23 @@ export default function Layout({ children, currentPageName }) {
   };
 
   const handleLogoClick = () => {
-    console.log("🏠 Logo clicked, navigating to Marketplace");
     navigate(createPageUrl("Marketplace"));
   };
 
-  // Role extraction for display and routing decisions
-  const userRole = user?.user_metadata?.role || user?.role;
-  // isApprovedSeller is TRUE only when a seller profile exists AND is approved
-  // Admins and Super Admins are NOT sellers — they have separate access paths
-  const isApprovedSeller = seller && seller.status === "approved";
-  const isPendingSeller = !isSuperAdmin(user) && seller && seller.status === "pending";
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CANONICAL ROLE FOR NAV: public.users.role is the source of truth
+  // Only fallback to metadata when dbUserRole hasn't loaded yet (during hydration)
+  // ═══════════════════════════════════════════════════════════════════════════
+  const userRole = dbUserRole || user?.user_metadata?.role || user?.role;
+  
+  // OPTION B: isApprovedSeller is TRUE only when BOTH conditions pass:
+  // 1. public.users.role === 'seller'
+  // 2. sellers.status === 'approved'
+  // This is now verified via requireSellerAsync in loadSellerData
+  const isApprovedSeller = isVerifiedApprovedSeller;
+  
+  // Pending seller: has seller row with status='pending' but NOT approved
+  const isPendingSeller = !isSuperAdmin(user) && seller && seller.status === "pending" && !isVerifiedApprovedSeller;
 
   const sellerNav = [
     { title: "Marketplace", url: createPageUrl("Marketplace"), icon: ShoppingBag },
@@ -306,31 +863,80 @@ export default function Layout({ children, currentPageName }) {
     { title: "Marketplace", url: createPageUrl("Marketplace"), icon: ShoppingBag, isMarketplace: true },
   ];
 
-  // Navigation selection priority:
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SUSPENDED USER NAVIGATION: Viewer-only mode (can browse, cannot transact)
+  // Shows minimal navigation - no seller dashboard, no orders, just browsing
+  // ═══════════════════════════════════════════════════════════════════════════
+  const suspendedNav = [
+    { title: "Marketplace", url: createPageUrl("Marketplace"), icon: ShoppingBag },
+    { title: "Communities", url: createPageUrl("Communities"), icon: Users },
+    { title: "Profile", url: createPageUrl("BuyerProfile"), icon: User },
+  ];
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ACCOUNT SUSPENSION CHECK: Suspended users get viewer-only navigation
+  // This overrides role-based navigation when account_status === 'suspended'
+  // ═══════════════════════════════════════════════════════════════════════════
+  const isAccountSuspended = accountStatus === "suspended";
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // NAVIGATION SELECTION (CANONICAL SOURCE = public.users.role ONLY)
+  // Priority:
   // 1. Not logged in → visitorNav
-  // 2. Admin or Super Admin → adminNav (platform management)
-  // 3. Approved Seller → sellerNav
-  // 4. Everyone else → buyerNav
+  // 2. SUSPENDED → suspendedNav (viewer-only mode, overrides role)
+  // 3. Admin or Super Admin → adminNav (platform management)
+  // 4. Seller (role='seller') → sellerNav (Dashboard tab ALWAYS visible)
+  // 5. Everyone else → buyerNav
+  // 
+  // IMPORTANT: Suspension overrides role for navigation purposes.
+  // Route access control remains separate from nav visibility.
+  // ═══════════════════════════════════════════════════════════════════════════
   const isAdminUser = userRole === "admin" || isSuperAdmin(user);
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CANONICAL SELLER NAV CHECK: Show seller nav if role === 'seller'
+  // This is separate from isApprovedSeller (which gates route access)
+  // Dashboard tab appears for ALL sellers, including pending/unapproved
+  // ═══════════════════════════════════════════════════════════════════════════
+  let isSellerRole = userRole === "seller";
+  
+  // Defensive fallback: Check cache for role if state appears stale
+  // This prevents brief flashes of buyer nav during state restoration
+  if (!isSellerRole && user && !isAdminUser) {
+    const cache = readIdentityCache();
+    if (cache?.userId === user.id && cache?.dbRole === "seller") {
+      isSellerRole = true;
+    }
+  }
+  
+  // Navigation selection with suspension override
   const navigation = user === null
     ? visitorNav
-    : isAdminUser
-      ? adminNav
-      : isApprovedSeller
-        ? sellerNav
-        : buyerNav;
+    : isAccountSuspended
+      ? suspendedNav  // Suspended users get viewer-only nav regardless of role
+      : isAdminUser
+        ? adminNav
+        : isSellerRole
+          ? sellerNav
+          : buyerNav;
 
-  console.log("🔍 Layout Detection:", {
-    currentPageName,
-    pathname: location.pathname,
-    search: location.search,
-    isLiveShowPage,
-    shouldShowHeader,
-    isImpersonating
-  });
-
-  // REMOVED: Loading spinner block
-  // Visitor UI renders immediately - no blocking on auth check
+  // ═══════════════════════════════════════════════════════════════════════════
+  // AUTH HYDRATION LOADING STATE
+  // Show neutral loading state while auth is hydrating for logged-in users
+  // This prevents false routing decisions before identity is loaded
+  // ═══════════════════════════════════════════════════════════════════════════
+  if (!isLoadingAuth && user && !authHydrated) {
+    // User exists but auth not fully hydrated - show neutral loading state
+    // DO NOT redirect, DO NOT assume buyer/seller, just wait
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-purple-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-8 h-8 border-4 border-purple-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
+          <p className="mt-3 text-sm text-gray-500">Loading...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <>
@@ -468,7 +1074,7 @@ export default function Layout({ children, currentPageName }) {
                             {isImpersonating && seller ? seller.business_name : (user.full_name || user.email)}
                           </p>
                           <p className="text-xs text-gray-500">
-                            {isImpersonating ? "Seller" : (isSuperAdmin(user) ? "Super Admin" : userRole === "admin" ? "Admin" : isApprovedSeller ? seller?.business_name || "Seller" : "Buyer")}
+                            {isImpersonating ? "Seller" : (isSuperAdmin(user) ? "Super Admin" : userRole === "admin" ? "Admin" : isSellerRole ? seller?.business_name || "Seller" : "Buyer")}
                           </p>
                         </div>
                       </button>
@@ -505,6 +1111,24 @@ export default function Layout({ children, currentPageName }) {
                   <strong>Your Seller Application is Under Review</strong> — You can browse and shop while waiting for approval. Once approved, you'll gain access to seller tools.
                 </AlertDescription>
               </Alert>
+            </div>
+          </div>
+        )}
+
+        {/* Suspension Banner - Shown for suspended accounts */}
+        {user && isAccountSuspended && (
+          <div className="bg-amber-500 text-white px-4 py-3 text-center shadow-md">
+            <div className="flex items-center justify-center gap-2">
+              <AlertCircle className="w-5 h-5" />
+              <span className="font-medium">
+                Your account is temporarily suspended. You may view content only.
+              </span>
+              <a 
+                href="mailto:support@livemarketaz.com" 
+                className="underline hover:no-underline ml-2 font-semibold"
+              >
+                Contact Support
+              </a>
             </div>
           </div>
         )}

@@ -98,16 +98,35 @@ export async function syncStreamStatus(
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// AUTHORITATIVE LIVE CHECK — Single source of truth for "is show live?"
+// ═══════════════════════════════════════════════════════════════════════════
+
 /**
- * Check if a show is currently live.
+ * AUTHORITATIVE: Check if a show object is currently live.
+ * 
+ * This is the ONLY rule: stream_status === "live" means LIVE.
+ * All other values (null, "waiting", "ended", "offline", etc.) mean NOT LIVE.
+ * 
+ * Use this for in-memory show objects already fetched.
+ * 
+ * @param show - The show object (must have stream_status field)
+ * @returns True if the show is currently live
+ */
+export function isShowLive(show: { stream_status?: string | null } | null | undefined): boolean {
+  return show?.stream_status === "live";
+}
+
+/**
+ * Check if a show is currently live by fetching from DB.
  *
- * This is a lightweight check that only reads from the database.
+ * This is a lightweight async check that reads from the database.
  * For real-time accuracy, use syncStreamStatus() first.
  *
  * @param showId - The show ID to check
  * @returns True if the show is currently streaming
  */
-export async function isShowLive(showId: string): Promise<boolean> {
+export async function isShowLiveAsync(showId: string): Promise<boolean> {
   if (!showId) {
     return false;
   }
@@ -115,7 +134,7 @@ export async function isShowLive(showId: string): Promise<boolean> {
   try {
     const { data, error } = await supabase
       .from("shows")
-      .select("is_streaming, stream_status")
+      .select("stream_status")
       .eq("id", showId)
       .single();
 
@@ -123,7 +142,7 @@ export async function isShowLive(showId: string): Promise<boolean> {
       return false;
     }
 
-    return data.is_streaming === true || data.stream_status === "live";
+    return data.stream_status === "live";
   } catch {
     return false;
   }

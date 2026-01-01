@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { supabase } from "@/lib/supabase/supabaseClient";
 import { supabaseApi as base44 } from "@/api/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -29,10 +30,16 @@ export default function LiveChat({ showId, isSeller = false, isEmbedded = false,
 
   const loadUser = async () => {
     try {
-      const currentUser = await base44.auth.me();
-      setUser(currentUser);
+      const { data, error } = await supabase.auth.getUser();
+      if (error) {
+        // Gracefully handle auth errors - user just can't chat
+        setUser(null);
+        return;
+      }
+      setUser(data?.user ?? null);
     } catch (error) {
-      console.error("Error loading user:", error);
+      // Swallow errors - chat is non-critical, don't block rendering
+      setUser(null);
     }
   };
 

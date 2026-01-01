@@ -41,7 +41,7 @@ BEGIN
     SELECT 1 FROM shows 
     WHERE id = p_show_id 
     AND (
-      stream_status = 'live' 
+      (stream_status = 'live' OR stream_status = 'starting')
       OR is_streaming = true 
       OR status = 'live'
     )

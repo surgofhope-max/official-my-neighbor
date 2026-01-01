@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { supabaseApi as base44 } from "@/api/supabaseClient";
+import { supabase } from "@/lib/supabase/supabaseClient";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -41,48 +41,88 @@ export default function BuyerSafetyAgreement() {
 
   const loadUser = async () => {
     try {
-      const currentUser = await base44.auth.me();
+      const { data: { session }, error } = await supabase.auth.getSession();
+      
+      if (error || !session) {
+        console.error("Error loading user:", error);
+        navigate(createPageUrl("Login"), { replace: true });
+        return;
+      }
+
+      const currentUser = session.user;
       setUser(currentUser);
 
-      // If already agreed, redirect
-      if (currentUser.buyer_safety_agreed === true) {
+      // If already agreed (check user_metadata), redirect
+      if (currentUser.user_metadata?.buyer_safety_agreed === true) {
         navigate(createPageUrl(redirectTo), { replace: true });
         return;
       }
     } catch (error) {
       console.error("Error loading user:", error);
-      navigate(createPageUrl("Marketplace"), { replace: true });
+      navigate(createPageUrl("Login"), { replace: true });
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const allAgreed = Object.values(agreements).every(v => v === true);
 
   const handleSubmit = async () => {
-    if (!allAgreed) return;
+    if (!allAgreed || !user) return;
 
     setSubmitting(true);
     try {
       const now = new Date().toISOString();
       
-      await base44.auth.updateMe({
-        buyer_safety_agreed: true,
-        buyer_safety_agreed_at: now,
-        age_verified: true,
-        age_verified_at: now,
-        explicit_content_permission: true,
-        explicit_content_permission_at: now,
-        location_permission_granted: true,
-        location_permission_granted_at: now
+      // ═══════════════════════════════════════════════════════════════════════════
+      // STEP 1: Write canonical flag to public.users (Admin reads from here)
+      // ═══════════════════════════════════════════════════════════════════════════
+      const { error: usersUpdateError } = await supabase
+        .from("users")
+        .update({
+          buyer_safety_agreed: true,
+          buyer_safety_agreed_at: now,
+          age_verified: true,
+          age_verified_at: now,
+          explicit_content_permission: true,
+          location_permission_granted: true
+        })
+        .eq("id", user.id);
+
+      if (usersUpdateError) {
+        console.error("[BuyerSafetyAgreement] public.users update failed:", usersUpdateError);
+        throw new Error("Failed to save agreement. Please try again.");
+      }
+
+      // ═══════════════════════════════════════════════════════════════════════════
+      // STEP 2: Also write to user_metadata (for compatibility/UI convenience)
+      // ═══════════════════════════════════════════════════════════════════════════
+      const { error: metadataError } = await supabase.auth.updateUser({
+        data: {
+          buyer_safety_agreed: true,
+          buyer_safety_agreed_at: now,
+          age_verified: true,
+          age_verified_at: now,
+          explicit_content_permission: true,
+          explicit_content_permission_at: now,
+          location_permission_granted: true,
+          location_permission_granted_at: now
+        }
       });
+
+      if (metadataError) {
+        // Non-blocking - public.users is authoritative
+        console.warn("[BuyerSafetyAgreement] metadata update failed (non-blocking):", metadataError);
+      }
 
       // Redirect to intended page
       navigate(createPageUrl(redirectTo), { replace: true });
     } catch (error) {
       console.error("Error saving agreement:", error);
-      alert("Failed to save agreement. Please try again.");
+      alert(error.message || "Failed to save agreement. Please try again.");
+    } finally {
+      setSubmitting(false);
     }
-    setSubmitting(false);
   };
 
   if (loading) {

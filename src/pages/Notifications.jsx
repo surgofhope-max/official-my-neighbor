@@ -1,18 +1,17 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { supabaseApi as base44 } from "@/api/supabaseClient";
+import { supabase } from "@/lib/supabase/supabaseClient";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Bell, Star, Package, AlertCircle, MessageCircle, Trash2 } from "lucide-react";
 import { format } from "date-fns";
-import ReviewModal from "../components/reviews/ReviewModal";
+import ReviewSubmitDialog from "@/components/orders/ReviewSubmitDialog";
 import { createPageUrl } from "@/utils";
 import { getEffectiveUserContext } from "@/lib/auth/effectiveUser";
 import {
   getNotificationsForUser,
   markNotificationAsRead,
-  deleteNotification,
 } from "@/api/notifications";
 
 export default function Notifications() {
@@ -21,7 +20,10 @@ export default function Notifications() {
   const [effectiveUserId, setEffectiveUserId] = useState(null);
   const [notifications, setNotifications] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [selectedReviewRequest, setSelectedReviewRequest] = useState(null);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewOrder, setReviewOrder] = useState(null);
+  const [reviewSeller, setReviewSeller] = useState(null);
+  const [reviewNotificationId, setReviewNotificationId] = useState(null);
 
   useEffect(() => {
     loadUser();
@@ -29,15 +31,27 @@ export default function Notifications() {
 
   const loadUser = async () => {
     try {
-      const currentUser = await base44.auth.me();
+      const { data, error } = await supabase.auth.getUser();
+      if (error) {
+        console.warn("[Notifications] auth load failed", error);
+        // FIX: Set isLoading to false so page doesn't show spinner forever
+        setIsLoading(false);
+        return;
+      }
+      const currentUser = data?.user ?? null;
       setUser(currentUser);
 
       if (currentUser) {
         const context = getEffectiveUserContext(currentUser);
         setEffectiveUserId(context.effectiveUserId);
+      } else {
+        // FIX: No user logged in - stop loading
+        setIsLoading(false);
       }
     } catch (error) {
       console.warn("Error loading user:", error);
+      // FIX: Stop loading on error
+      setIsLoading(false);
     }
   };
 
@@ -60,7 +74,9 @@ export default function Notifications() {
 
     try {
       const data = await getNotificationsForUser(effectiveUserId);
-      setNotifications(data);
+      // Option A: default feed hides read notifications (projection only)
+      const unreadOnly = data.filter((n) => !n.read);
+      setNotifications(unreadOnly);
     } catch (error) {
       console.warn("Error loading notifications:", error);
     } finally {
@@ -82,11 +98,46 @@ export default function Notifications() {
     }
   };
 
-  const handleDelete = async (notificationId) => {
-    const success = await deleteNotification(notificationId);
+  // Dismiss = mark as read; let collapse logic control visibility on next fetch.
+  // No DELETE — preserves DB audit trail.
+  const handleDismiss = async (notificationId) => {
+    const success = await markNotificationAsRead(notificationId, effectiveUserId);
     if (success) {
-      // Update local state
-      setNotifications((prev) => prev.filter((n) => n.id !== notificationId));
+      // Update local state to reflect read status (collapse will handle visibility)
+      setNotifications((prev) =>
+        prev.map((n) =>
+          n.id === notificationId
+            ? { ...n, read: true, read_at: new Date().toISOString() }
+            : n
+        )
+      );
+    }
+  };
+
+  const handleOpenReview = async (notification) => {
+    setReviewNotificationId(notification.id);
+
+    // Set seller info from notification metadata
+    setReviewSeller({
+      id: notification.metadata?.seller_id,
+      business_name: notification.metadata?.seller_name,
+    });
+
+    // Fetch the order by order_id from metadata
+    const orderId = notification.metadata?.order_id;
+    if (orderId) {
+      const { data, error } = await supabase
+        .from("orders")
+        .select("*")
+        .eq("id", orderId)
+        .single();
+
+      if (!error && data) {
+        setReviewOrder(data);
+        setReviewOpen(true);
+      } else {
+        console.error("Failed to load order for review:", error);
+      }
     }
   };
 
@@ -99,12 +150,17 @@ export default function Notifications() {
     // Handle click based on notification type
     switch (notification.type) {
       case "review_request":
-        // Open review modal
-        setSelectedReviewRequest(notification);
+        // Open Supabase review dialog
+        handleOpenReview(notification);
         break;
 
       case "order_update":
         // Navigate to BuyerOrders
+        navigate(createPageUrl("BuyerOrders"));
+        break;
+
+      case "pickup_completed":
+        // FIX: Navigate to BuyerOrders for pickup notifications
         navigate(createPageUrl("BuyerOrders"));
         break;
 
@@ -129,6 +185,8 @@ export default function Notifications() {
         return <Star className="w-5 h-5 text-yellow-500" />;
       case "order_update":
         return <Package className="w-5 h-5 text-blue-500" />;
+      case "pickup_completed":
+        return <Package className="w-5 h-5 text-green-500" />;
       case "message":
         return <MessageCircle className="w-5 h-5 text-purple-500" />;
       default:
@@ -138,7 +196,26 @@ export default function Notifications() {
 
   const unreadCount = notifications.filter((n) => !n.read).length;
 
-  if (!user) {
+  // FIX: Show login prompt if not logged in (after loading complete)
+  if (!user && !isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
+        <Card className="max-w-md w-full">
+          <CardContent className="p-8 text-center">
+            <Bell className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">Please Log In</h3>
+            <p className="text-gray-600 mb-4">You need to be logged in to view your notifications.</p>
+            <Button onClick={() => { sessionStorage.setItem("login_return_url", window.location.href); window.location.href = "/Login"; }}>
+              Log In
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // Show loading spinner while auth is loading
+  if (!user && isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-purple-600"></div>
@@ -201,16 +278,18 @@ export default function Notifications() {
                         <p className="text-sm text-gray-600 mb-2">{notification.body}</p>
                         <div className="flex items-center justify-between">
                           <span className="text-xs text-gray-500">
-                            {format(new Date(notification.created_date), "MMM d, h:mm a")}
+                            {/* FIX: Use created_at (actual DB column) not created_date */}
+                            {notification.created_at && format(new Date(notification.created_at), "MMM d, h:mm a")}
                           </span>
                           <Button
                             variant="ghost"
                             size="sm"
+                            title="Dismiss"
                             onClick={(e) => {
                               e.stopPropagation();
-                              handleDelete(notification.id);
+                              handleDismiss(notification.id);
                             }}
-                            className="h-7 px-2 text-red-600 hover:text-red-700 hover:bg-red-50"
+                            className="h-7 px-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100"
                           >
                             <Trash2 className="w-3 h-3" />
                           </Button>
@@ -225,16 +304,27 @@ export default function Notifications() {
         </div>
       </div>
 
-      {selectedReviewRequest && (
-        <ReviewModal
-          seller={{
-            id: selectedReviewRequest.metadata.seller_id,
-            business_name: selectedReviewRequest.metadata.seller_name,
+      {reviewOpen && reviewOrder && (
+        <ReviewSubmitDialog
+          open={reviewOpen}
+          onOpenChange={(open) => {
+            if (!open) {
+              setReviewOpen(false);
+              setReviewOrder(null);
+              setReviewSeller(null);
+              setReviewNotificationId(null);
+            }
           }}
-          orderId={selectedReviewRequest.metadata.order_id}
-          onClose={() => {
-            setSelectedReviewRequest(null);
-            handleDelete(selectedReviewRequest.id);
+          order={reviewOrder}
+          seller={reviewSeller}
+          notificationId={reviewNotificationId}
+          currentUserId={user?.id}
+          onSuccess={() => {
+            setReviewOpen(false);
+            setReviewOrder(null);
+            setReviewSeller(null);
+            setReviewNotificationId(null);
+            loadNotifications();
           }}
         />
       )}

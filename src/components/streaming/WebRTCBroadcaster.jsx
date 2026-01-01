@@ -206,10 +206,11 @@ export default function WebRTCBroadcaster({ show, onStreamStart, onStreamStop })
 
   const updateShowStreamingStatus = async (isActive, roomUrl = null) => {
     try {
+      // NOTE: status field intentionally omitted - status updates are handled
+      // separately via SellerShows.jsx goLive() and endShow() functions
       await base44.entities.Show.update(show.id, {
         is_streaming: isActive,
         stream_started_at: isActive ? new Date().toISOString() : null,
-        status: isActive ? "live" : show.status,
         webrtc_channel_id: isActive ? roomUrl : null
       });
       addDebugLog(`✅ DB updated: is_streaming=${isActive}`, "success");

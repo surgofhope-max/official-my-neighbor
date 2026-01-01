@@ -28,6 +28,54 @@ export interface Seller {
   total_revenue?: number;
   created_by?: string;
   created_date?: string;
+  // Avatar inheritance fields (computed at fetch time)
+  buyer_profile_image_url?: string;
+  effective_profile_image_url?: string;
+}
+
+// Raw seller row with nested buyer_profile for join queries
+interface SellerWithBuyerProfile {
+  id: string;
+  user_id: string;
+  business_name: string;
+  contact_phone?: string;
+  contact_email?: string;
+  pickup_address?: string;
+  pickup_city?: string;
+  pickup_state?: string;
+  pickup_zip?: string;
+  pickup_notes?: string;
+  stripe_account_id?: string;
+  stripe_connected?: boolean;
+  stripe_connected_at?: string;
+  status: "pending" | "approved" | "declined" | "suspended";
+  status_reason?: string;
+  profile_image_url?: string;
+  bio?: string;
+  total_sales?: number;
+  total_revenue?: number;
+  created_by?: string;
+  created_date?: string;
+  buyer_profiles?: { profile_image_url?: string } | null;
+}
+
+/**
+ * Compute effective profile image with buyer fallback
+ */
+function computeEffectiveAvatar(raw: SellerWithBuyerProfile): Seller {
+  const buyerAvatar = raw.buyer_profiles?.profile_image_url || null;
+  const effective = raw.profile_image_url || buyerAvatar || undefined;
+  
+  // Remove the nested buyer_profiles from the result
+  const { buyer_profiles, ...sellerFields } = raw;
+  
+  return {
+    ...sellerFields,
+    buyer_profile_image_url: buyerAvatar || undefined,
+    effective_profile_image_url: effective,
+    // Override profile_image_url with effective for backward compatibility
+    profile_image_url: effective,
+  };
 }
 
 /**
@@ -41,6 +89,7 @@ export interface Seller {
  * - Returns null for logged-out users
  * - Returns null if no seller record exists
  * - Returns null on any error
+ * - Includes buyer avatar fallback via effective_profile_image_url
  */
 export async function getSellerByUserId(
   userId: string | null
@@ -50,18 +99,34 @@ export async function getSellerByUserId(
   }
 
   try {
-    const { data, error } = await supabase
-      .from("sellers")
-      .select("*")
-      .eq("user_id", userId)
-      .maybeSingle();
+    // Fetch seller and buyer profile separately (no FK required)
+    const [sellerRes, buyerRes] = await Promise.all([
+      supabase
+        .from("sellers")
+        .select("*")
+        .eq("user_id", userId)
+        .maybeSingle(),
+      supabase
+        .from("buyer_profiles")
+        .select("profile_image_url")
+        .eq("user_id", userId)
+        .maybeSingle()
+    ]);
 
-    if (error) {
-      console.warn("Failed to fetch seller by user ID:", error.message);
+    if (sellerRes.error) {
+      console.warn("Failed to fetch seller by user ID:", sellerRes.error.message);
       return null;
     }
 
-    return data as Seller | null;
+    if (!sellerRes.data) return null;
+    
+    // Attach buyer profile for avatar inheritance
+    const raw: SellerWithBuyerProfile = {
+      ...sellerRes.data,
+      buyer_profiles: buyerRes.data || null
+    };
+    
+    return computeEffectiveAvatar(raw);
   } catch (err) {
     console.warn("Unexpected error fetching seller:", err);
     return null;
@@ -79,6 +144,7 @@ export async function getSellerByUserId(
  * - Returns null if sellerId is null
  * - Returns null if no seller record exists
  * - Returns null on any error
+ * - Includes buyer avatar fallback via effective_profile_image_url
  */
 export async function getSellerById(
   sellerId: string | null
@@ -88,18 +154,35 @@ export async function getSellerById(
   }
 
   try {
-    const { data, error } = await supabase
+    // NORMALIZED: sellerId is sellers.id (not user_id)
+    // First fetch seller, then buyer profile by user_id
+    const { data: sellerData, error: sellerError } = await supabase
       .from("sellers")
       .select("*")
       .eq("id", sellerId)
       .maybeSingle();
 
-    if (error) {
-      console.warn("Failed to fetch seller by ID:", error.message);
+    if (sellerError) {
+      console.warn("Failed to fetch seller by ID:", sellerError.message);
       return null;
     }
 
-    return data as Seller | null;
+    if (!sellerData) return null;
+    
+    // Fetch buyer profile for avatar inheritance
+    const { data: buyerData } = await supabase
+      .from("buyer_profiles")
+      .select("profile_image_url")
+      .eq("user_id", sellerData.user_id)
+      .maybeSingle();
+    
+    // Attach buyer profile for avatar inheritance
+    const raw: SellerWithBuyerProfile = {
+      ...sellerData,
+      buyer_profiles: buyerData || null
+    };
+    
+    return computeEffectiveAvatar(raw);
   } catch (err) {
     console.warn("Unexpected error fetching seller by ID:", err);
     return null;

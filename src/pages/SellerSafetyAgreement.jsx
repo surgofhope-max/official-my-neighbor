@@ -18,7 +18,8 @@ import {
   ArrowRight,
   Users,
   DollarSign,
-  Scale
+  Scale,
+  AlertCircle
 } from "lucide-react";
 
 export default function SellerSafetyAgreement() {
@@ -34,6 +35,11 @@ export default function SellerSafetyAgreement() {
     liabilityCompliance: false,
     termsAgreement: false
   });
+  // ═══════════════════════════════════════════════════════════════════════════
+  // FAIL-SAFE: Track if canonical user query failed to prevent redirect loops
+  // ═══════════════════════════════════════════════════════════════════════════
+  const [canonicalUserLoadFailed, setCanonicalUserLoadFailed] = useState(false);
+  const [loadError, setLoadError] = useState(null);
 
   useEffect(() => {
     loadUser();
@@ -49,7 +55,6 @@ export default function SellerSafetyAgreement() {
       }
 
       const currentUser = session.user;
-      const userMeta = currentUser.user_metadata || {};
       setUser(currentUser);
 
       // 🔐 SUPER_ADMIN BYPASS: Skip all onboarding/safety checks
@@ -59,54 +64,49 @@ export default function SellerSafetyAgreement() {
         return;
       }
 
-      // 🔒 HARD STOP: Application already submitted — block re-entry
-      // Check both seller_onboarding_completed AND seller_application_status
-      if (
-        userMeta.seller_onboarding_completed === true ||
-        userMeta.seller_application_status === "pending" ||
-        userMeta.seller_application_status === "approved" ||
-        userMeta.seller_application_status === "declined"
-      ) {
-        console.log("⏳ Seller application already submitted — blocking safety agreement re-entry");
-        console.log("   Status:", userMeta.seller_application_status);
-        console.log("   Onboarding completed:", userMeta.seller_onboarding_completed);
-        
-        // Approved sellers go to dashboard
-        if (userMeta.seller_approved === true) {
-          navigate(createPageUrl("SellerDashboard"), { replace: true });
-          return;
-        }
-        
-        // Others go to BuyerProfile with appropriate status
-        navigate(createPageUrl("BuyerProfile"), {
-          replace: true,
-          state: { sellerStatus: userMeta.seller_application_status || "pending" }
-        });
+      // ═══════════════════════════════════════════════════════════════════════════
+      // CANONICAL GATING: Query public.users for onboarding state
+      // This is the ONLY source of truth for re-entry blocking
+      // ═══════════════════════════════════════════════════════════════════════════
+      const { data: canonicalUser, error: userQueryError } = await supabase
+        .from("users")
+        .select("seller_onboarding_completed, seller_safety_agreed")
+        .eq("id", currentUser.id)
+        .maybeSingle();
+
+      // ═══════════════════════════════════════════════════════════════════════════
+      // FAIL-SAFE: If query fails, DO NOT redirect — render error state instead
+      // This prevents infinite redirect loops when schema is wrong
+      // ═══════════════════════════════════════════════════════════════════════════
+      if (userQueryError) {
+        console.error("[SellerSafetyAgreement] Failed to query canonical user:", userQueryError);
+        setCanonicalUserLoadFailed(true);
+        setLoadError(userQueryError.message || "Failed to load user data");
+        // Allow form to render in degraded mode — no redirects
+        setLoading(false);
+        return; // EXIT — do not proceed with redirect logic
+      }
+
+      // ═══════════════════════════════════════════════════════════════════════════
+      // REDIRECT LOGIC: Only runs when query SUCCEEDED and returned valid data
+      // ═══════════════════════════════════════════════════════════════════════════
+      
+      // ONLY block if BOTH canonical flags are true (fully completed)
+      if (canonicalUser?.seller_safety_agreed === true && canonicalUser?.seller_onboarding_completed === true) {
+        console.log("[SellerSafetyAgreement] Onboarding fully complete — redirecting to BuyerProfile");
+        navigate(createPageUrl("BuyerProfile"), { replace: true });
         return;
       }
 
-      // Check if seller safety agreement already accepted
-      if (currentUser.seller_safety_agreed && currentUser.seller_onboarding_reset !== true) {
-        // Check for existing seller profile via Supabase
-        const { data: sellerProfile, error } = await supabase
-          .from("sellers")
-          .select("id, status")
-          .eq("user_id", currentUser.id)
-          .single();
-
-        if (error && error.code !== "PGRST116") {
-          throw error;
-        }
-
-        if (sellerProfile) {
-          navigate(createPageUrl("SellerDashboard"), { replace: true });
-          return;
-        }
-
-        // No seller yet, continue onboarding
+      // If safety already agreed but onboarding not complete, skip to onboarding
+      // Only redirect if we have DEFINITIVE data, not undefined from error
+      if (canonicalUser && canonicalUser.seller_safety_agreed === true && canonicalUser.seller_onboarding_completed !== true) {
+        console.log("[SellerSafetyAgreement] Safety agreed, onboarding incomplete — redirecting to SellerOnboarding");
         navigate(createPageUrl("SellerOnboarding"), { replace: true });
         return;
       }
+
+      // ALLOW safety agreement to render — user needs to complete this step
 
     } catch (error) {
       console.error("Error loading user:", error);
@@ -122,10 +122,37 @@ export default function SellerSafetyAgreement() {
 
     setSubmitting(true);
     try {
-      const { error } = await supabase.auth.updateUser({
+      const now = new Date().toISOString();
+      
+      // Get current user for ID
+      const { data: { user: currentUser }, error: userError } = await supabase.auth.getUser();
+      if (userError || !currentUser) {
+        throw new Error("Unable to get current user");
+      }
+
+      // ═══════════════════════════════════════════════════════════════════════════
+      // STEP 1: Write canonical flag to public.users (gate reads from here)
+      // ═══════════════════════════════════════════════════════════════════════════
+      const { error: usersUpdateError } = await supabase
+        .from("users")
+        .update({
+          seller_safety_agreed: true,
+          seller_safety_agreed_at: now
+        })
+        .eq("id", currentUser.id);
+
+      if (usersUpdateError) {
+        console.error("[SellerSafetyAgreement] public.users update failed:", usersUpdateError);
+        throw new Error("Failed to save safety agreement. Please try again.");
+      }
+
+      // ═══════════════════════════════════════════════════════════════════════════
+      // STEP 2: Also write to user_metadata (for compatibility/UI convenience)
+      // ═══════════════════════════════════════════════════════════════════════════
+      const { error: metadataError } = await supabase.auth.updateUser({
         data: {
           seller_safety_agreed: true,
-          seller_safety_agreed_at: new Date().toISOString(),
+          seller_safety_agreed_at: now,
 
           // Reset onboarding state to ensure fresh start
           seller_onboarding_completed: false,
@@ -146,15 +173,16 @@ export default function SellerSafetyAgreement() {
         }
       });
 
-      if (error) {
-        throw error;
+      if (metadataError) {
+        // Non-blocking - public.users is authoritative
+        console.warn("[SellerSafetyAgreement] metadata update failed (non-blocking):", metadataError);
       }
 
       // Redirect to seller onboarding steps
       navigate(createPageUrl("SellerOnboarding"), { replace: true });
     } catch (error) {
       console.error("Error saving agreement:", error);
-      alert("Failed to save agreement. Please try again.");
+      alert(error.message || "Failed to save agreement. Please try again.");
     } finally {
       setSubmitting(false);
     }
@@ -164,6 +192,51 @@ export default function SellerSafetyAgreement() {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 via-blue-50 to-purple-50">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-purple-600"></div>
+      </div>
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // FAIL-SAFE ERROR STATE: Render stable error UI instead of redirecting
+  // This prevents infinite redirect loops when canonical user query fails
+  // ═══════════════════════════════════════════════════════════════════════════
+  if (canonicalUserLoadFailed) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-purple-50 p-4 sm:p-8">
+        <div className="max-w-md mx-auto mt-20">
+          <Card className="border-amber-200 bg-amber-50">
+            <CardHeader>
+              <CardTitle className="text-amber-800 flex items-center gap-2">
+                <AlertCircle className="w-5 h-5" />
+                Unable to Load Safety Agreement
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-amber-700">
+                We couldn't verify your onboarding status. This may be a temporary issue.
+              </p>
+              {loadError && (
+                <p className="text-sm text-amber-600 font-mono bg-amber-100 p-2 rounded">
+                  {loadError}
+                </p>
+              )}
+              <div className="flex gap-3">
+                <Button 
+                  onClick={() => window.location.reload()} 
+                  className="bg-amber-600 hover:bg-amber-700"
+                >
+                  Try Again
+                </Button>
+                <Button 
+                  variant="outline"
+                  onClick={() => navigate(createPageUrl("BuyerProfile"), { replace: true })}
+                >
+                  Go to Profile
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
       </div>
     );
   }

@@ -1,6 +1,10 @@
 import React, { useState, useEffect, useRef } from "react";
 import { supabaseApi as base44 } from "@/api/supabaseClient";
 import { supabase } from "@/lib/supabase/supabaseClient";
+import { getOrdersByBuyerId } from "@/api/orders";
+import { getFollowingByUserId } from "@/api/following";
+import { getFollowedCommunitiesByUserId } from "@/api/followedCommunities";
+import { getBookmarkedShowsByUserId } from "@/api/bookmarkedShows";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { isSuperAdmin } from "@/lib/auth/routeGuards";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -33,10 +37,35 @@ import {
   Package,
   Layers,
   LogOut,
-  AlertCircle
+  AlertCircle,
+  RefreshCw
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
+// Note: Batches not needed for buyer analytics (orders are authoritative)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// HELPER: Detect degraded Supabase errors (503/timeout)
+// ═══════════════════════════════════════════════════════════════════════════
+function isDegradedSupabaseError(error) {
+  if (!error) return false;
+  const msg = (error?.message || "").toLowerCase();
+  const code = error?.code || "";
+  const status = error?.status || error?.statusCode;
+  
+  return (
+    status === 503 ||
+    code === "503" ||
+    msg.includes("503") ||
+    msg.includes("service unavailable") ||
+    msg.includes("upstream connect error") ||
+    msg.includes("disconnect/reset before headers") ||
+    msg.includes("connection timeout") ||
+    msg.includes("fetch failed") ||
+    msg.includes("network error") ||
+    msg.includes("failed to fetch")
+  );
+}
 import SellerCard from "../components/marketplace/SellerCard";
 import LiveShowCard from "../components/marketplace/LiveShowCard";
 import CommunityCard from "../components/marketplace/CommunityCard";
@@ -54,8 +83,28 @@ export default function BuyerProfile() {
   const [showFinalDeleteConfirm, setShowFinalDeleteConfirm] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const profileImageRef = useRef(null);
+  
+  // Error-truth hardening: track degraded load/save states
+  const [isLoadDegraded, setIsLoadDegraded] = useState(false);
+  const [isSellerStatusDegraded, setIsSellerStatusDegraded] = useState(false);
+  const [saveError, setSaveError] = useState(null);
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // DISPLAY NAME LOCK: Track if display_name is already set (immutable after first save)
+  // Canonical source: public.users.display_name
+  // ═══════════════════════════════════════════════════════════════════════════
+  const [displayNameLocked, setDisplayNameLocked] = useState(false);
+  const [canonicalDisplayName, setCanonicalDisplayName] = useState(null);
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CANONICAL USER ROLE: Used to hide "Become a Seller" CTA for existing sellers
+  // Canonical source: public.users.role
+  // ═══════════════════════════════════════════════════════════════════════════
+  const [canonicalUserRole, setCanonicalUserRole] = useState(null);
+  
   const [formData, setFormData] = useState({
     full_name: "",
+    display_name: "",
     phone: "",
     email: "",
     profile_image_url: ""
@@ -73,22 +122,68 @@ export default function BuyerProfile() {
 
   const loadUser = async () => {
     try {
-      const currentUser = await base44.auth.me();
+      // Use canonical Supabase auth
+      const { data, error: authError } = await supabase.auth.getUser();
+      if (authError) {
+        console.error("[BuyerProfile] auth load failed", authError);
+        if (isDegradedSupabaseError(authError)) {
+          setIsLoadDegraded(true);
+        }
+        return;
+      }
+      const currentUser = data?.user ?? null;
+      if (!currentUser) {
+        console.warn("[BuyerProfile] No authenticated user");
+        return;
+      }
       
-      // Also get user_metadata from Supabase session for seller application status
+      // Get user_metadata from Supabase session for seller application status
       const { data: { session } } = await supabase.auth.getSession();
       const userMeta = session?.user?.user_metadata || {};
       
       // Merge user with metadata for easy access
       setUser({ ...currentUser, user_metadata: userMeta });
 
-      // Check for seller profile - BUT DO NOT auto-redirect
-      // Users who are both buyers AND sellers should be able to access buyer routes freely
-      const sellers = base44.entities?.Seller
-        ? await base44.entities.Seller.filter({ created_by: currentUser.email })
-        : [];
-      if (sellers.length > 0) {
-        const sellerProfile = sellers[0];
+      // ═══════════════════════════════════════════════════════════════════════════
+      // CANONICAL USER DATA: Fetch from public.users for display_name lock and role
+      // Display name is IMMUTABLE after first save - user can only set it once
+      // Role is used to hide "Become a Seller" CTA for existing sellers
+      // ═══════════════════════════════════════════════════════════════════════════
+      const { data: canonicalUserRow, error: canonicalError } = await supabase
+        .from("users")
+        .select("display_name, role")
+        .eq("id", currentUser.id)
+        .maybeSingle();
+
+      if (!canonicalError && canonicalUserRow) {
+        const existingDisplayName = canonicalUserRow.display_name;
+        setCanonicalDisplayName(existingDisplayName);
+        // Lock display name if it's already set (non-null and non-empty)
+        setDisplayNameLocked(!!existingDisplayName && existingDisplayName.trim().length > 0);
+        // Store canonical role for CTA visibility
+        setCanonicalUserRole(canonicalUserRow.role || null);
+      }
+
+      // ═══════════════════════════════════════════════════════════════════════════
+      // AUTHORITATIVE CHECK: Load seller from public.sellers (NOT Base44, NOT metadata)
+      // Seller application status is determined by sellers.status, not user_metadata
+      // ═══════════════════════════════════════════════════════════════════════════
+      const { data: sellerProfile, error: sellerError } = await supabase
+        .from("sellers")
+        .select("*")
+        .eq("user_id", currentUser.id)
+        .maybeSingle();
+
+      if (sellerError && sellerError.code !== "PGRST116") {
+        // Track if seller status is degraded
+        if (isDegradedSupabaseError(sellerError)) {
+          setIsSellerStatusDegraded(true);
+        }
+      } else {
+        setIsSellerStatusDegraded(false);
+      }
+
+      if (sellerProfile) {
         setSeller(sellerProfile);
         
         // Show congratulations modal ONLY if they just got approved (first time seeing it)
@@ -104,20 +199,32 @@ export default function BuyerProfile() {
       }
 
       // If not an approved seller, proceed to load buyer profile
-      const { data: profile, error } = await supabase
+      const { data: profile, error: profileError } = await supabase
         .from("buyer_profiles")
         .select("*")
         .eq("user_id", currentUser.id)
         .single();
 
-      if (error && error.code !== "PGRST116") {
-        throw error;
+      if (profileError && profileError.code !== "PGRST116") {
+        // Check if degraded - DO NOT reset form data if degraded
+        if (isDegradedSupabaseError(profileError)) {
+          setIsLoadDegraded(true);
+          // DO NOT throw - just warn. Don't reset form.
+          return;
+        }
+        throw profileError;
       }
 
+      // Success - clear degraded state
+      setIsLoadDegraded(false);
+      
       if (profile) {
         setBuyerProfile(profile);
+        // Use canonical display_name from public.users (fetched earlier)
+        const effectiveDisplayName = canonicalUserRow?.display_name || profile.display_name || "";
         setFormData({
           full_name: profile.full_name || currentUser.full_name || "",
+          display_name: effectiveDisplayName,
           phone: profile.phone || "",
           email: profile.email || currentUser.email || "",
           profile_image_url: profile.profile_image_url || "",
@@ -126,28 +233,32 @@ export default function BuyerProfile() {
         setShowEditor(true);
       }
     } catch (error) {
-      console.error("Error loading user:", error);
+      console.warn("[BuyerProfile] Error loading user:", error);
+      // Don't spam console on degraded errors
+      if (isDegradedSupabaseError(error)) {
+        setIsLoadDegraded(true);
+      }
     }
   };
 
   const { data: orders = [] } = useQuery({
-    queryKey: ['buyer-orders'],
-    queryFn: () => user ? base44.entities.Order.filter({ buyer_id: user.id }, '-created_date') : [],
+    queryKey: ['buyer-orders', user?.id],
+    queryFn: async () => {
+      if (!user?.id) return [];
+      return getOrdersByBuyerId(user.id);
+    },
     enabled: !!user
   });
+
+  // Note: Batches query removed - buyer analytics derived from orders
 
   // Fetch followed sellers
   const { data: followedSellers = [] } = useQuery({
     queryKey: ['followed-sellers', user?.id],
     queryFn: async () => {
       if (!user?.id) return [];
-      const follows = await base44.entities.FollowedSeller.filter({ buyer_id: user.id });
-      const sellerIds = follows.map(f => f.seller_id);
-
-      if (sellerIds.length === 0) return [];
-
-      const sellers = await base44.entities.Seller.list();
-      return sellers.filter(s => sellerIds.includes(s.id));
+      const rows = await getFollowingByUserId(user.id);
+      return rows.map(r => r.sellers).filter(Boolean);
     },
     enabled: !!user
   });
@@ -155,49 +266,82 @@ export default function BuyerProfile() {
   // Fetch bookmarked shows
   const { data: bookmarkedShows = [] } = useQuery({
     queryKey: ['bookmarked-shows', user?.id],
-	queryFn: async () => {
+    queryFn: async () => {
       if (!user?.id) return [];
-      const bookmarks = await base44.entities.BookmarkedShow.filter({ buyer_id: user.id });
-      const showIds = bookmarks.map(b => b.show_id);
-
-      if (showIds.length === 0) return [];
-
-      const shows = await base44.entities.Show.list();
-      return shows.filter(s => showIds.includes(s.id));
+      const rows = await getBookmarkedShowsByUserId(user.id);
+      return rows.map(r => r.shows).filter(Boolean);
     },
     enabled: !!user
   });
 
-  // NEW: Fetch followed communities
+  // Fetch followed communities
   const { data: followedCommunities = [] } = useQuery({
     queryKey: ['buyer-followed-communities', user?.id],
     queryFn: async () => {
       if (!user?.id) return [];
-      const follows = await base44.entities.FollowedCommunity.filter({ user_id: user.id });
-      if (follows.length === 0) return [];
-      const communityIds = follows.map(f => f.community_id);
-      const communities = await base44.entities.Community.list();
-      const matchingCommunities = communities.filter(c => communityIds.includes(c.id));
-      return matchingCommunities;
+      const rows = await getFollowedCommunitiesByUserId(user.id);
+      return rows.map(r => r.communities).filter(Boolean);
     },
     enabled: !!user
   });
 
   const createProfileMutation = useMutation({
     mutationFn: async (data) => {
-    const { data: result, error } = await supabase
-      .from("buyer_profiles")
-      .upsert(
-        {
-          ...data,
-          user_id: user.id,
-        },
-        { onConflict: "user_id" }
-      )
-      .select()
-      .single();
+      // Write to buyer_profiles (excluding display_name - only goes to public.users)
+      const profileData = { ...data };
+      delete profileData.display_name; // Don't store in buyer_profiles
+      
+      const { data: result, error } = await supabase
+        .from("buyer_profiles")
+        .upsert(
+          {
+            ...profileData,
+            user_id: user.id,
+          },
+          { onConflict: "user_id" }
+        )
+        .select()
+        .single();
 
       if (error) throw error;
+
+      // ═══════════════════════════════════════════════════════════════════════════
+      // Sync identity fields to public.users (Admin reads from here)
+      // Buyer Profile is the ONLY place human identity is authored
+      // DISPLAY NAME: Only written to public.users (unique, immutable after first save)
+      // ═══════════════════════════════════════════════════════════════════════════
+      const usersUpdate = {};
+      if (data.full_name) usersUpdate.full_name = data.full_name;
+      if (data.phone) usersUpdate.phone = data.phone;
+      
+      // Display name: Only set if NOT already locked (first-time set only)
+      // After first save, display_name becomes immutable
+      if (!displayNameLocked && data.display_name && data.display_name.trim().length > 0) {
+        usersUpdate.display_name = data.display_name.trim();
+      }
+      
+      if (Object.keys(usersUpdate).length > 0) {
+        const { error: usersError } = await supabase
+          .from("users")
+          .update(usersUpdate)
+          .eq("id", user.id);
+        
+        if (usersError) {
+          // Check for uniqueness constraint violation
+          if (usersError.code === "23505" || usersError.message?.includes("unique") || usersError.message?.includes("duplicate")) {
+            throw new Error("That display name is already taken. Please choose another.");
+          }
+          console.warn("[BuyerProfile] Failed to sync to public.users:", usersError);
+          throw usersError;
+        }
+        
+        // If display_name was set, lock it for future edits
+        if (usersUpdate.display_name) {
+          setDisplayNameLocked(true);
+          setCanonicalDisplayName(usersUpdate.display_name);
+        }
+      }
+
       return result;
     },
     onSuccess: (newProfile) => {
@@ -208,14 +352,55 @@ export default function BuyerProfile() {
 
   const updateProfileMutation = useMutation({
     mutationFn: async ({ id, data }) => {
+      // Update buyer_profiles (excluding display_name - only goes to public.users)
+      const profileData = { ...data };
+      delete profileData.display_name; // Don't store in buyer_profiles
+      
       const { data: result, error } = await supabase
         .from("buyer_profiles")
-        .update(data)
+        .update(profileData)
         .eq("id", id)
         .select()
         .single();
 
       if (error) throw error;
+
+      // ═══════════════════════════════════════════════════════════════════════════
+      // Sync identity fields to public.users (Admin reads from here)
+      // Buyer Profile is the ONLY place human identity is authored
+      // DISPLAY NAME: Only written to public.users (unique, immutable after first save)
+      // ═══════════════════════════════════════════════════════════════════════════
+      const usersUpdate = {};
+      if (data.full_name) usersUpdate.full_name = data.full_name;
+      if (data.phone) usersUpdate.phone = data.phone;
+      
+      // Display name: Only set if NOT already locked (first-time set only)
+      if (!displayNameLocked && data.display_name && data.display_name.trim().length > 0) {
+        usersUpdate.display_name = data.display_name.trim();
+      }
+      
+      if (Object.keys(usersUpdate).length > 0) {
+        const { error: usersError } = await supabase
+          .from("users")
+          .update(usersUpdate)
+          .eq("id", user.id);
+        
+        if (usersError) {
+          // Check for uniqueness constraint violation
+          if (usersError.code === "23505" || usersError.message?.includes("unique") || usersError.message?.includes("duplicate")) {
+            throw new Error("That display name is already taken. Please choose another.");
+          }
+          console.warn("[BuyerProfile] Failed to sync to public.users:", usersError);
+          throw usersError;
+        }
+        
+        // If display_name was set, lock it for future edits
+        if (usersUpdate.display_name) {
+          setDisplayNameLocked(true);
+          setCanonicalDisplayName(usersUpdate.display_name);
+        }
+      }
+
       return result;
     },
     onSuccess: (updatedProfile) => {
@@ -225,21 +410,32 @@ export default function BuyerProfile() {
   });
 
   const handleSubmit = async (e) => {
-    console.log("BuyerProfile handleSubmit fired");
     e.preventDefault();
+    
+    // Clear previous save error
+    setSaveError(null);
 
-    console.log("buyerProfile state:", buyerProfile);
-    console.log("formData:", formData);
-
-    if (buyerProfile) {
-      console.log("Calling updateProfileMutation");
-      await updateProfileMutation.mutateAsync({
-        id: buyerProfile.id,
-        data: formData,
-      });
-    } else {
-      console.log("Calling createProfileMutation");
-      await createProfileMutation.mutateAsync(formData);
+    try {
+      if (buyerProfile) {
+        await updateProfileMutation.mutateAsync({
+          id: buyerProfile.id,
+          data: formData,
+        });
+      } else {
+        await createProfileMutation.mutateAsync(formData);
+      }
+      // Success - clear any error state
+      setSaveError(null);
+    } catch (err) {
+      // Handle save errors gracefully - NO unhandled promise rejections
+      console.warn("[BuyerProfile] Save failed:", err);
+      
+      if (isDegradedSupabaseError(err)) {
+        setSaveError("Backend temporarily unavailable (503/timeout). Your changes were not saved. Please try again.");
+      } else {
+        setSaveError(err?.message || "Failed to save profile. Please try again.");
+      }
+      // DO NOT re-throw - this prevents unhandled promise rejection
     }
   };
 
@@ -334,18 +530,28 @@ export default function BuyerProfile() {
     );
   }
 
+  // ─────────────────────────────────────────────────────────────────────────────
+  // BUYER ANALYTICS DERIVATION (read-time)
+  // AUTHORITATIVE SOURCE: orders (buyer_id === auth.user.id)
+  // Orders are the buyer-owned source of truth for analytics
+  // ─────────────────────────────────────────────────────────────────────────────
+  
+  // Derive analytics from ORDERS (authoritative source for buyers)
+  // Note: Supabase helper already filters to valid orders only (paid/fulfilled/completed)
+  const totalOrders = orders.length;
   const totalSpent = orders.reduce((sum, order) => sum + (order.price || 0), 0);
+  
   const stats = [
     {
       label: "Total Orders",
-      value: orders.length,
+      value: totalOrders,  // FIX: Derived from orders (authoritative source)
       icon: ShoppingBag,
       color: "from-purple-500 to-blue-500",
       onClick: () => setShowOrdersDialog(true)
     },
     {
       label: "Total Spent",
-      value: `$${totalSpent.toFixed(2)}`,
+      value: `$${totalSpent.toFixed(2)}`,  // FIX: Derived from orders
       icon: DollarSign,
       color: "from-green-500 to-emerald-500",
       onClick: null
@@ -363,39 +569,66 @@ export default function BuyerProfile() {
       icon: Layers,
       color: "from-indigo-500 to-purple-500",
       onClick: () => setShowCommunitiesDialog(true)
+    },
+    {
+      label: "Bookmarked Shows",
+      value: bookmarkedShows.length,
+      icon: Bookmark,
+      color: "from-yellow-500 to-orange-500",
+      onClick: () => setShowBookmarksDialog(true)
     }
   ];
 
-  // CRITICAL: Determine seller application state for UI
+  // ═══════════════════════════════════════════════════════════════════════════
+  // AUTHORITATIVE STATUS: public.sellers.status is the source of truth
+  // user_metadata is UI-only convenience (draft/in-progress state)
+  // ═══════════════════════════════════════════════════════════════════════════
   const userMeta = user?.user_metadata || {};
   
   // 🔐 SUPER_ADMIN BYPASS: Hide all application banners
   const userIsSuperAdmin = isSuperAdmin(user);
   
-  // Check application status from user_metadata (primary source)
-  const metaApplicationStatus = userMeta.seller_application_status;
-  const metaOnboardingCompleted = userMeta.seller_onboarding_completed === true;
-  
-  // Check seller table status (fallback / authoritative for approval)
+  // AUTHORITATIVE: Seller table status (public.sellers.status)
+  // This is the ONLY source of truth for submission status
   const sellerTableStatus = seller?.status;
   
-  // Determine effective application status (seller table takes precedence when approved)
-  // SUPER_ADMIN: treat as approved for all UI purposes
-  const isSellerApproved = userIsSuperAdmin || sellerTableStatus === "approved" || metaApplicationStatus === "approved";
-  const isSellerApplicationPending = 
-    !userIsSuperAdmin && (
-      (metaOnboardingCompleted && metaApplicationStatus === "pending") ||
-      sellerTableStatus === "pending"
-    );
-  const isSellerDeclined = !userIsSuperAdmin && (metaApplicationStatus === "declined" || sellerTableStatus === "declined");
-  const isSellerSuspended = !userIsSuperAdmin && (metaApplicationStatus === "suspended" || sellerTableStatus === "suspended");
+  // Metadata is now secondary - only used for draft/onboarding progress
+  const metaOnboardingCompleted = userMeta.seller_onboarding_completed === true;
+  
+  // STATUS DETERMINATION (sellers.status is authoritative):
+  // - If sellers row exists with status='pending' => "Application Submitted / Pending Review"
+  // - If sellers row exists with status='approved' => "Seller Account Active"
+  // - If sellers row exists with status='declined' => "Application Not Approved"
+  // - If sellers row exists with status='suspended' => "Account Suspended"
+  // - If NO sellers row => "Apply to become a seller" (or show onboarding if in progress)
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CANONICAL UI FLAGS: Aligned with seller gate (isApprovedSeller.ts)
+  // ═══════════════════════════════════════════════════════════════════════════
+  const isSellerFullyReady =
+    seller?.status === "approved" &&
+    user?.seller_safety_agreed === true &&
+    user?.seller_onboarding_completed === true;
+
+  const isSellerApprovedButIncomplete =
+    seller?.status === "approved" &&
+    user?.seller_safety_agreed === true &&
+    user?.seller_onboarding_completed !== true;
+
+  // Legacy flags (still used for other banners)
+  const isSellerApproved = userIsSuperAdmin || sellerTableStatus === "approved";
+  const isSellerApplicationPending = !userIsSuperAdmin && sellerTableStatus === "pending";
+  const isSellerDeclined = !userIsSuperAdmin && sellerTableStatus === "declined";
+  const isSellerSuspended = !userIsSuperAdmin && sellerTableStatus === "suspended";
   
   // Hide "Become a Seller" CTA if:
   // - SUPER_ADMIN (they have full access already)
-  // - Seller profile exists (any status)
-  // - Application is pending
-  // - Application is approved
-  const shouldShowSellerCTA = !userIsSuperAdmin && !seller && !isSellerApplicationPending && !isSellerApproved;
+  // - Canonical role is already 'seller' or 'admin' (even if no seller row yet)
+  // - Seller row exists (any status - meaning they've submitted)
+  // - Metadata shows onboarding in progress (they started but haven't finished)
+  const hasStartedOnboarding = metaOnboardingCompleted || (userMeta.seller_onboarding_steps_completed?.length > 0);
+  const isAlreadySeller = canonicalUserRole === "seller" || canonicalUserRole === "admin";
+  const shouldShowSellerCTA = !userIsSuperAdmin && !isAlreadySeller && !seller && !hasStartedOnboarding;
   
   // Legacy compatibility
   const isPendingSeller = !userIsSuperAdmin && seller && seller.status === "pending";
@@ -408,6 +641,37 @@ export default function BuyerProfile() {
         <div className="flex items-center justify-between">
           <h1 className="text-3xl font-bold text-gray-900">My Profile</h1>
         </div>
+
+        {/* Degraded Mode Banner - Load */}
+        {isLoadDegraded && (
+          <Alert className="border-orange-300 bg-orange-50">
+            <AlertCircle className="h-5 w-5 text-orange-600" />
+            <AlertDescription className="flex items-center justify-between w-full">
+              <span className="text-orange-900">
+                <strong>Backend temporarily unavailable.</strong> Your profile may not load or save right now.
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => loadUser()}
+                className="ml-4 border-orange-300 text-orange-700 hover:bg-orange-100"
+              >
+                <RefreshCw className="w-4 h-4 mr-1" />
+                Retry
+              </Button>
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {/* Seller Status Degraded Banner */}
+        {isSellerStatusDegraded && !isLoadDegraded && (
+          <Alert className="border-amber-200 bg-amber-50">
+            <AlertCircle className="h-5 w-5 text-amber-600" />
+            <AlertDescription className="text-amber-900">
+              <strong>Seller application status unavailable</strong> (backend down). Status shown may be incomplete.
+            </AlertDescription>
+          </Alert>
+        )}
 
         {/* Seller Application Status Banners */}
         {isSellerApplicationPending && !isSellerApproved && (
@@ -422,23 +686,37 @@ export default function BuyerProfile() {
           </Alert>
         )}
 
-        {isSellerApproved && seller && (
-          <Alert className="border-green-300 bg-green-50">
-            <CheckCircle className="h-5 w-5 text-green-600" />
-            <div className="ml-2 flex-1">
-              <h4 className="font-semibold text-green-800">Seller Account Active</h4>
-              <AlertDescription className="text-green-700">
-                Your seller account is active. Access your Seller Dashboard to manage products and shows.
-              </AlertDescription>
-            </div>
-            <Button 
-              variant="outline" 
-              className="border-green-400 text-green-700 hover:bg-green-100"
+        {/* CASE 1 — Seller fully ready */}
+        {isSellerFullyReady && (
+          <div className="rounded-lg bg-green-50 border border-green-200 p-4 mb-6">
+            <h4 className="font-semibold text-green-800">Seller Account Active</h4>
+            <p className="text-sm text-green-700 mt-1">
+              Your seller account is active. Access your Seller Dashboard to manage products and shows.
+            </p>
+            <Button
+              className="mt-3"
               onClick={() => navigate(createPageUrl("SellerDashboard"))}
             >
               Go to Seller Dashboard
             </Button>
-          </Alert>
+          </div>
+        )}
+
+        {/* CASE 2 — Seller approved but onboarding incomplete */}
+        {isSellerApprovedButIncomplete && (
+          <div className="rounded-lg bg-amber-50 border border-amber-200 p-4 mb-6">
+            <h4 className="font-semibold text-amber-800">Complete Seller Onboarding</h4>
+            <p className="text-sm text-amber-700 mt-1">
+              Your seller application is approved, but onboarding is not complete.
+              Please finish onboarding to unlock seller features.
+            </p>
+            <Button
+              className="mt-3"
+              onClick={() => navigate(createPageUrl("SellerOnboarding"))}
+            >
+              Continue Seller Onboarding
+            </Button>
+          </div>
         )}
 
         {isSellerDeclined && (
@@ -651,6 +929,26 @@ export default function BuyerProfile() {
                   />
                 </div>
 
+                <div className="space-y-2">
+                  <Label>Display Name {displayNameLocked && <Badge className="ml-2 bg-gray-100 text-gray-600">Locked</Badge>}</Label>
+                  <Input
+                    value={formData.display_name}
+                    onChange={(e) => setFormData({ ...formData, display_name: e.target.value })}
+                    placeholder={displayNameLocked ? "" : "Choose a unique public name"}
+                    disabled={displayNameLocked}
+                    className={displayNameLocked ? "bg-gray-100 cursor-not-allowed" : ""}
+                  />
+                  {displayNameLocked ? (
+                    <p className="text-xs text-amber-600">
+                      Display names are unique and can only be changed by request.
+                    </p>
+                  ) : (
+                    <p className="text-xs text-gray-500">
+                      Choose carefully — this unique public name cannot be changed after saving.
+                    </p>
+                  )}
+                </div>
+
                 <div className="grid sm:grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label>Email *</Label>
@@ -674,6 +972,14 @@ export default function BuyerProfile() {
                   </div>
                 </div>
 
+                {/* Save Error Banner */}
+                {saveError && (
+                  <Alert className="border-red-300 bg-red-50">
+                    <AlertCircle className="h-5 w-5 text-red-600" />
+                    <AlertDescription className="text-red-900">{saveError}</AlertDescription>
+                  </Alert>
+                )}
+
                 <div className="flex flex-col gap-3">
                   <div className="flex gap-3">
                     <Button
@@ -688,9 +994,11 @@ export default function BuyerProfile() {
                       variant="outline"
                       onClick={() => {
                         setShowEditor(false);
+                        setSaveError(null);
                         if (buyerProfile) {
                           setFormData({
                             full_name: buyerProfile.full_name || "",
+                            display_name: canonicalDisplayName || buyerProfile.display_name || "",
                             phone: buyerProfile.phone || "",
                             email: buyerProfile.email || "",
                             profile_image_url: buyerProfile.profile_image_url || ""

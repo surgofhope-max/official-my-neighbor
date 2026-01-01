@@ -20,7 +20,7 @@ import {
 import { ExternalLink, Download, TrendingUp, DollarSign, RefreshCw, Users } from "lucide-react";
 import BuyerDetailView from "./BuyerDetailView.jsx"; // Changed import to include .jsx extension
 
-export default function BuyerAnalyticsTab({ startDate, endDate, searchTerm, buyers, payments, refunds }) {
+export default function BuyerAnalyticsTab({ startDate, endDate, searchTerm, buyers, payments, refunds, sellers = [] }) {
   const [selectedBuyer, setSelectedBuyer] = useState(null);
   const [showDetail, setShowDetail] = useState(false);
 
@@ -236,6 +236,7 @@ export default function BuyerAnalyticsTab({ startDate, endDate, searchTerm, buye
               endDate={endDate}
               payments={payments}
               refunds={refunds}
+              sellers={sellers}
             />
           )}
         </DialogContent>

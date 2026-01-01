@@ -11,7 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { supabaseApi as base44 } from "@/api/supabaseClient";
+import { supabase } from "@/lib/supabase/supabaseClient";
 import { Upload, X, Gift, Video } from "lucide-react";
 
 export default function ProductForm({ product, onSave, onCancel, isSubmitting }) {
@@ -24,7 +24,7 @@ export default function ProductForm({ product, onSave, onCancel, isSubmitting })
     is_live_item: product?.is_live_item || false,
     is_givey: product?.is_givey || false,
     category: product?.category || "",
-    images: product?.images || []
+    image_urls: product?.image_urls || []
   });
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef(null);
@@ -43,31 +43,44 @@ export default function ProductForm({ product, onSave, onCancel, isSubmitting })
 
   const handleFileUpload = async (e) => {
     const files = Array.from(e.target.files);
-    if (files.length === 0) return;
+    if (!files.length) return;
 
     setUploading(true);
-    const urls = [];
+    const uploadedUrls = [];
 
     for (const file of files) {
-      try {
-        const { file_url } = await base44.integrations.Core.UploadFile({ file });
-        urls.push(file_url);
-      } catch (error) {
-        console.error("Error uploading file:", error);
+      const fileExt = file.name.split(".").pop();
+      const fileName = `${crypto.randomUUID()}.${fileExt}`;
+      const filePath = fileName;
+
+      const { error } = await supabase.storage
+        .from("products")
+        .upload(filePath, file, { upsert: true });
+
+      if (error) {
+        console.error("Product image upload failed:", error);
+        continue;
       }
+
+      const { data } = supabase.storage
+        .from("products")
+        .getPublicUrl(filePath);
+
+      uploadedUrls.push(data.publicUrl);
     }
 
     setFormData(prev => ({
       ...prev,
-      images: [...prev.images, ...urls]
+      image_urls: [...(prev.image_urls || []), ...uploadedUrls]
     }));
+
     setUploading(false);
   };
 
   const removeImage = (index) => {
     setFormData(prev => ({
       ...prev,
-      images: prev.images.filter((_, i) => i !== index)
+      image_urls: (prev.image_urls || []).filter((_, i) => i !== index)
     }));
   };
 
@@ -86,7 +99,7 @@ export default function ProductForm({ product, onSave, onCancel, isSubmitting })
       <div className="space-y-3">
         <Label>Product Images</Label>
         <div className="grid grid-cols-3 gap-3">
-          {formData.images.map((url, index) => (
+          {(formData.image_urls || []).map((url, index) => (
             <div key={index} className="relative group">
               <img
                 src={url}

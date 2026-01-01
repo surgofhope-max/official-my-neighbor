@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { supabaseApi as base44 } from "@/api/supabaseClient";
+import { supabase } from "@/lib/supabase/supabaseClient";
+import { supabaseApi as base44 } from "@/api/supabaseClient"; // Keep for entities
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -41,8 +42,12 @@ export default function Communities() {
 
   const loadUser = async () => {
     try {
-      const currentUser = await base44.auth.me();
-      setUser(currentUser);
+      const { data, error } = await supabase.auth.getUser();
+      if (error) {
+        setUser(null);
+        return;
+      }
+      setUser(data?.user ?? null);
     } catch (error) {
       setUser(null);
     }
@@ -80,10 +85,21 @@ export default function Communities() {
     navigate(createPageUrl("NearMe"));
   };
 
-  // Fetch all active communities
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STEP C6-E: Fetch communities from Supabase (replaces base44.entities.Community)
+  // ═══════════════════════════════════════════════════════════════════════════
   const { data: allCommunities = [], isLoading: communitiesLoading } = useQuery({
-    queryKey: ['all-communities'],
-    queryFn: () => base44.entities.Community.filter({ is_active: true }, 'sort_order')
+    queryKey: ['communities'],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("communities")
+        .select("*")
+        .eq("is_active", true)
+        .order("sort_order", { ascending: true });
+
+      if (error) throw error;
+      return data ?? [];
+    },
   });
 
   // Fetch followed communities
@@ -91,16 +107,33 @@ export default function Communities() {
     queryKey: ['followed-communities', user?.id],
     queryFn: async () => {
       if (!user?.id) return [];
-      const follows = await base44.entities.FollowedCommunity.filter({ user_id: user.id });
-      return follows.map(f => f.community_id);
+      const { data, error } = await supabase
+        .from("followed_communities")
+        .select("community_id")
+        .eq("user_id", user.id);
+      if (error) throw error;
+      return (data || []).map(f => f.community_id);
     },
     enabled: !!user
   });
 
-  // Fetch all shows to calculate live counts per community
-  const { data: allShows = [] } = useQuery({
-    queryKey: ['all-shows-for-communities'],
-    queryFn: () => base44.entities.Show.filter({ status: "live" }),
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STEP C6-E.4: Fetch shows that are currently streaming (stream_status = 'live')
+  // This determines which communities are "live" for the Live Communities section
+  // ═══════════════════════════════════════════════════════════════════════════
+  const { data: liveStreamingShows = [], isLoading: liveShowsLoading } = useQuery({
+    queryKey: ['live-streaming-shows-for-communities'],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("shows")
+        .select("id, community_id, stream_status")
+        .eq("stream_status", "live");
+      if (error) {
+        console.error("[Communities] Live shows query error:", error.message);
+        return [];
+      }
+      return data ?? [];
+    },
     refetchInterval: 5000
   });
 
@@ -108,21 +141,38 @@ export default function Communities() {
   const { data: followerCounts = {} } = useQuery({
     queryKey: ['community-follower-counts'],
     queryFn: async () => {
-      const allFollows = await base44.entities.FollowedCommunity.list();
+      const { data, error } = await supabase
+        .from("followed_communities")
+        .select("community_id");
+      if (error) {
+        console.error("[Communities] Follower counts query error:", error.message);
+        return {};
+      }
       const counts = {};
-      allFollows.forEach(follow => {
+      (data || []).forEach(follow => {
         counts[follow.community_id] = (counts[follow.community_id] || 0) + 1;
       });
       return counts;
     }
   });
 
-  // Calculate live show counts per community
-  const liveShowCounts = allShows.reduce((acc, show) => {
-    const communityId = show.community;
-    acc[communityId] = (acc[communityId] || 0) + 1;
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STEP C6-E.4: Calculate live show counts per community (keyed by community_id)
+  // ═══════════════════════════════════════════════════════════════════════════
+  const liveShowCounts = liveStreamingShows.reduce((acc, show) => {
+    const communityId = show.community_id;
+    if (communityId) {
+      acc[communityId] = (acc[communityId] || 0) + 1;
+    }
     return acc;
   }, {});
+
+  // Get unique community IDs that have live shows
+  const liveCommunityIds = [...new Set(
+    liveStreamingShows
+      .map(show => show.community_id)
+      .filter(Boolean)
+  )];
 
   // Filter communities based on search
   const filteredCommunities = allCommunities.filter(community => {
@@ -175,9 +225,19 @@ export default function Communities() {
 
   const hasNearbyCommunities = nearbyFollowedCommunities.length > 0 || nearbyOtherCommunities.length > 0;
 
-  const liveCommunities = communitiesWithDistance.filter(c => 
-    (liveShowCounts[c.name] || 0) > 0
-  );
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STEP C6-E.6: Live Communities Near You (contextual, distance-enhanced)
+  // Global live section removed - hyper-local platform prioritizes Near Me discovery
+  // ═══════════════════════════════════════════════════════════════════════════
+  const liveCommunitiesNearYou = userLocation
+    ? communitiesWithDistance
+        .filter(c => 
+          liveCommunityIds.includes(c.id) && 
+          c.distance !== null && 
+          c.distance <= 20
+        )
+        .sort((a, b) => a.distance - b.distance)
+    : [];
 
   const featuredCommunities = communitiesWithDistance.filter(c => c.is_active);
 
@@ -243,7 +303,7 @@ export default function Communities() {
                             community={community}
                             onClick={() => navigate(createPageUrl(`CommunityPage?community=${community.name}`))}
                             followerCount={followerCounts[community.id] || 0}
-                            liveShowCount={liveShowCounts[community.name] || 0}
+                            liveShowCount={liveShowCounts[community.id] || 0}
                           />
                         ))}
                       </div>
@@ -254,6 +314,51 @@ export default function Communities() {
                       </div>
                       </section>
                       )}
+
+        {/* ═══════════════════════════════════════════════════════════════════════════ */}
+        {/* STEP C6-E.5 PART C: Live Communities Near You (distance-enhanced) */}
+        {/* Secondary section showing live communities within 20 miles */}
+        {/* ═══════════════════════════════════════════════════════════════════════════ */}
+        {liveCommunitiesNearYou.length > 0 && (
+          <section>
+            <div className="flex items-center gap-3 mb-3">
+              <Radio className="w-5 h-5 text-red-500 animate-pulse" />
+              <MapPin className="w-5 h-5 text-green-600" />
+              <h2 className="text-xl font-bold text-gray-900">Live Communities Near You</h2>
+              <Badge className="bg-gradient-to-r from-red-500 to-green-500 text-white border-0 text-xs animate-pulse">
+                {liveCommunitiesNearYou.length} LIVE
+              </Badge>
+            </div>
+
+            <div className="overflow-x-scroll snap-x snap-mandatory scrollbar-hide -mx-4 md:overflow-visible">
+              <div className="flex px-4 md:block" style={{ scrollSnapType: 'x mandatory' }}>
+                {Array.from({ length: Math.ceil(liveCommunitiesNearYou.length / 4) }).map((_, blockIndex) => {
+                  const startIdx = blockIndex * 4;
+                  const blockCommunities = liveCommunitiesNearYou.slice(startIdx, startIdx + 4);
+                  return (
+                    <div 
+                      key={blockIndex} 
+                      className="snap-start flex-shrink-0 px-4 md:px-0" 
+                      style={{ width: '100vw' }}
+                    >
+                      <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 md:gap-6">
+                        {blockCommunities.map((community) => (
+                          <CommunityCard
+                            key={community.id}
+                            community={community}
+                            onClick={() => navigate(createPageUrl(`CommunityPage?community=${community.name}`))}
+                            followerCount={followerCounts[community.id] || 0}
+                            liveShowCount={liveShowCounts[community.id] || 0}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </section>
+        )}
 
                       {/* Communities Near You */}
         {userLocation && hasNearbyCommunities && (
@@ -286,7 +391,7 @@ export default function Communities() {
                               community={community}
                               onClick={() => navigate(createPageUrl(`CommunityPage?community=${community.name}`))}
                               followerCount={followerCounts[community.id] || 0}
-                              liveShowCount={liveShowCounts[community.name] || 0}
+                              liveShowCount={liveShowCounts[community.id] || 0}
                             />
                           ))}
                         </div>
@@ -294,47 +399,6 @@ export default function Communities() {
                     );
                   });
                 })()}
-              </div>
-            </div>
-          </section>
-        )}
-
-        {/* Live Now Communities */}
-        {liveCommunities.length > 0 && (
-          <section>
-            <div className="flex items-center gap-3 mb-3">
-              <Radio className="w-5 h-5 text-red-500 animate-pulse" />
-              <h2 className="text-xl font-bold text-gray-900">Live Now</h2>
-              <Badge className="bg-red-500 text-white border-0 text-xs">
-                {liveCommunities.length}
-              </Badge>
-            </div>
-
-            <div className="overflow-x-scroll snap-x snap-mandatory scrollbar-hide -mx-4 md:overflow-visible">
-              <div className="flex px-4 md:block" style={{ scrollSnapType: 'x mandatory' }}>
-                {Array.from({ length: Math.ceil(liveCommunities.length / 4) }).map((_, blockIndex) => {
-                  const startIdx = blockIndex * 4;
-                  const blockCommunities = liveCommunities.slice(startIdx, startIdx + 4);
-                  return (
-                    <div 
-                      key={blockIndex} 
-                      className="snap-start flex-shrink-0 px-4 md:px-0" 
-                      style={{ width: '100vw' }}
-                    >
-                      <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 md:gap-6">
-                        {blockCommunities.map((community) => (
-                          <CommunityCard
-                            key={community.id}
-                            community={community}
-                            onClick={() => navigate(createPageUrl(`CommunityPage?community=${community.name}`))}
-                            followerCount={followerCounts[community.id] || 0}
-                            liveShowCount={liveShowCounts[community.name] || 0}
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })}
               </div>
             </div>
           </section>
@@ -369,7 +433,7 @@ export default function Communities() {
                             community={community}
                             onClick={() => navigate(createPageUrl(`CommunityPage?community=${community.name}`))}
                             followerCount={followerCounts[community.id] || 0}
-                            liveShowCount={liveShowCounts[community.name] || 0}
+                            liveShowCount={liveShowCounts[community.id] || 0}
                           />
                         ))}
                       </div>

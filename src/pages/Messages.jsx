@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
-import { supabaseApi as base44 } from "@/api/supabaseClient";
+import { supabase } from "@/lib/supabase/supabaseClient";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -45,7 +46,7 @@ import {
 
 export default function Messages() {
   const messagesEndRef = useRef(null);
-  const initialLoadDone = useRef(false);
+  const queryClient = useQueryClient();
   
   // Auth state
   const [user, setUser] = useState(null);
@@ -54,14 +55,8 @@ export default function Messages() {
   const [effectiveUserId, setEffectiveUserId] = useState(null);
   const [effectiveSellerId, setEffectiveSellerId] = useState(null);
   
-  // Conversation state
-  const [conversations, setConversations] = useState([]);
+  // Conversation state (selectedConversation still manual for URL sync)
   const [selectedConversation, setSelectedConversation] = useState(null);
-  const [conversationsLoading, setConversationsLoading] = useState(true);
-  
-  // Messages state
-  const [messages, setMessages] = useState([]);
-  const [messagesLoading, setMessagesLoading] = useState(false);
   
   // UI state
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
@@ -86,7 +81,14 @@ export default function Messages() {
   // Load user with impersonation support
   const loadUser = async () => {
     try {
-      const currentUser = await base44.auth.me();
+      const { data, error } = await supabase.auth.getUser();
+      if (error) {
+        console.error("[Messages] auth load failed", error);
+        setUser(null);
+        setUserType(null);
+        return;
+      }
+      const currentUser = data?.user ?? null;
       if (!currentUser) {
         setUser(null);
         setUserType(null);
@@ -128,44 +130,27 @@ export default function Messages() {
     }
   };
 
-  // Load conversations when context is ready
-  useEffect(() => {
-    if (!effectiveUserId || !userType) return;
-
-    loadConversations();
-
-    // Poll every 30 seconds (Base44 parity)
-    const pollInterval = setInterval(() => {
-      loadConversations();
-    }, 30000);
-
-    return () => clearInterval(pollInterval);
-  }, [effectiveUserId, effectiveSellerId, userType]);
-
-  // Load conversations from Supabase
-  const loadConversations = async () => {
-    if (!effectiveUserId || !userType) return;
-
-    try {
-      const convs = await getConversationsForInbox({
-        effectiveUserId,
-        effectiveSellerId,
-        userType,
-        isImpersonating: false, // Already resolved via effectiveUserId
-      });
-
-      setConversations(convs);
-      initialLoadDone.current = true;
-    } catch (error) {
-      console.warn("Error loading conversations:", error);
-    } finally {
-      setConversationsLoading(false);
-    }
-  };
+  // React Query: Fetch conversations with polling
+  const { 
+    data: conversations = [], 
+    isLoading: conversationsLoading 
+  } = useQuery({
+    queryKey: ['conversations', effectiveUserId, effectiveSellerId, userType],
+    queryFn: () => getConversationsForInbox({
+      effectiveUserId,
+      effectiveSellerId,
+      userType,
+      isImpersonating: false,
+    }),
+    enabled: !!effectiveUserId && !!userType,
+    refetchInterval: 15000,
+    refetchOnWindowFocus: false,
+    staleTime: 10000,
+  });
 
   // Auto-select conversation from URL after conversations load
   useEffect(() => {
-    if (!conversations.length || !user || !initialLoadDone.current) return;
+    if (!conversations.length || !user) return;
 
     // If conversationId is in URL, select it directly
     if (urlConversationId) {
@@ -184,38 +169,18 @@ export default function Messages() {
     }
   }, [urlConversationId, urlSellerId, conversations, user, userType]);
 
-  // Load messages when conversation is selected
-  useEffect(() => {
-    if (!selectedConversation) {
-      setMessages([]);
-      return;
-    }
-
-    loadMessages();
-
-    // Poll every 2 seconds for messages (faster than inbox)
-    const pollInterval = setInterval(() => {
-      loadMessages();
-    }, 2000);
-
-    return () => clearInterval(pollInterval);
-  }, [selectedConversation?.id]);
-
-  // Load messages from Supabase
-  const loadMessages = async () => {
-    if (!selectedConversation) return;
-
-    setMessagesLoading(messages.length === 0); // Only show loading on first load
-
-    try {
-      const msgs = await getMessagesForConversation(selectedConversation.id);
-      setMessages(msgs);
-    } catch (error) {
-      console.warn("Error loading messages:", error);
-    } finally {
-      setMessagesLoading(false);
-    }
-  };
+  // React Query: Fetch messages with polling
+  const { 
+    data: messages = [], 
+    isLoading: messagesLoading 
+  } = useQuery({
+    queryKey: ['messages', selectedConversation?.id],
+    queryFn: () => getMessagesForConversation(selectedConversation?.id),
+    enabled: !!selectedConversation?.id,
+    refetchInterval: 5000,
+    refetchOnWindowFocus: false,
+    staleTime: 3000,
+  });
 
   // Mark messages as read when conversation is opened (Base44 parity)
   useEffect(() => {
@@ -241,7 +206,7 @@ export default function Messages() {
       await resetUnreadCount(selectedConversation.id, userType);
 
       // Refresh conversations to update badge
-      loadConversations();
+      queryClient.invalidateQueries({ queryKey: ['conversations'] });
     } catch (error) {
       console.warn("Error marking messages as read:", error);
     }
@@ -283,9 +248,9 @@ export default function Messages() {
           userType
         );
 
-        // Refresh messages and conversations
-        await loadMessages();
-        await loadConversations();
+        // Invalidate queries to refresh messages and conversations
+        queryClient.invalidateQueries({ queryKey: ['messages', selectedConversation.id] });
+        queryClient.invalidateQueries({ queryKey: ['conversations'] });
       }
     } catch (error) {
       console.warn("Error sending message:", error);
@@ -308,7 +273,7 @@ export default function Messages() {
       window.history.replaceState({}, '', createPageUrl("Messages"));
 
       // Refresh conversations
-      await loadConversations();
+      queryClient.invalidateQueries({ queryKey: ['conversations'] });
     } catch (error) {
       console.warn("Error deleting conversation:", error);
     } finally {
@@ -334,7 +299,7 @@ export default function Messages() {
       alert("User blocked successfully");
       setSelectedConversation(null);
       window.history.replaceState({}, '', createPageUrl("Messages"));
-      loadConversations();
+      queryClient.invalidateQueries({ queryKey: ['conversations'] });
     } catch (error) {
       console.warn("Error blocking user:", error);
     }
@@ -351,7 +316,10 @@ export default function Messages() {
   };
 
   const handleForceRefresh = () => {
-    loadConversations();
+    queryClient.invalidateQueries({ queryKey: ['conversations'] });
+    if (selectedConversation?.id) {
+      queryClient.invalidateQueries({ queryKey: ['messages', selectedConversation.id] });
+    }
   };
 
   // Loading state

@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { supabaseApi as base44 } from "@/api/supabaseClient";
+import React, { useState, useEffect } from "react";
+import { supabase } from "@/lib/supabase/supabaseClient";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -9,17 +9,131 @@ import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import SellerCard from "../components/marketplace/SellerCard";
 
+// ═══════════════════════════════════════════════════════════════════════════
+// SELLER CARD FIELD MAPPING
+// Maps seller_cards view fields to legacy component-expected field names
+// ═══════════════════════════════════════════════════════════════════════════
+const SELLER_CARD_LIGHT_FIELDS = `
+  seller_id,
+  user_id,
+  display_name,
+  avatar_url,
+  buyer_avatar_url,
+  banner_url,
+  short_bio,
+  city,
+  state,
+  follower_count,
+  rating_average,
+  rating_count,
+  total_products,
+  total_items_sold,
+  is_accepting_orders,
+  live_show_id
+`.replace(/\s+/g, '');
+
+/**
+ * Transform seller_cards row to legacy seller shape expected by components
+ */
+function mapSellerCardToLegacy(card) {
+  if (!card) return null;
+  
+  // Compute effective avatar: seller override > buyer fallback > null
+  const effective_profile_image_url = card.avatar_url || card.buyer_avatar_url || null;
+  
+  return {
+    // Core identity
+    id: card.seller_id,
+    user_id: card.user_id,
+    // Display fields (mapped from seller_cards naming)
+    business_name: card.display_name,
+    profile_image_url: effective_profile_image_url,
+    background_image_url: card.banner_url,
+    bio: card.short_bio,
+    pickup_city: card.city,
+    pickup_state: card.state,
+    // Stats (pre-computed in view)
+    follower_count: card.follower_count || 0,
+    rating_average: card.rating_average || 0,
+    rating_count: card.rating_count || 0,
+    total_sales: card.total_items_sold || 0,
+    total_products: card.total_products || 0,
+    // Status
+    stripe_connected: card.is_accepting_orders || false,
+    live_show_id: card.live_show_id,
+    // Legacy placeholders (not exposed in public view)
+    show_contact_email: false,
+    show_contact_phone: false,
+    show_pickup_address: true,
+    contact_email: null,
+    contact_phone: null,
+  };
+}
+
 export default function Sellers() {
   const navigate = useNavigate();
   const [searchTerm, setSearchTerm] = useState("");
   const [filterCity, setFilterCity] = useState("all");
+  const [canonicalUserRole, setCanonicalUserRole] = useState(null);
 
+  // Load canonical user role on mount
+  useEffect(() => {
+    const loadUserRole = async () => {
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user?.id) {
+          const { data: canonicalUser } = await supabase
+            .from("users")
+            .select("role")
+            .eq("id", user.id)
+            .maybeSingle();
+          setCanonicalUserRole(canonicalUser?.role || null);
+        }
+      } catch {
+        // Ignore errors - treat as non-seller
+      }
+    };
+    loadUserRole();
+  }, []);
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CANONICAL SELLER CHECK: Hide "Become a Seller" CTA for existing sellers
+  // ═══════════════════════════════════════════════════════════════════════════
+  const isAlreadySeller = canonicalUserRole === "seller" || canonicalUserRole === "admin";
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CANONICAL QUERY: Fetch from seller_cards view (replaces base44.entities.Seller)
+  // ═══════════════════════════════════════════════════════════════════════════
   const { data: sellers = [], isLoading } = useQuery({
-    queryKey: ['all-sellers'],
-    queryFn: () => base44.entities.Seller.filter({ status: "approved" }, '-total_sales'),
+    queryKey: ['all-sellers-cards'],
+    queryFn: async () => {
+      console.log("[Sellers] Fetching seller_cards...");
+      const { data, error } = await supabase
+        .from('seller_cards')
+        .select(SELLER_CARD_LIGHT_FIELDS)
+        .order('follower_count', { ascending: false })
+        .limit(100);
+      
+      if (error) {
+        console.error("[Sellers] seller_cards query error:", error.message);
+        return [];
+      }
+      
+      console.log(`[Sellers] Found ${data?.length || 0} sellers`);
+      
+      // Transform to legacy shape and sort: live sellers first, then by follower count
+      const mapped = (data || []).map(mapSellerCardToLegacy);
+      return mapped.sort((a, b) => {
+        // Live sellers first
+        if (a.live_show_id && !b.live_show_id) return -1;
+        if (!a.live_show_id && b.live_show_id) return 1;
+        // Then by follower count
+        return (b.follower_count || 0) - (a.follower_count || 0);
+      });
+    },
   });
 
-  // Get unique cities for filter
+  // Get unique cities for filter (using mapped field name)
   const cities = [...new Set(sellers.map(s => s.pickup_city))].filter(Boolean).sort();
 
   const filteredSellers = sellers.filter(seller => {
@@ -180,8 +294,8 @@ export default function Sellers() {
           </div>
         )}
 
-        {/* Info Card */}
-        {filteredSellers.length > 0 && (
+        {/* Info Card - Hidden for sellers and admins */}
+        {filteredSellers.length > 0 && !isAlreadySeller && (
           <Card className="mt-12 border-0 bg-gradient-to-r from-purple-50 to-blue-50">
             <CardContent className="p-8 text-center">
               <Store className="w-12 h-12 text-purple-600 mx-auto mb-4" />

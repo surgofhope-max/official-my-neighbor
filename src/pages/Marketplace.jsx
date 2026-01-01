@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from "react";
-import { supabaseApi as base44 } from "@/api/supabaseClient";
+import { supabase } from "@/lib/supabase/supabaseClient";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { MapPin, Store, Home, Package, Sparkles, Truck, ShoppingCart, Leaf, Video, Key } from "lucide-react";
+import { MapPin, Package } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import LiveShowCard from "../components/marketplace/LiveShowCard";
@@ -12,23 +12,80 @@ import CommunityCarousel from "../components/marketplace/CommunityCarousel";
 import UnifiedSearchBar from "../components/search/UnifiedSearchBar";
 import { getLiveShows, getScheduledShows } from "@/api/shows";
 
-// Map for dynamic Lucide icon rendering in the empty state
-const LucideIconMap = {
-  Package: Package,
-  Store: Store,
-  Home: Home,
-  ShoppingCart: ShoppingCart,
-  Sparkles: Sparkles,
-  Truck: Truck,
-  Leaf: Leaf,
-  Video: Video,
-  Key: Key,
-};
+// ═══════════════════════════════════════════════════════════════════════════
+// SELLER CARD FIELD MAPPING
+// Maps seller_cards view fields to legacy component-expected field names
+// ═══════════════════════════════════════════════════════════════════════════
+const SELLER_CARD_LIGHT_FIELDS = `
+  seller_id,
+  user_id,
+  display_name,
+  avatar_url,
+  buyer_avatar_url,
+  banner_url,
+  short_bio,
+  city,
+  state,
+  follower_count,
+  rating_average,
+  rating_count,
+  total_items_sold,
+  is_accepting_orders,
+  live_show_id
+`.replace(/\s+/g, '');
+
+/**
+ * Transform seller_cards row to legacy seller shape expected by components
+ */
+function mapSellerCardToLegacy(card) {
+  if (!card) return null;
+  
+  // Compute effective avatar: seller override > buyer fallback > null
+  const effective_profile_image_url = card.avatar_url || card.buyer_avatar_url || null;
+  
+  // DEV debug log (guarded)
+  if (process.env.NODE_ENV === 'development') {
+    console.log('[SellerAvatarInheritance]', {
+      seller_id: card.seller_id,
+      seller_avatar: card.avatar_url || '(none)',
+      buyer_avatar: card.buyer_avatar_url || '(none)',
+      effective: effective_profile_image_url || '(fallback to UI)'
+    });
+  }
+  
+  return {
+    // Core identity
+    id: card.seller_id,
+    user_id: card.user_id,
+    // Display fields (mapped from seller_cards naming)
+    business_name: card.display_name,
+    profile_image_url: effective_profile_image_url,
+    background_image_url: card.banner_url,
+    bio: card.short_bio,
+    pickup_city: card.city,
+    pickup_state: card.state,
+    // Stats (pre-computed in view)
+    follower_count: card.follower_count || 0,
+    rating_average: card.rating_average || 0,
+    rating_count: card.rating_count || 0,
+    total_sales: card.total_items_sold || 0,
+    // Status
+    stripe_connected: card.is_accepting_orders || false,
+    live_show_id: card.live_show_id,
+    // Legacy placeholders (not exposed in public view)
+    show_contact_email: false,
+    show_contact_phone: false,
+    show_pickup_address: true,
+    contact_email: null,
+    contact_phone: null,
+  };
+}
 
 export default function Marketplace() {
   const navigate = useNavigate();
   const [selectedCommunity, setSelectedCommunity] = useState("all");
   const [user, setUser] = useState(null);
+  const [canonicalUserRole, setCanonicalUserRole] = useState(null);
 
   // Data state (replacing React Query)
   const [liveShows, setLiveShows] = useState([]);
@@ -36,20 +93,90 @@ export default function Marketplace() {
   const [sellers, setSellers] = useState([]);
   const [allSellers, setAllSellers] = useState([]);
   const [followedSellers, setFollowedSellers] = useState([]);
+  const [communities, setCommunities] = useState([]);
 
-  // Load user on component mount
+  // Load user and communities on component mount
   useEffect(() => {
     loadUser();
+    loadCommunities();
   }, []);
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STEP C6-E: Load communities from Supabase (replaces hardcoded array)
+  // ═══════════════════════════════════════════════════════════════════════════
+  const loadCommunities = async () => {
+    try {
+      const { data, error } = await supabase
+        .from("communities")
+        .select("id, name, label, icon_name, bg_image_url, color_gradient")
+        .eq("is_active", true)
+        .order("sort_order", { ascending: true });
+
+      if (error) {
+        console.error("[Marketplace] Failed to load communities:", error);
+        setCommunities([]);
+        return;
+      }
+
+      // Transform to expected shape with "All" as first option
+      const allOption = {
+        id: "all",
+        name: "all",
+        label: "All",
+        icon: "Package",
+        bgImage: "https://images.unsplash.com/photo-1607082348824-0a96f2a4b9da?w=400&h=300&fit=crop",
+        color: "from-purple-500 to-blue-500"
+      };
+
+      const dbCommunities = (data || []).map(c => ({
+        id: c.id,
+        name: c.name,
+        label: c.label,
+        icon: c.icon_name || "Package",
+        bgImage: c.bg_image_url || "https://images.unsplash.com/photo-1607082348824-0a96f2a4b9da?w=400&h=300&fit=crop",
+        color: c.color_gradient || "from-purple-500 to-blue-500"
+      }));
+
+      setCommunities([allOption, ...dbCommunities]);
+    } catch (error) {
+      console.error("[Marketplace] Error loading communities:", error);
+      setCommunities([]);
+    }
+  };
 
   const loadUser = async () => {
     try {
-      const currentUser = await base44.auth.me();
-      setUser(currentUser);
+      const { data, error } = await supabase.auth.getUser();
+      if (error) {
+        console.error("[Marketplace] auth load failed", error);
+        setUser(null);
+        setCanonicalUserRole(null);
+        return;
+      }
+      const authUser = data?.user ?? null;
+      setUser(authUser);
+      
+      // Fetch canonical role from public.users
+      if (authUser?.id) {
+        const { data: canonicalUser } = await supabase
+          .from("users")
+          .select("role")
+          .eq("id", authUser.id)
+          .maybeSingle();
+        setCanonicalUserRole(canonicalUser?.role || null);
+      } else {
+        setCanonicalUserRole(null);
+      }
     } catch (error) {
       setUser(null);
+      setCanonicalUserRole(null);
     }
   };
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CANONICAL SELLER CHECK: Hide "Become a Seller" CTA for existing sellers
+  // ═══════════════════════════════════════════════════════════════════════════
+  const isAlreadySeller = canonicalUserRole === "seller" || canonicalUserRole === "admin";
 
   // Load shows using Supabase API
   const loadShows = async () => {
@@ -74,22 +201,46 @@ export default function Marketplace() {
     }
   };
 
-  // Load sellers (still uses legacy calls - will be migrated separately)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CANONICAL QUERY: Load sellers from seller_cards view
+  // ═══════════════════════════════════════════════════════════════════════════
   const loadSellers = async () => {
     try {
-      const [approvedSellers, allSellersList] = await Promise.all([
-        base44.entities.Seller.filter({ status: "approved" }, '-total_sales'),
-        base44.entities.Seller.list(),
-      ]);
-      setSellers(approvedSellers);
-      setAllSellers(allSellersList);
+      console.log("[Marketplace] Fetching seller_cards...");
+      const { data, error } = await supabase
+        .from('seller_cards')
+        .select(SELLER_CARD_LIGHT_FIELDS)
+        .order('follower_count', { ascending: false })
+        .limit(50);
+      
+      if (error) {
+        console.error("[Marketplace] seller_cards query error:", error.message);
+        setSellers([]);
+        setAllSellers([]);
+        return;
+      }
+      
+      console.log(`[Marketplace] Found ${data?.length || 0} sellers`);
+      
+      // Transform to legacy shape and sort: live sellers first
+      const mapped = (data || []).map(mapSellerCardToLegacy);
+      const sorted = mapped.sort((a, b) => {
+        if (a.live_show_id && !b.live_show_id) return -1;
+        if (!a.live_show_id && b.live_show_id) return 1;
+        return (b.follower_count || 0) - (a.follower_count || 0);
+      });
+      
+      setSellers(sorted);
+      setAllSellers(sorted); // Both are the same for seller_cards (already filtered)
     } catch (error) {
+      console.error("[Marketplace] loadSellers error:", error);
       setSellers([]);
       setAllSellers([]);
     }
   };
 
   // Load followed sellers for logged-in user
+  // NOTE: This still uses direct Supabase query (not migrating follow mutations in this step)
   const loadFollowedSellers = async () => {
     if (!user?.id) {
       setFollowedSellers([]);
@@ -97,9 +248,20 @@ export default function Marketplace() {
     }
     
     try {
-      const follows = await base44.entities.FollowedSeller.filter({ buyer_id: user.id });
-      setFollowedSellers(follows.map(f => f.seller_id));
+      const { data, error } = await supabase
+        .from('followed_sellers')
+        .select('seller_id')
+        .eq('buyer_id', user.id);
+      
+      if (error) {
+        console.error("[Marketplace] followed_sellers query error:", error.message);
+        setFollowedSellers([]);
+        return;
+      }
+      
+      setFollowedSellers((data || []).map(f => f.seller_id));
     } catch (error) {
+      console.error("[Marketplace] loadFollowedSellers error:", error);
       setFollowedSellers([]);
     }
   };
@@ -127,92 +289,29 @@ export default function Marketplace() {
     return acc;
   }, {});
 
-  // Community Categories with themed placeholder images and icons (icon names as strings)
-  const communities = [
-    { 
-      id: "all", 
-      label: "All", 
-      icon: "Package", // Changed to string
-      bgImage: "https://images.unsplash.com/photo-1607082348824-0a96f2a4b9da?w=400&h=300&fit=crop",
-      color: "from-purple-500 to-blue-500"
-    },
-    { 
-      id: "stores", 
-      label: "Stores", 
-      icon: "Store", // Changed to string
-      bgImage: "https://images.unsplash.com/photo-1441986300917-64674bd600d8?w=400&h=300&fit=crop",
-      color: "from-blue-500 to-cyan-500"
-    },
-    { 
-      id: "yard_sales", 
-      label: "Yard Sales", 
-      icon: "Home", // Changed to string
-      bgImage: "https://images.unsplash.com/photo-1560518883-ce09059eeffa?w=400&h=300&fit=crop",
-      color: "from-green-500 to-emerald-500"
-    },
-    { 
-      id: "swap_meets", 
-      label: "Swap Meets", 
-      icon: "ShoppingCart", // Changed to string
-      bgImage: "https://images.unsplash.com/photo-1555421689-d68471e189f2?w=400&h=300&fit=crop",
-      color: "from-orange-500 to-red-500"
-    },
-    { 
-      id: "vintage", 
-      label: "Vintage", 
-      icon: "Sparkles", // Changed to string
-      bgImage: "https://images.unsplash.com/photo-1595246140625-573b715d11dc?w=400&h=300&fit=crop",
-      color: "from-amber-500 to-yellow-500"
-    },
-    { 
-      id: "az_offroad", 
-      label: "AZ Off-Road", 
-      icon: "Truck", // Changed to string
-      bgImage: "https://images.unsplash.com/photo-1533473359331-0135ef1b58bf?w=400&h=300&fit=crop",
-      color: "from-red-500 to-orange-500"
-    },
-    { 
-      id: "farmers_market", 
-      label: "Farmer's Market", 
-      icon: "Leaf", // Changed to string
-      bgImage: "https://images.unsplash.com/photo-1488459716781-31db52582fe9?w=400&h=300&fit=crop",
-      color: "from-lime-500 to-green-500"
-    },
-    { 
-      id: "plant_animal", 
-      label: "Plant & Animal", 
-      icon: "Leaf", // Changed to string
-      bgImage: "https://images.unsplash.com/photo-1416879595882-3373a0480b5b?w=400&h=300&fit=crop",
-      color: "from-teal-500 to-cyan-500"
-    },
-    { 
-      id: "infomercial", 
-      label: "Infomercial", 
-      icon: "Video", // Changed to string
-      bgImage: "https://images.unsplash.com/photo-1551817958-11e0f7bbea5a?w=400&h=300&fit=crop",
-      color: "from-indigo-500 to-purple-500"
-    },
-    { 
-      id: "open_house", 
-      label: "Open House", 
-      icon: "Key", // Changed to string
-      bgImage: "https://images.unsplash.com/photo-1560518883-ce09059eeffa?w=400&h=300&fit=crop",
-      color: "from-pink-500 to-rose-500"
-    }
-  ];
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STEP C6-E: Communities now loaded from Supabase via loadCommunities()
+  // The `communities` state is set in the useEffect above
+  // ═══════════════════════════════════════════════════════════════════════════
 
-  // Filter shows by selected community (searchTerm logic removed)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STEP C6-E.2 PART B: Simplified filtering since community bubbles now navigate
+  // Marketplace always shows ALL shows. Specific community filtering is done on CommunityPage.
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  // Filter shows by status only (no community filter on Marketplace)
+  // CRITICAL: status takes precedence over time-based classification
   const filteredLiveShows = liveShows.filter(show => {
-    const matchesCommunity = selectedCommunity === "all" || show.community === selectedCommunity;
-    return matchesCommunity;
+    // Only include shows that are explicitly live (regardless of scheduled_start_time)
+    return show.status === 'live';
   });
 
   const filteredUpcomingShows = upcomingShows.filter(show => {
-    const matchesCommunity = selectedCommunity === "all" || show.community === selectedCommunity;
-    return matchesCommunity;
+    // NEVER treat a live show as upcoming, even if scheduled_start_time is in the future
+    return show.status !== 'live';
   });
 
-  // Filter shows from followed sellers
+  // Filter shows from followed sellers (inherits status-based filtering from parent arrays)
   const liveShowsFromFollowedSellers = filteredLiveShows.filter(show => 
     followedSellers.includes(show.seller_id)
   );
@@ -221,22 +320,6 @@ export default function Marketplace() {
     followedSellers.includes(show.seller_id)
   );
 
-  // Get community counts
-  const getCommunityCounts = (communityId) => {
-    if (communityId === "all") {
-      return {
-        live: liveShows.length,
-        upcoming: upcomingShows.length
-      };
-    }
-    return {
-      live: liveShows.filter(s => s.community === communityId).length,
-      upcoming: upcomingShows.filter(s => s.community === communityId).length
-    };
-  };
-
-  const selectedCommunityData = communities.find(c => c.id === selectedCommunity);
-  const CurrentCommunityIcon = selectedCommunityData?.icon ? LucideIconMap[selectedCommunityData.icon] : null;
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-[#1fb3e3] via-blue-100 to-slate-50">
@@ -250,7 +333,6 @@ export default function Marketplace() {
               <div className="flex-[3]">
                 <UnifiedSearchBar 
                   placeholder="Search shows, sellers, products, communities..." 
-                  onCommunitySelect={setSelectedCommunity}
                 />
               </div>
               
@@ -266,10 +348,8 @@ export default function Marketplace() {
 
           {/* Community Categories Carousel */}
           <CommunityCarousel 
-            communities={communities}
             selectedCommunity={selectedCommunity}
             onSelectCommunity={setSelectedCommunity}
-            getCommunityCounts={getCommunityCounts}
           />
         </div>
       </div>
@@ -430,29 +510,29 @@ export default function Marketplace() {
           </section>
         )}
 
-        {/* Empty State */}
+        {/* Empty State - STEP C6-E.2: Simplified for all-shows view */}
         {filteredLiveShows.length === 0 && filteredUpcomingShows.length === 0 && (
           <Card className="border-2 border-dashed border-gray-300">
             <CardContent className="p-12 sm:p-16 text-center">
-              {CurrentCommunityIcon && <CurrentCommunityIcon className="w-16 h-16 sm:w-20 sm:h-20 text-gray-400 mx-auto mb-4" />}
+              <Package className="w-16 h-16 sm:w-20 sm:h-20 text-gray-400 mx-auto mb-4" />
               <h3 className="text-xl sm:text-2xl font-semibold text-gray-900 mb-2">
-                No shows in {selectedCommunityData?.label || selectedCommunityData?.name || selectedCommunity}
+                No shows available
               </h3>
               <p className="text-gray-600 mb-6">
-                Check back soon or explore other communities
+                Check back soon or explore communities
               </p>
               <Button
                 variant="outline"
-                onClick={() => setSelectedCommunity("all")}
+                onClick={() => navigate(createPageUrl("Communities"))}
               >
-                View All Communities
+                Browse Communities
               </Button>
             </CardContent>
           </Card>
         )}
 
-        {/* Call to Action */}
-        {selectedCommunity === "all" && (
+        {/* Call to Action - Hidden for sellers and admins */}
+        {selectedCommunity === "all" && !isAlreadySeller && (
           <section className="mt-8">
             <Card className="border-0 bg-gradient-to-r from-purple-600 via-blue-600 to-purple-600 overflow-hidden">
               <CardContent className="p-8 sm:p-12 relative">

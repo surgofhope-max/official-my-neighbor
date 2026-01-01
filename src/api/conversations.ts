@@ -49,9 +49,12 @@ export interface ConversationContext {
  * Get conversations for inbox (Base44 parity).
  *
  * Query logic:
- * - IF buyer context: conversation.buyer_id = effectiveUserId
+ * - IF buyer context: conversation.buyer_id = buyerProfileId (resolved from auth.users.id)
  * - IF seller context: conversation.seller_id = effectiveSellerId
- *   OR conversation.buyer_id = effectiveUserId (seller messaging other sellers)
+ *   OR conversation.buyer_id = buyerProfileId (seller messaging other sellers)
+ *
+ * BOOTSTRAP-FORWARD: Resolves buyer_profiles.id from auth.users.id for queries.
+ * conversations.buyer_id stores buyer_profiles.id (NOT auth.users.id).
  *
  * Sorted by last_message_at DESC.
  *
@@ -68,17 +71,42 @@ export async function getConversationsForInbox(
   }
 
   try {
+    // ═══════════════════════════════════════════════════════════════════════════
+    // BOOTSTRAP-FORWARD: Resolve buyer_profiles.id from auth.users.id
+    // Required because conversations.buyer_id stores buyer_profiles.id
+    // ═══════════════════════════════════════════════════════════════════════════
+    const { data: buyerProfile, error: profileError } = await supabase
+      .from("buyer_profiles")
+      .select("id")
+      .eq("user_id", effectiveUserId)
+      .maybeSingle();
+
+    if (profileError) {
+      console.warn("Failed to fetch buyer profile:", profileError.message);
+      return [];
+    }
+
+    // If no buyer profile exists, user has no conversations yet
+    const buyerProfileId = buyerProfile?.id || null;
+
     let conversations: Conversation[] = [];
 
     if (userType === "seller" && effectiveSellerId) {
       // Seller context: get conversations where they're the seller OR buyer
       // (sellers can also message other sellers as buyers)
-      const { data, error } = await supabase
+      // Use buyerProfileId for buyer_id filter (may be null if no profile)
+      let query = supabase
         .from("conversations")
         .select("*")
-        .eq("is_active", true)
-        .or(`seller_id.eq.${effectiveSellerId},buyer_id.eq.${effectiveUserId}`)
-        .order("last_message_at", { ascending: false, nullsFirst: false });
+        .eq("is_active", true);
+
+      if (buyerProfileId) {
+        query = query.or(`seller_id.eq.${effectiveSellerId},buyer_id.eq.${buyerProfileId}`);
+      } else {
+        query = query.eq("seller_id", effectiveSellerId);
+      }
+
+      const { data, error } = await query.order("last_message_at", { ascending: false, nullsFirst: false });
 
       if (error) {
         console.warn("Failed to fetch seller conversations:", error.message);
@@ -88,10 +116,15 @@ export async function getConversationsForInbox(
       conversations = (data as Conversation[]) ?? [];
     } else {
       // Buyer context: get conversations where they're the buyer
+      // If no buyer profile, return empty (no conversations possible)
+      if (!buyerProfileId) {
+        return [];
+      }
+
       const { data, error } = await supabase
         .from("conversations")
         .select("*")
-        .eq("buyer_id", effectiveUserId)
+        .eq("buyer_id", buyerProfileId)
         .eq("is_active", true)
         .order("last_message_at", { ascending: false, nullsFirst: false });
 
@@ -144,16 +177,17 @@ async function enrichConversations(
   }
 
   // Fetch buyer profiles
+  // BOOTSTRAP-FORWARD: conversations.buyer_id stores buyer_profiles.id (not user_id)
   let buyersMap: Record<string, { id: string; name: string; profile_image_url?: string }> = {};
   if (buyerIds.length > 0) {
     const { data: buyers } = await supabase
       .from("buyer_profiles")
-      .select("id, user_id, full_name, profile_image_url")
-      .in("user_id", buyerIds);
+      .select("id, full_name, profile_image_url")
+      .in("id", buyerIds);
 
     if (buyers) {
       buyersMap = buyers.reduce((acc, b) => {
-        acc[b.user_id] = {
+        acc[b.id] = {
           id: b.id,
           name: b.full_name || "Buyer",
           profile_image_url: b.profile_image_url,
@@ -208,22 +242,67 @@ export async function getConversationById(
 /**
  * Find or create a conversation between buyer and seller (Base44 parity).
  *
- * @param buyerId - The buyer's user ID
- * @param sellerId - The seller ID
+ * @param authUserId - The buyer's auth.users.id
+ * @param sellerId - The seller ID (sellers.id)
  * @returns The existing or new conversation
+ *
+ * BOOTSTRAP-FORWARD: Resolves buyer_profiles.id from auth.users.id.
+ * If buyer profile doesn't exist, creates a minimal row first.
+ * conversations.buyer_id always stores buyer_profiles.id (NOT auth.users.id).
  */
 export async function findOrCreateConversation(
-  buyerId: string,
+  authUserId: string,
   sellerId: string
 ): Promise<Conversation | null> {
-  if (!buyerId || !sellerId) return null;
+  if (!authUserId || !sellerId) return null;
 
   try {
-    // Check for existing conversation
+    // ═══════════════════════════════════════════════════════════════════════════
+    // BOOTSTRAP-FORWARD: Resolve buyer_profiles.id from auth.users.id
+    // ═══════════════════════════════════════════════════════════════════════════
+    let buyerProfileId: string | null = null;
+
+    // 1) Try to fetch existing buyer profile
+    const { data: existingProfile, error: profileFetchError } = await supabase
+      .from("buyer_profiles")
+      .select("id")
+      .eq("user_id", authUserId)
+      .maybeSingle();
+
+    if (profileFetchError) {
+      console.warn("Error fetching buyer profile:", profileFetchError.message);
+      return null;
+    }
+
+    if (existingProfile) {
+      buyerProfileId = existingProfile.id;
+    } else {
+      // 2) Not found: create minimal buyer profile row
+      const { data: createdProfile, error: profileCreateError } = await supabase
+        .from("buyer_profiles")
+        .insert({ user_id: authUserId })
+        .select("id")
+        .single();
+
+      if (profileCreateError) {
+        console.warn("Error creating buyer profile:", profileCreateError.message);
+        return null;
+      }
+
+      buyerProfileId = createdProfile.id;
+    }
+
+    if (!buyerProfileId) {
+      return null;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Check for existing conversation (using buyer_profiles.id)
+    // ═══════════════════════════════════════════════════════════════════════════
     const { data: existing, error: findError } = await supabase
       .from("conversations")
       .select("*")
-      .eq("buyer_id", buyerId)
+      .eq("buyer_id", buyerProfileId)
       .eq("seller_id", sellerId)
       .maybeSingle();
 
@@ -251,11 +330,13 @@ export async function findOrCreateConversation(
       return existing as Conversation;
     }
 
-    // Create new conversation
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Create new conversation (using buyer_profiles.id)
+    // ═══════════════════════════════════════════════════════════════════════════
     const { data: created, error: createError } = await supabase
       .from("conversations")
       .insert({
-        buyer_id: buyerId,
+        buyer_id: buyerProfileId,
         seller_id: sellerId,
         buyer_unread_count: 0,
         seller_unread_count: 0,

@@ -16,51 +16,87 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { ExternalLink, Download, TrendingUp, DollarSign, RefreshCw, Users } from "lucide-react";
+import { ExternalLink, Download, TrendingUp, DollarSign, Package, Users } from "lucide-react";
 import SellerDetailView from "./SellerDetailView.jsx";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SellerAnalyticsTab - Rewired to use analytics_events-backed data
+// 
+// Props:
+//   - sellers: Raw seller entities for identity (name, email, status)
+//   - payments: Order analytics data mapped to payment-like shape (from admin_order_fulfillment_analytics)
+//   - orders: Raw orders for status-based filtering
+//   - refunds: Empty array (refunds not yet tracked in analytics_events)
+//   - startDate/endDate: Date range for filtering
+//   - searchTerm: Search filter
+// ─────────────────────────────────────────────────────────────────────────────
 
 export default function SellerAnalyticsTab({ startDate, endDate, searchTerm, sellers, payments, refunds, orders = [] }) {
   const [selectedSeller, setSelectedSeller] = useState(null);
   const [showDetail, setShowDetail] = useState(false);
 
-  // Filter and aggregate seller data
+  // ─────────────────────────────────────────────────────────────────────────
+  // SELLER METRICS COMPUTATION
+  // Groups order data by seller_id and computes analytics metrics
+  // Uses orders for counts/status, payments (analytics) for GMV
+  // ─────────────────────────────────────────────────────────────────────────
   const sellerMetrics = sellers
     .filter(s => s.status === "approved")
     .map(seller => {
-      const sellerPayments = payments.filter(p =>
-        p.seller_id === seller.id &&
-        new Date(p.created_date) >= startDate &&
-        new Date(p.created_date) <= endDate
-      );
+      // ═══════════════════════════════════════════════════════════════════════════
+      // READ PATH (Step T3.5): Prefer seller_entity_id (canonical), fallback to seller_id (legacy)
+      // - New orders: seller_entity_id = seller.id
+      // - Legacy orders: seller_id = seller.user_id (seller_entity_id is null)
+      // ═══════════════════════════════════════════════════════════════════════════
+      const canonicalSellerEntityId =
+        seller?.entity_id ||
+        seller?.seller_entity_id ||
+        seller?.id;
 
-      const sellerRefunds = refunds.filter(r => {
-        const payment = payments.find(p => p.stripe_charge_id === r.stripe_charge_id);
-        return payment && payment.seller_id === seller.id &&
-          new Date(r.created_date) >= startDate &&
-          new Date(r.created_date) <= endDate;
+      const sellerOrders = orders.filter(o => {
+        const orderDate = new Date(o.created_at || o.created_date);
+        // Canonical: seller_entity_id matches canonical seller entity id
+        const matchesCanonical = o.seller_entity_id === canonicalSellerEntityId;
+        // Legacy fallback: seller_id matches seller.user_id (when seller_entity_id is null)
+        const matchesLegacy = !o.seller_entity_id && o.seller_id === seller.user_id;
+        const inDateRange = orderDate >= startDate && orderDate <= endDate;
+        return (matchesCanonical || matchesLegacy) && inDateRange;
       });
 
-      const sellerOrders = orders.filter(o =>
-        o.seller_id === seller.id &&
-        new Date(o.created_date) >= startDate &&
-        new Date(o.created_date) <= endDate
+      // Count fulfilled orders (status = 'fulfilled', 'picked_up', or 'completed')
+      const fulfilledOrders = sellerOrders.filter(o => 
+        ['fulfilled', 'picked_up', 'completed'].includes(o.status)
       );
 
-      const deliveryFees = sellerOrders.reduce((sum, o) => sum + (o.delivery_fee || 0), 0);
-      const gmv = sellerPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
-      const refundAmount = sellerRefunds.reduce((sum, r) => sum + (r.amount || 0), 0);
-      const platformFees = sellerPayments.reduce((sum, p) => sum + (p.application_fee || 0), 0);
-      const netToSeller = gmv - refundAmount - platformFees;
+      // Calculate GMV from orders (price sum)
+      const grossGMV = sellerOrders.reduce((sum, o) => sum + (parseFloat(o.price) || 0), 0);
+      
+      // Calculate fulfilled GMV (only fulfilled orders)
+      const fulfilledGMV = fulfilledOrders.reduce((sum, o) => sum + (parseFloat(o.price) || 0), 0);
+
+      // Delivery fees from orders
+      const deliveryFees = sellerOrders.reduce((sum, o) => sum + (parseFloat(o.delivery_fee) || 0), 0);
+
+      // Find last order date
+      const lastOrderDate = sellerOrders.length > 0
+        ? new Date(Math.max(...sellerOrders.map(o => new Date(o.created_at || o.created_date))))
+        : null;
 
       return {
         ...seller,
-        gmv,
+        // Core metrics
+        totalOrders: sellerOrders.length,
+        fulfilledOrders: fulfilledOrders.length,
+        grossGMV,
+        fulfilledGMV,
         deliveryFees,
-        refundAmount,
-        platformFees,
-        netToSeller,
-        paymentCount: sellerPayments.length,
-        refundCount: sellerRefunds.length
+        lastOrderDate,
+        // Legacy field mappings for UI compatibility
+        gmv: grossGMV,
+        netToSeller: grossGMV, // No platform fees tracked yet
+        paymentCount: sellerOrders.length,
+        refundAmount: 0, // Refunds not tracked in analytics_events yet
+        platformFees: 0, // Platform fees not tracked in analytics_events yet
       };
     })
     .filter(s =>
@@ -70,9 +106,9 @@ export default function SellerAnalyticsTab({ startDate, endDate, searchTerm, sel
     .sort((a, b) => b.gmv - a.gmv);
 
   const handleExportCSV = () => {
-    const csvHeader = "Seller Name,Stripe Account ID,GMV,Refunds,Platform Fees,Net to Seller,Payment Count,Status\n";
+    const csvHeader = "Seller Name,Stripe Account ID,Total Orders,Fulfilled Orders,GMV,Fulfilled GMV,Delivery Fees,Status\n";
     const csvData = sellerMetrics.map(s =>
-      `"${s.business_name}","${s.stripe_account_id || 'N/A'}",${s.gmv.toFixed(2)},${s.refundAmount.toFixed(2)},${s.platformFees.toFixed(2)},${s.netToSeller.toFixed(2)},${s.paymentCount},"${s.status}"`
+      `"${s.business_name}","${s.stripe_account_id || 'N/A'}",${s.totalOrders},${s.fulfilledOrders},${s.grossGMV.toFixed(2)},${s.fulfilledGMV.toFixed(2)},${s.deliveryFees.toFixed(2)},"${s.status}"`
     ).join("\n");
 
     const blob = new Blob([csvHeader + csvData], { type: 'text/csv' });
@@ -91,6 +127,14 @@ export default function SellerAnalyticsTab({ startDate, endDate, searchTerm, sel
     setShowDetail(true);
   };
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // AGGREGATE TOTALS for summary cards
+  // ─────────────────────────────────────────────────────────────────────────
+  const totalSellers = sellerMetrics.length;
+  const totalOrders = sellerMetrics.reduce((sum, s) => sum + s.totalOrders, 0);
+  const totalFulfilled = sellerMetrics.reduce((sum, s) => sum + s.fulfilledOrders, 0);
+  const totalGMV = sellerMetrics.reduce((sum, s) => sum + s.grossGMV, 0);
+
   return (
     <div className="space-y-6">
       {/* Summary Cards */}
@@ -100,7 +144,7 @@ export default function SellerAnalyticsTab({ startDate, endDate, searchTerm, sel
             <div className="flex items-start justify-between">
               <div>
                 <p className="text-sm font-medium text-gray-600 mb-2">Active Sellers</p>
-                <p className="text-2xl font-bold text-gray-900">{sellerMetrics.length}</p>
+                <p className="text-2xl font-bold text-gray-900">{totalSellers}</p>
               </div>
               <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center">
                 <Users className="w-5 h-5 text-white" />
@@ -115,7 +159,7 @@ export default function SellerAnalyticsTab({ startDate, endDate, searchTerm, sel
               <div>
                 <p className="text-sm font-medium text-gray-600 mb-2">Total GMV</p>
                 <p className="text-2xl font-bold text-gray-900">
-                  ${sellerMetrics.reduce((sum, s) => sum + s.gmv, 0).toFixed(2)}
+                  ${totalGMV.toFixed(2)}
                 </p>
               </div>
               <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-green-500 to-emerald-500 flex items-center justify-center">
@@ -129,13 +173,11 @@ export default function SellerAnalyticsTab({ startDate, endDate, searchTerm, sel
           <CardContent className="p-6">
             <div className="flex items-start justify-between">
               <div>
-                <p className="text-sm font-medium text-gray-600 mb-2">Total Refunds</p>
-                <p className="text-2xl font-bold text-gray-900">
-                  ${sellerMetrics.reduce((sum, s) => sum + s.refundAmount, 0).toFixed(2)}
-                </p>
+                <p className="text-sm font-medium text-gray-600 mb-2">Total Orders</p>
+                <p className="text-2xl font-bold text-gray-900">{totalOrders}</p>
               </div>
-              <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-orange-500 to-red-500 flex items-center justify-center">
-                <RefreshCw className="w-5 h-5 text-white" />
+              <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-orange-500 to-amber-500 flex items-center justify-center">
+                <Package className="w-5 h-5 text-white" />
               </div>
             </div>
           </CardContent>
@@ -145,10 +187,8 @@ export default function SellerAnalyticsTab({ startDate, endDate, searchTerm, sel
           <CardContent className="p-6">
             <div className="flex items-start justify-between">
               <div>
-                <p className="text-sm font-medium text-gray-600 mb-2">Platform Fees</p>
-                <p className="text-2xl font-bold text-gray-900">
-                  ${sellerMetrics.reduce((sum, s) => sum + s.platformFees, 0).toFixed(2)}
-                </p>
+                <p className="text-sm font-medium text-gray-600 mb-2">Fulfilled Orders</p>
+                <p className="text-2xl font-bold text-gray-900">{totalFulfilled}</p>
               </div>
               <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center">
                 <DollarSign className="w-5 h-5 text-white" />
@@ -176,11 +216,11 @@ export default function SellerAnalyticsTab({ startDate, endDate, searchTerm, sel
                 <TableRow>
                   <TableHead>Seller Name</TableHead>
                   <TableHead>Stripe Account ID</TableHead>
+                  <TableHead className="text-right">Orders</TableHead>
+                  <TableHead className="text-right">Fulfilled</TableHead>
                   <TableHead className="text-right">GMV</TableHead>
+                  <TableHead className="text-right">Fulfilled GMV</TableHead>
                   <TableHead className="text-right">Delivery</TableHead>
-                  <TableHead className="text-right">Refunds</TableHead>
-                  <TableHead className="text-right">Net to Seller</TableHead>
-                  <TableHead className="text-right">Payments</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
@@ -194,19 +234,17 @@ export default function SellerAnalyticsTab({ startDate, endDate, searchTerm, sel
                         {seller.stripe_account_id || "Not connected"}
                       </code>
                     </TableCell>
+                    <TableCell className="text-right">{seller.totalOrders}</TableCell>
+                    <TableCell className="text-right text-purple-600">{seller.fulfilledOrders}</TableCell>
                     <TableCell className="text-right font-semibold text-green-600">
-                      ${seller.gmv.toFixed(2)}
+                      ${seller.grossGMV.toFixed(2)}
+                    </TableCell>
+                    <TableCell className="text-right font-semibold text-emerald-600">
+                      ${seller.fulfilledGMV.toFixed(2)}
                     </TableCell>
                     <TableCell className="text-right text-blue-600">
                       ${seller.deliveryFees.toFixed(2)}
                     </TableCell>
-                    <TableCell className="text-right text-red-600">
-                      ${seller.refundAmount.toFixed(2)}
-                    </TableCell>
-                    <TableCell className="text-right font-semibold">
-                      ${seller.netToSeller.toFixed(2)}
-                    </TableCell>
-                    <TableCell className="text-right">{seller.paymentCount}</TableCell>
                     <TableCell>
                       <Badge
                         className={

@@ -4,18 +4,24 @@
  * Provides queries and mutations for notification data.
  * Supports order lifecycle notifications (order_update, review_request).
  * Uses effectiveUserId for proper data scoping (supports admin impersonation).
+ *
+ * VALID ORDER REGIME:
+ * Notifications tied to invalid orders (self-purchase, cancelled) are excluded
+ * from feeds and counts. This is enforced by filtering against the orders DAL.
  */
 
 import { supabase } from "@/lib/supabase/supabaseClient";
+import { getOrderById } from "@/api/orders";
 
 /**
- * Supported notification types (Base44 parity).
+ * Supported notification types (Base44 parity + pickup flow).
  */
 export type NotificationType =
-  | "order_update"    // Order lifecycle events (payment confirmed, order completed)
-  | "review_request"  // Request to leave a review after pickup
-  | "message"         // New message notification (placeholder - not wired yet)
-  | "system";         // System announcements
+  | "order_update"      // Order lifecycle events (payment confirmed, order completed)
+  | "review_request"    // Request to leave a review after pickup
+  | "pickup_completed"  // Order successfully picked up by buyer
+  | "message"           // New message notification (placeholder - not wired yet)
+  | "system";           // System announcements
 
 /**
  * Notification entity.
@@ -29,7 +35,7 @@ export interface Notification {
   metadata?: Record<string, unknown>;
   read: boolean;
   read_at?: string;
-  created_date: string;
+  created_at: string;  // FIX: Use created_at (actual DB column) not created_date
 }
 
 /**
@@ -45,41 +51,263 @@ export interface CreateNotificationInput {
 }
 
 /**
+ * Helper to detect if an error indicates Supabase is degraded (503/timeout).
+ */
+function isDegradedError(error: unknown): boolean {
+  if (!error) return false;
+  const err = error as { message?: string; code?: string; status?: number; statusCode?: number };
+  const msg = (err.message || "").toLowerCase();
+  const code = err.code || "";
+  const status = err.status || err.statusCode;
+  
+  return (
+    status === 503 ||
+    code === "503" ||
+    msg.includes("503") ||
+    msg.includes("upstream connect error") ||
+    msg.includes("connection timeout") ||
+    msg.includes("fetch failed") ||
+    msg.includes("networkerror") ||
+    msg.includes("failed to fetch")
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// VALID ORDER FILTER (READ-SIDE ENFORCEMENT)
+// ═══════════════════════════════════════════════════════════════════════════════
+// Notifications tied to invalid orders (self-purchase, cancelled) are excluded.
+// This inherits the valid-order predicate already enforced in orders.ts.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Filter notifications to exclude those tied to invalid orders.
+ *
+ * - If notification.metadata.order_id exists, validate the order via orders DAL
+ * - If getOrderById returns null (excluded by valid-order predicate), exclude notification
+ * - Notifications without order_id are always included
+ */
+async function filterNotificationsByValidOrders(
+  notifications: Notification[]
+): Promise<Notification[]> {
+  const filtered: Notification[] = [];
+  
+  for (const notification of notifications) {
+    const orderId = notification.metadata?.order_id as string | undefined;
+    
+    // No order_id — keep the notification
+    if (!orderId) {
+      filtered.push(notification);
+      continue;
+    }
+    
+    // Has order_id — validate via orders DAL (inherits valid-order predicate)
+    const order = await getOrderById(orderId);
+    if (order) {
+      filtered.push(notification);
+    }
+    // If order is null (invalid/excluded), skip this notification
+  }
+  
+  return filtered;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// NOTIFICATION COLLAPSE (READ-TIME PROJECTION)
+// ═══════════════════════════════════════════════════════════════════════════════
+// Option A: Non-destructive collapse at read time; preserves DB audit trail.
+// UI is a projection — collapse groups of related notifications into one.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Collapse notifications into a deduplicated projection for UI display.
+ *
+ * Rules:
+ * - Collapse by (type + order_id/batch_id) for specific types only
+ * - Prefer newest UNREAD notification in each group; else newest overall
+ * - For order_update: terminal "completed" state dominates over "fulfilled"
+ * - Other types pass through unchanged
+ * - Preserves newest-first ordering
+ */
+function collapseNotifications(notifications: Notification[]): Notification[] {
+  // Group notifications by collapse key
+  const groups = new Map<string, Notification[]>();
+  const passThrough: Notification[] = [];
+
+  for (const notification of notifications) {
+    const key = getCollapseKey(notification);
+    
+    if (key === null) {
+      // Non-collapsible — pass through as-is
+      passThrough.push(notification);
+    } else {
+      // Add to collapse group
+      const group = groups.get(key) || [];
+      group.push(notification);
+      groups.set(key, group);
+    }
+  }
+
+  // Select one representative from each group
+  const collapsed: Notification[] = [];
+
+  for (const [key, group] of groups) {
+    const selected = selectFromGroup(key, group);
+    if (selected) {
+      collapsed.push(selected);
+    }
+  }
+
+  // Combine collapsed + passThrough, sort by created_at DESC
+  const all = [...collapsed, ...passThrough];
+  all.sort((a, b) => {
+    const timeA = Date.parse(a.created_at) || 0;
+    const timeB = Date.parse(b.created_at) || 0;
+    return timeB - timeA; // Newest first
+  });
+
+  return all;
+}
+
+/**
+ * Generate collapse key for a notification.
+ * Returns null if notification should not be collapsed.
+ */
+function getCollapseKey(notification: Notification): string | null {
+  const { type, metadata } = notification;
+
+  // Defensive extraction — only use if string
+  const orderId = typeof metadata?.order_id === "string" ? metadata.order_id : null;
+  const batchId = typeof metadata?.batch_id === "string" ? metadata.batch_id : null;
+
+  switch (type) {
+    case "order_update":
+      // Collapse by order_id
+      return orderId ? `order_update:${orderId}` : null;
+
+    case "review_request":
+      // Collapse by batch_id
+      return batchId ? `review_request:${batchId}` : null;
+
+    case "pickup_completed":
+      // Collapse by batch_id
+      return batchId ? `pickup_completed:${batchId}` : null;
+
+    default:
+      // Do not collapse other types
+      return null;
+  }
+}
+
+/**
+ * Select one representative notification from a collapse group.
+ *
+ * Selection rules:
+ * 1. For order_update: if any notification is "completed", only consider completed ones
+ * 2. Read-state dominance: if ANY notification is read, select newest (suppress unread siblings)
+ * 3. Only if ALL are unread: prefer newest unread
+ * 4. Else choose newest overall
+ */
+function selectFromGroup(key: string, group: Notification[]): Notification | null {
+  if (group.length === 0) return null;
+  if (group.length === 1) return group[0];
+
+  let candidates = group;
+
+  // Special handling for order_update: terminal "completed" dominance
+  if (key.startsWith("order_update:")) {
+    const completedOnes = group.filter((n) => {
+      const event = n.metadata?.event;
+      const status = n.metadata?.status;
+      return event === "completed" || event === "order_completed" || status === "completed";
+    });
+
+    // If any completed exists, only consider those
+    if (completedOnes.length > 0) {
+      candidates = completedOnes;
+    }
+  }
+
+  // Read-state dominance: once any notification in a group is read,
+  // suppress unread siblings from reappearing in the projection.
+  const anyRead = candidates.some((n) => n.read);
+  if (anyRead) {
+    // Group has been "acknowledged" — just return newest, ignore read flag
+    return getNewest(candidates);
+  }
+
+  // All notifications in group are unread — prefer newest unread
+  const unread = candidates.filter((n) => !n.read);
+  if (unread.length > 0) {
+    return getNewest(unread);
+  }
+
+  // Fallback: newest overall
+  return getNewest(candidates);
+}
+
+/**
+ * Get the newest notification by created_at.
+ */
+function getNewest(notifications: Notification[]): Notification | null {
+  if (notifications.length === 0) return null;
+
+  return notifications.reduce((newest, current) => {
+    const newestTime = Date.parse(newest.created_at) || 0;
+    const currentTime = Date.parse(current.created_at) || 0;
+    return currentTime > newestTime ? current : newest;
+  });
+}
+
+/**
  * Get the count of unread notifications for a user.
  *
  * @param effectiveUserId - The effective user ID (resolved upstream, supports impersonation)
- * @returns The count of unread notifications, or 0 if logged out or on error
+ * @returns The count of unread notifications, or null if fetch failed (degraded/503)
  *
  * This function:
- * - Never throws
  * - Returns 0 for logged-out users
- * - Returns 0 on any error
+ * - Returns null on 503/timeout (caller should NOT interpret as "0 unread")
+ * - Excludes notifications tied to invalid orders (same rules as feed)
  * - Safe for polling
  */
 export async function getUnreadNotificationCount(
   effectiveUserId: string | null
-): Promise<number> {
+): Promise<number | null> {
   // Return 0 immediately for logged-out users
   if (!effectiveUserId) {
     return 0;
   }
 
   try {
-    const { count, error } = await supabase
+    // Fetch unread notifications with lightweight columns for filtering
+    const { data, error } = await supabase
       .from("notifications")
-      .select("*", { count: "exact", head: true })
+      .select("id, user_id, read, read_at, metadata, created_at")
       .eq("user_id", effectiveUserId)
-      .eq("read", false);
+      .eq("read", false)
+      .order("created_at", { ascending: false });
 
     if (error) {
+      // Check if degraded - return null instead of 0
+      if (isDegradedError(error)) {
+        console.warn("[Notifications] Supabase degraded (503/timeout) - returning null");
+        return null;
+      }
       console.warn("Failed to fetch unread notification count:", error.message);
-      return 0;
+      return null; // Return null on error, not 0
     }
 
-    return count ?? 0;
+    // Apply valid-order filter to match feed exclusion rules
+    const filtered = await filterNotificationsByValidOrders((data as Notification[]) ?? []);
+    return filtered.length;
   } catch (err) {
+    // Check if degraded - return null instead of 0
+    if (isDegradedError(err)) {
+      console.warn("[Notifications] Supabase degraded (503/timeout) - returning null");
+      return null;
+    }
     console.warn("Unexpected error fetching unread notification count:", err);
-    return 0;
+    return null; // Return null on error, not 0
   }
 }
 
@@ -87,7 +315,14 @@ export async function getUnreadNotificationCount(
  * Get all notifications for a user.
  *
  * @param effectiveUserId - The effective user ID
- * @returns Array of notifications sorted by created_date DESC
+ * @returns Array of notifications sorted by created_at DESC
+ *
+ * VALID ORDER REGIME:
+ * Excludes notifications tied to invalid orders (same rules as unread count).
+ *
+ * COLLAPSE REGIME (Option A):
+ * Non-destructive collapse at read time; preserves DB audit trail.
+ * Groups related notifications and returns one representative per group.
  */
 export async function getNotificationsForUser(
   effectiveUserId: string | null
@@ -97,18 +332,24 @@ export async function getNotificationsForUser(
   }
 
   try {
+    // FIX: Use created_at (actual DB column) not created_date
     const { data, error } = await supabase
       .from("notifications")
       .select("*")
       .eq("user_id", effectiveUserId)
-      .order("created_date", { ascending: false });
+      .order("created_at", { ascending: false });
 
     if (error) {
       console.warn("Failed to fetch notifications:", error.message);
       return [];
     }
 
-    return (data as Notification[]) ?? [];
+    // Apply valid-order filter to exclude notifications tied to invalid orders
+    const filtered = await filterNotificationsByValidOrders((data as Notification[]) ?? []);
+
+    // Option A: non-destructive collapse at read time; preserves DB audit trail.
+    const collapsed = collapseNotifications(filtered);
+    return collapsed;
   } catch (err) {
     console.warn("Unexpected error fetching notifications:", err);
     return [];
@@ -130,7 +371,9 @@ export async function createNotification(
   }
 
   try {
-    const { data, error } = await supabase
+    // INSERT ONLY - no .select() to avoid RLS SELECT failure
+    // when seller creates notification for buyer
+    const { error } = await supabase
       .from("notifications")
       .insert({
         user_id: input.user_id,
@@ -140,16 +383,14 @@ export async function createNotification(
         metadata: input.metadata || {},
         read: input.read ?? false,
         read_at: null,
-      })
-      .select()
-      .single();
+      });
 
     if (error) {
       console.warn("Failed to create notification:", error.message);
       return null;
     }
 
-    return data as Notification;
+    return null; // Intentionally not returning row (RLS prevents cross-user SELECT)
   } catch (err) {
     console.warn("Unexpected error creating notification:", err);
     return null;
@@ -159,24 +400,37 @@ export async function createNotification(
 /**
  * Mark a notification as read.
  *
+ * DURABLE READ STATE:
+ * Sets BOTH read = true AND read_at = now() to ensure persistence.
+ * Filters by BOTH id AND user_id for security.
+ *
  * @param notificationId - The notification ID
+ * @param userId - The user ID (for additional safety)
  * @returns Success boolean
  */
 export async function markNotificationAsRead(
-  notificationId: string
+  notificationId: string,
+  userId?: string
 ): Promise<boolean> {
   if (!notificationId) {
     return false;
   }
 
   try {
-    const { error } = await supabase
+    let query = supabase
       .from("notifications")
       .update({
         read: true,
         read_at: new Date().toISOString(),
       })
       .eq("id", notificationId);
+
+    // Add user_id filter for safety if provided
+    if (userId) {
+      query = query.eq("user_id", userId);
+    }
+
+    const { error } = await query;
 
     if (error) {
       console.warn("Failed to mark notification as read:", error.message);
@@ -304,8 +558,9 @@ export async function createOrderUpdateNotification(
         body = "Your order status has been updated.";
     }
 
-    // Create notification
-    const { data, error } = await supabase
+    // INSERT ONLY - no .select() to avoid RLS SELECT failure
+    // when seller creates notification for buyer
+    const { error } = await supabase
       .from("notifications")
       .insert({
         user_id: buyerUserId,
@@ -321,16 +576,14 @@ export async function createOrderUpdateNotification(
         },
         read: false,
         read_at: null,
-      })
-      .select()
-      .single();
+      });
 
     if (error) {
       console.warn("Failed to create order update notification:", error.message);
       return null;
     }
 
-    return data as Notification;
+    return null; // Intentionally not returning row (RLS prevents cross-user SELECT)
   } catch (err) {
     console.warn("Unexpected error creating order update notification:", err);
     return null;
@@ -402,4 +655,93 @@ export async function createReviewRequestNotification(
     },
     read: false,
   });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PICKUP COMPLETED NOTIFICATIONS
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Input for creating a pickup completed notification.
+ */
+export interface PickupCompletedNotificationInput {
+  buyerUserId: string;
+  sellerId: string;
+  sellerName: string;
+  batchId: string;
+  showId?: string;
+}
+
+/**
+ * Create a pickup completed notification for the buyer.
+ *
+ * This is called from completeBatchPickup in fulfillment.ts after
+ * successful pickup verification.
+ *
+ * Idempotency: Checks for existing notification with same batch_id
+ * to prevent duplicates.
+ *
+ * @param input - The pickup completed input
+ * @returns The created notification or null
+ */
+export async function createPickupCompletedNotification(
+  input: PickupCompletedNotificationInput
+): Promise<Notification | null> {
+  const { buyerUserId, sellerId, sellerName, batchId, showId } = input;
+
+  if (!buyerUserId || !batchId) {
+    console.warn("createPickupCompletedNotification: Missing required fields");
+    return null;
+  }
+
+  try {
+    // ─────────────────────────────────────────────────────────────────────
+    // IDEMPOTENCY CHECK: Prevent duplicate pickup notifications
+    // ─────────────────────────────────────────────────────────────────────
+    const { data: existing } = await supabase
+      .from("notifications")
+      .select("id")
+      .eq("user_id", buyerUserId)
+      .eq("type", "pickup_completed")
+      .contains("metadata", { batch_id: batchId })
+      .maybeSingle();
+
+    if (existing) {
+      // Already notified about this pickup
+      return null;
+    }
+
+    // INSERT ONLY - no .select() to avoid RLS SELECT failure
+    // when seller creates notification for buyer
+    const { error } = await supabase
+      .from("notifications")
+      .insert({
+        user_id: buyerUserId,
+        title: "Order picked up",
+        body: sellerName
+          ? `Your order from ${sellerName} has been successfully picked up.`
+          : "Your order has been successfully picked up.",
+        type: "pickup_completed",
+        metadata: {
+          batch_id: batchId,
+          seller_id: sellerId,
+          seller_name: sellerName,
+          show_id: showId,
+          related_id: batchId,
+          related_type: "batch",
+        },
+        read: false,
+        read_at: null,
+      });
+
+    if (error) {
+      console.warn("Failed to create pickup completed notification:", error.message);
+      return null;
+    }
+
+    return null; // Intentionally not returning row (RLS prevents cross-user SELECT)
+  } catch (err) {
+    console.warn("Unexpected error creating pickup completed notification:", err);
+    return null;
+  }
 }

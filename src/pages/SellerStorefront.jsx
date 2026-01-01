@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from "react";
-import { supabaseApi as base44 } from "@/api/supabaseClient";
+import React, { useState } from "react";
+import { supabase } from "@/lib/supabase/supabaseClient";
 import { useQuery } from "@tanstack/react-query";
+import { SHOWS_PUBLIC_FIELDS } from "@/api/shows";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -30,7 +31,84 @@ import FollowButton from "../components/marketplace/FollowButton";
 import MessageSellerButton from "../components/messaging/MessageSellerButton";
 import GiviTracker from "../components/sharing/GiviTracker";
 import ShareButton from "../components/sharing/ShareButton";
-import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar"; // Added import
+import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SELLER CARD STOREFRONT FIELDS
+// Extended field list for storefront header display
+// ═══════════════════════════════════════════════════════════════════════════
+const SELLER_CARD_STOREFRONT_FIELDS = `
+  seller_id,
+  user_id,
+  display_name,
+  avatar_url,
+  buyer_avatar_url,
+  banner_url,
+  short_bio,
+  city,
+  state,
+  member_since,
+  follower_count,
+  rating_average,
+  rating_count,
+  total_items_sold,
+  is_accepting_orders,
+  live_show_id,
+  created_at
+`.replace(/\s+/g, '');
+
+/**
+ * Transform seller_cards row to legacy seller shape expected by components
+ */
+function mapSellerCardToLegacy(card) {
+  if (!card) return null;
+  
+  // Compute effective avatar: seller override > buyer fallback > null
+  const effective_profile_image_url = card.avatar_url || card.buyer_avatar_url || null;
+  
+  return {
+    // Core identity
+    id: card.seller_id,
+    user_id: card.user_id,
+    // Display fields (mapped from seller_cards naming)
+    business_name: card.display_name,
+    profile_image_url: effective_profile_image_url,
+    background_image_url: card.banner_url,
+    bio: card.short_bio,
+    pickup_city: card.city,
+    pickup_state: card.state,
+    member_since: card.member_since,
+    created_at: card.created_at,
+    // Stats (pre-computed in view)
+    follower_count: card.follower_count || 0,
+    rating_average: card.rating_average || 0,
+    rating_count: card.rating_count || 0,
+    total_sales: card.total_items_sold || 0,
+    // Content refs
+    live_show_id: card.live_show_id,
+    // Status
+    stripe_connected: card.is_accepting_orders || false,
+    // Privacy: Contact info NOT exposed in public view (seller must opt-in separately)
+    show_contact_email: false,
+    show_contact_phone: false,
+    show_pickup_address: true,
+    contact_email: null,
+    contact_phone: null,
+  };
+}
+
+/**
+ * Map Supabase show row to legacy UI shape expected by SellerStorefront
+ * DB uses scheduled_start_time; UI expects scheduled_start
+ */
+function mapShowToLegacy(show) {
+  if (!show) return null;
+  return {
+    ...show,
+    // Map DB column to legacy UI field name
+    scheduled_start: show.scheduled_start_time || null,
+  };
+}
 
 // ISOLATED REVIEW AVATAR COMPONENT - NO STATE REUSE
 function ReviewAvatar({ reviewId, buyerId, buyerName, imageUrl }) {
@@ -71,161 +149,248 @@ export default function SellerStorefront() {
   const urlParams = new URLSearchParams(window.location.search);
   const sellerId = urlParams.get('sellerId') || urlParams.get('sellerid');
 
-  const [user, setUser] = useState(null);
   const [showFullBio, setShowFullBio] = useState(false);
   const [selectedShopShow, setSelectedShopShow] = useState(null);
 
-  useEffect(() => {
-    loadUser();
-  }, []);
-
-  const loadUser = async () => {
-    try {
-      const currentUser = await base44.auth.me();
-      setUser(currentUser);
-    } catch (error) {
-      setUser(null);
-    }
-  };
-
-  // FIXED: Better seller lookup with retry and error handling
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CANONICAL QUERY: Fetch from seller_cards view by seller_id
+  // ═══════════════════════════════════════════════════════════════════════════
   const { data: seller, isLoading: sellerLoading, error: sellerError } = useQuery({
-    queryKey: ['seller-storefront', sellerId],
+    queryKey: ['seller-storefront-card', sellerId],
     queryFn: async () => {
-      console.log("🔍 Fetching seller with ID:", sellerId);
+      console.log("🔍 Fetching seller_card by seller_id:", sellerId);
       
-      // Try to get all sellers first and filter locally
-      const allSellers = await base44.entities.Seller.list();
-      console.log("📋 All sellers:", allSellers.length);
+      const { data, error } = await supabase
+        .from('seller_cards')
+        .select(SELLER_CARD_STOREFRONT_FIELDS)
+        .eq('seller_id', sellerId)
+        .maybeSingle();
       
-      // Find seller by ID (case-insensitive match)
-      const foundSeller = allSellers.find(s => s.id === sellerId);
+      if (error) {
+        console.error("❌ seller_cards query error:", error.message);
+        throw new Error("Failed to load seller");
+      }
       
-      if (!foundSeller) {
-        console.error("❌ Seller not found. Available IDs:", allSellers.map(s => s.id));
+      if (!data) {
+        console.error("❌ SellerCard result: not found for seller_id:", sellerId);
         throw new Error("Seller not found");
       }
       
-      console.log("✅ Found seller:", foundSeller.business_name);
-      return foundSeller;
+      const legacySeller = mapSellerCardToLegacy(data);
+      console.log("✅ SellerCard result: found -", legacySeller.business_name);
+      return legacySeller;
     },
     enabled: !!sellerId,
     retry: 2,
     staleTime: 30000
   });
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SUPABASE: Products for this seller (excludes products from ended/cancelled shows)
+  // ═══════════════════════════════════════════════════════════════════════════
   const { data: products = [] } = useQuery({
     queryKey: ['seller-storefront-products', sellerId],
     queryFn: async () => {
-      const allProducts = await base44.entities.Product.filter({
-        seller_id: sellerId
-      }, '-created_date');
+      // 1) Fetch products for this seller
+      // NOTE: Removed is_live_item column (does not exist in products table)
+      const { data: allProducts, error: productsError } = await supabase
+        .from("products")
+        .select(`
+          id,
+          seller_id,
+          show_id,
+          title,
+          price,
+          quantity,
+          status,
+          image_urls,
+          givi_type
+        `)
+        .eq("seller_id", sellerId)
+        .order("created_at", { ascending: false });
       
-      // Get all shows to check their status
-      const allShowsForFilter = await base44.entities.Show.list();
+      if (productsError) {
+        console.warn("[StorefrontProducts] Products query error:", productsError.message);
+        return [];
+      }
+      
+      // 2) Fetch show statuses to identify ended/cancelled shows
+      const { data: allShowsForFilter, error: showsError } = await supabase
+        .from("shows")
+        .select("id, status");
+      
+      if (showsError) {
+        console.warn("[StorefrontProducts] Shows filter query error:", showsError.message);
+        // Fallback: return all products if show filter fails
+        return allProducts || [];
+      }
+      
+      // 3) Build Set of ended/cancelled show IDs
       const endedShowIds = new Set(
-        allShowsForFilter
+        (allShowsForFilter || [])
           .filter(show => show.status === "ended" || show.status === "cancelled")
           .map(show => show.id)
       );
       
-      // Filter out products from ended shows
-      return allProducts.filter(p => !p.show_id || !endedShowIds.has(p.show_id));
+      // 4) Filter out products from ended shows
+      // Products with NULL show_id are allowed (standalone products)
+      const totalFetched = (allProducts || []).length;
+      const filtered = (allProducts || []).filter(p => !p.show_id || !endedShowIds.has(p.show_id));
+      const endedFiltered = totalFetched - filtered.length;
+      
+      if (import.meta.env.DEV) {
+        console.log('[StorefrontProducts]', {
+          totalFetched,
+          endedFiltered,
+          finalCount: filtered.length
+        });
+      }
+      
+      return filtered;
     },
     enabled: !!sellerId
   });
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SUPABASE: Live shows for this seller (status = 'live')
+  // ═══════════════════════════════════════════════════════════════════════════
   const { data: liveShows = [] } = useQuery({
     queryKey: ['seller-storefront-live-shows', sellerId],
     queryFn: async () => {
-      const result = await base44.entities.Show.filter({
-        seller_id: sellerId,
-        status: "live"
-      });
-      return result;
+      const { data, error } = await supabase
+        .from("shows")
+        .select(SHOWS_PUBLIC_FIELDS)
+        .eq("seller_id", sellerId)
+        .eq("status", "live")
+        .order("scheduled_start_time", { ascending: false });
+      
+      if (error) {
+        console.warn("[StorefrontShows] Live shows query error:", error.message);
+        return [];
+      }
+      
+      const mapped = (data || []).map(mapShowToLegacy);
+      
+      if (import.meta.env.DEV) {
+        console.log("[StorefrontShows] live=", mapped.length);
+      }
+      
+      return mapped;
     },
     enabled: !!sellerId,
     refetchInterval: 5000
   });
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SUPABASE: Upcoming shows for this seller (status = 'scheduled')
+  // ═══════════════════════════════════════════════════════════════════════════
   const { data: upcomingShows = [] } = useQuery({
     queryKey: ['seller-storefront-upcoming-shows', sellerId],
     queryFn: async () => {
-      const result = await base44.entities.Show.filter({
-        seller_id: sellerId,
-        status: "scheduled"
-      }, '-scheduled_start');
-      return result;
+      const { data, error } = await supabase
+        .from("shows")
+        .select(SHOWS_PUBLIC_FIELDS)
+        .eq("seller_id", sellerId)
+        .eq("status", "scheduled")
+        .order("scheduled_start_time", { ascending: false });
+      
+      if (error) {
+        console.warn("[StorefrontShows] Upcoming shows query error:", error.message);
+        return [];
+      }
+      
+      const mapped = (data || []).map(mapShowToLegacy);
+      
+      if (import.meta.env.DEV) {
+        console.log("[StorefrontShows] upcoming=", mapped.length);
+      }
+      
+      return mapped;
     },
     enabled: !!sellerId
   });
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SUPABASE: All shows for Shop tab (excludes ended/cancelled client-side)
+  // ═══════════════════════════════════════════════════════════════════════════
   const { data: allShows = [] } = useQuery({
     queryKey: ['seller-storefront-all-shows', sellerId],
     queryFn: async () => {
-      const result = await base44.entities.Show.filter({
-        seller_id: sellerId
-      }, '-scheduled_start');
-      // Filter out ended shows
-      return result.filter(s => s.status !== "ended" && s.status !== "cancelled");
+      const { data, error } = await supabase
+        .from("shows")
+        .select(SHOWS_PUBLIC_FIELDS)
+        .eq("seller_id", sellerId)
+        .order("scheduled_start_time", { ascending: false });
+      
+      if (error) {
+        console.warn("[StorefrontShows] All shows query error:", error.message);
+        return [];
+      }
+      
+      // Client-side filter: exclude ended/cancelled (preserve existing behavior)
+      const filtered = (data || []).filter(s => s.status !== "ended" && s.status !== "cancelled");
+      const mapped = filtered.map(mapShowToLegacy);
+      
+      if (import.meta.env.DEV) {
+        console.log("[StorefrontShows] all (after filter)=", mapped.length);
+      }
+      
+      return mapped;
     },
     enabled: !!sellerId
   });
 
-  // FIXED: Deduplicate followers to count only unique buyer_ids
-  const { data: followerCount = 0 } = useQuery({
-    queryKey: ['seller-followers-count', sellerId],
-    queryFn: async () => {
-      if (!sellerId) return 0;
-      const follows = await base44.entities.FollowedSeller.filter({ seller_id: sellerId });
-      // Deduplicate by buyer_id to get unique followers
-      const uniqueBuyerIds = new Set(follows.map(f => f.buyer_id));
-      return uniqueBuyerIds.size;
-    },
-    enabled: !!sellerId
-  });
+  // ═══════════════════════════════════════════════════════════════════════════
+  // FOLLOWER COUNT: Use seller_cards.follower_count (already fetched above)
+  // No separate query needed - seller.follower_count comes from seller_cards view
+  // ═══════════════════════════════════════════════════════════════════════════
+  const followerCount = seller?.follower_count || 0;
 
-  // FIXED: Deduplicate following to count only unique seller_ids
-  const { data: followingCount = 0 } = useQuery({
-    queryKey: ['seller-following-count', seller?.created_by],
-    queryFn: async () => {
-      if (!seller?.created_by) return 0;
-      
-      // Get user ID from seller's created_by email
-      const allUsers = await base44.entities.BuyerProfile.list();
-      const sellerUser = allUsers.find(u => u.email === seller.created_by);
-      
-      if (!sellerUser) return 0;
-      
-      const follows = await base44.entities.FollowedSeller.filter({ buyer_id: sellerUser.user_id });
-      // Deduplicate by seller_id to get unique following
-      const uniqueSellerIds = new Set(follows.map(f => f.seller_id));
-      return uniqueSellerIds.size;
-    },
-    enabled: !!seller?.created_by
-  });
+  // NOTE: followingCount removed - not public-facing data
+  // NOTE: orders query removed - use seller.total_sales from seller_cards instead
 
-  // FIXED: Fetch actual orders count (matching Dashboard logic)
-  const { data: orders = [] } = useQuery({
-    queryKey: ['seller-storefront-orders', sellerId],
-    queryFn: () => base44.entities.Order.filter({ seller_id: sellerId }),
-    enabled: !!sellerId
-  });
-
-  // Fetch reviews for this seller - ULTRA AGGRESSIVE REFETCHING
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SUPABASE: Reviews for this seller
+  // ═══════════════════════════════════════════════════════════════════════════
   const { data: reviews = [], isLoading: reviewsLoading } = useQuery({
     queryKey: ['seller-reviews-v3', sellerId],
     queryFn: async () => {
       if (!sellerId) return [];
-      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-      console.log("🔍 FETCHING REVIEWS FOR SELLER:", sellerId);
-      const reviewData = await base44.entities.Review.filter({ seller_id: sellerId }, '-created_date');
-      console.log(`📝 FOUND ${reviewData.length} REVIEWS`);
       
-      reviewData.forEach((r, idx) => {
-        console.log(`   Review ${idx + 1}:`, r.buyer_name, `★${r.star_rating}`);
-      });
-      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+      const { data, error } = await supabase
+        .from("reviews")
+        .select(`
+          id,
+          seller_id,
+          buyer_id,
+          buyer_name,
+          star_rating,
+          review_text,
+          created_at
+        `)
+        .eq("seller_id", sellerId)
+        .order("created_at", { ascending: false });
+      
+      if (error) {
+        console.warn("[StorefrontReviews] Reviews query error:", error.message);
+        return [];
+      }
+      
+      // Map created_at → created_date for legacy UI compatibility
+      const reviewData = (data || []).map(r => ({
+        ...r,
+        created_date: r.created_at
+      }));
+      
+      const uniqueBuyers = new Set(reviewData.map(r => r.buyer_id).filter(Boolean)).size;
+      
+      if (import.meta.env.DEV) {
+        console.log('[StorefrontReviews]', {
+          totalReviews: reviewData.length,
+          uniqueBuyers
+        });
+      }
+      
       return reviewData;
     },
     enabled: !!sellerId,
@@ -236,81 +401,67 @@ export default function SellerStorefront() {
     refetchInterval: 10000
   });
 
-  // Fetch ALL buyer profiles - ALWAYS FETCH, NO CONDITIONAL
-  const { data: allBuyerProfiles = [] } = useQuery({
-    queryKey: ['all-buyer-profiles-v3'],
+  // Extract unique buyer_ids from reviews for targeted profile lookup
+  const reviewBuyerIds = React.useMemo(() => {
+    return Array.from(new Set((reviews || []).map(r => r.buyer_id).filter(Boolean)));
+  }, [reviews]);
+
+  // Fetch ONLY buyer profiles needed for this seller's reviews (targeted lookup)
+  const { data: reviewBuyerProfiles = {} } = useQuery({
+    queryKey: ['review-buyer-profiles', sellerId, reviewBuyerIds.join(',')],
     queryFn: async () => {
-      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-      console.log("👥 FETCHING ALL BUYER PROFILES");
-      const profiles = await base44.entities.BuyerProfile.list();
-      console.log(`✅ ${profiles.length} buyer profiles found`);
+      if (!reviewBuyerIds.length) return {};
       
-      // Create lookup map for faster matching
+      console.log("👥 Fetching targeted buyer profiles for", reviewBuyerIds.length, "reviewers");
+      
+      // Fetch only the profiles we need by user_id
+      const { data: profiles, error } = await supabase
+        .from('buyer_profiles')
+        .select('user_id, full_name, profile_image_url')
+        .in('user_id', reviewBuyerIds);
+      
+      if (error) {
+        console.error("Failed to fetch buyer profiles:", error.message);
+        return {};
+      }
+      
+      // Create lookup map
       const profileMap = {};
-      profiles.forEach((p, idx) => {
+      (profiles || []).forEach(p => {
         profileMap[p.user_id] = p;
-        console.log(`Profile ${idx + 1}:`, {
-          user_id: p.user_id,
-          name: p.full_name,
-          image: p.profile_image_url || "❌ NONE"
-        });
       });
-      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+      
+      console.log("✅ Fetched", Object.keys(profileMap).length, "buyer profiles for reviews");
       return profileMap;
     },
-    enabled: !!sellerId,
-    staleTime: 0,
-    cacheTime: 0,
-    refetchOnMount: true,
-    refetchOnWindowFocus: true
+    enabled: reviewBuyerIds.length > 0,
+    staleTime: 60000 // Cache for 1 minute
   });
 
-  // REBUILD REVIEW-PROFILE BINDING FROM SCRATCH
+  // Enrich reviews with buyer profile data (targeted, not global)
   const enrichedReviews = React.useMemo(() => {
-    if (!reviews.length || !Object.keys(allBuyerProfiles).length) return reviews;
+    if (!reviews.length) return reviews;
     
-    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    console.log("🔗 BINDING REVIEWS TO PROFILES");
-    
-    const result = reviews.map((originalReview) => {
-      // Create completely new object - NO mutation
-      const review = JSON.parse(JSON.stringify(originalReview));
+    return reviews.map((originalReview) => {
+      const review = { ...originalReview };
       
-      console.log(`\n📝 Review: ${review.buyer_name}`);
-      console.log(`   Review ID: ${review.id}`);
-      console.log(`   Buyer ID: ${review.buyer_id}`);
-      console.log(`   Stored Image: ${review.buyer_profile_image_url || "NONE"}`);
-      
-      // If already has image, use it
+      // If already has image stored on review, use it
       if (review.buyer_profile_image_url) {
-        console.log(`   ✅ Using existing stored image`);
         return review;
       }
       
-      // Look up profile by buyer_id
-      const profile = allBuyerProfiles[review.buyer_id];
+      // Look up profile by buyer_id from targeted fetch
+      const profile = reviewBuyerProfiles[review.buyer_id];
       
       if (profile) {
-        console.log(`   ✅ Profile found:`, {
-          profile_user_id: profile.user_id,
-          profile_name: profile.full_name,
-          profile_image: profile.profile_image_url || "NONE"
-        });
-        
         review.buyer_profile_image_url = profile.profile_image_url || null;
       } else {
-        console.log(`   ❌ NO PROFILE FOUND for buyer_id: ${review.buyer_id}`);
         review.buyer_profile_image_url = null;
       }
       
-      console.log(`   📤 Final image URL: ${review.buyer_profile_image_url || "NONE"}`);
       return review;
     });
-    
-    console.log("\n✅ BINDING COMPLETE");
-    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-    return result;
-  }, [reviews, allBuyerProfiles]);
+  }, [reviews, reviewBuyerProfiles]);
 
   // Calculate average rating (use enrichedReviews)
   const averageRating = enrichedReviews.length > 0
@@ -436,15 +587,11 @@ export default function SellerStorefront() {
             <h1 className="text-2xl font-bold text-white mb-1">{seller.business_name}</h1>
             <p className="text-gray-400 text-sm mb-2">@{seller.business_name?.toLowerCase().replace(/\s+/g, '')}</p>
             
-            {/* Stats Row: Followers / Following / Rating / Sold */}
+            {/* Stats Row: Followers / Rating / Sold */}
             <div className="flex items-center gap-4 text-sm mb-3">
               <div>
                 <span className="font-bold text-white">{followerCount.toLocaleString()}</span>
                 <span className="text-gray-400 ml-1">Followers</span>
-              </div>
-              <div>
-                <span className="font-bold text-white">{followingCount.toLocaleString()}</span>
-                <span className="text-gray-400 ml-1">Following</span>
               </div>
               {enrichedReviews.length > 0 && (
                 <div className="flex items-center gap-1">
@@ -454,7 +601,7 @@ export default function SellerStorefront() {
               )}
               <div className="flex items-center gap-1">
                 <span className="text-gray-400">•</span>
-                <span className="font-bold text-white">{orders.length}</span>
+                <span className="font-bold text-white">{(seller?.total_sales ?? 0).toLocaleString()}</span>
                 <span className="text-gray-400">Sold</span>
               </div>
             </div>
@@ -487,7 +634,6 @@ export default function SellerStorefront() {
             />
             <FollowButton
               seller={seller}
-              user={user}
               variant="default"
               size="lg"
               className="bg-yellow-400 hover:bg-yellow-500 text-black font-bold h-12 rounded-full"
@@ -619,17 +765,14 @@ export default function SellerStorefront() {
                               <Package className="w-12 h-12 text-gray-600" />
                             </div>
                           )}
-                          <div className="absolute top-2 right-2 flex gap-2">
-                            {product.is_live_item && (
-                              <Badge className="bg-purple-600 text-white border-0">Live</Badge>
-                            )}
-                            {product.status === 'sold' && (
-                              <Badge className="bg-gray-600 text-white border-0">Sold</Badge>
-                            )}
-                            {product.is_givey && (
-                              <Badge className="bg-pink-600 text-white border-0">GIVEY</Badge>
-                            )}
-                          </div>
+                                          <div className="absolute top-2 right-2 flex gap-2">
+                                            {product.status === 'sold' && (
+                                              <Badge className="bg-gray-600 text-white border-0">Sold</Badge>
+                                            )}
+                                            {product.givi_type && (
+                                              <Badge className="bg-pink-600 text-white border-0">GIVEY</Badge>
+                                            )}
+                                          </div>
                         </div>
                         <CardContent className="p-4">
                           <h3 className="font-semibold text-white text-lg mb-2 line-clamp-2">{product.title}</h3>
@@ -918,7 +1061,7 @@ export default function SellerStorefront() {
                     <h3 className="font-semibold text-white mb-2">Stats</h3>
                     <div className="grid grid-cols-3 gap-3 text-center">
                       <div className="bg-gray-900 rounded-lg p-3">
-                        <div className="text-xl font-bold text-white">{orders.length}</div>
+                        <div className="text-xl font-bold text-white">{seller?.total_sales ?? 0}</div>
                         <div className="text-gray-400 text-xs">Sales</div>
                       </div>
                       <div className="bg-gray-900 rounded-lg p-3">

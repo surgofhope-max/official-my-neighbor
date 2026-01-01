@@ -10,6 +10,7 @@ import WebRTCViewer from "./WebRTCViewer";
 import LiveChatOverlay from "../chat/LiveChatOverlay";
 import ShareButton from "../sharing/ShareButton";
 import GIVIViewerOverlay from "../givi/GIVIViewerOverlay";
+import { isShowLive } from "@/api/streamSync";
 
 export default function LiveShowCardWrapper({ 
   show, 
@@ -52,7 +53,7 @@ export default function LiveShowCardWrapper({
               <Users className="w-3 h-3 mr-1" />
               {show.viewer_count || 0}
             </Badge>
-            {show.is_streaming && (
+            {isShowLive(show) && (
               <Badge className="bg-red-500 text-white border-0 animate-pulse text-xs px-2 py-0.5">
                 <Radio className="w-3 h-3 mr-1" />
                 LIVE

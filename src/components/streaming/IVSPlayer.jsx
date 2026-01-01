@@ -20,6 +20,7 @@ import {
   getIvsPlaybackToken,
   buildAuthorizedPlaybackUrl,
 } from "@/api/ivs";
+import { isShowLive } from "@/api/streamSync";
 import { AlertCircle, Radio, Wifi, WifiOff, RefreshCw, Loader2 } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -110,7 +111,8 @@ export default function IVSPlayer({
   // Extract IVS URLs from show
   const channelArn = show?.ivs_channel_arn;
   const playbackUrl = show?.ivs_playback_url;
-  const isShowLive = show?.status === "live" || show?.is_streaming === true;
+  // AUTHORITATIVE: stream_status === "live" is the only rule for live
+  const showIsLive = isShowLive(show);
 
   // Update parent component when state changes
   useEffect(() => {
@@ -230,8 +232,8 @@ export default function IVSPlayer({
       return;
     }
 
-    // Check if show is live
-    if (!isShowLive) {
+    // Check if show is live (authoritative: stream_status === "live")
+    if (!showIsLive) {
       setPlayerState(PLAYER_STATE.OFFLINE);
       return;
     }
@@ -339,7 +341,7 @@ export default function IVSPlayer({
         onError(err);
       }
     }
-  }, [sdkLoaded, channelArn, playbackUrl, isShowLive, fetchToken, autoplay, muted, onError]);
+  }, [sdkLoaded, channelArn, playbackUrl, showIsLive, fetchToken, autoplay, muted, onError]);
 
   // Initialize player when dependencies change
   useEffect(() => {
@@ -350,7 +352,7 @@ export default function IVSPlayer({
     return () => {
       destroyPlayer();
     };
-  }, [sdkLoaded, channelArn, playbackUrl, isShowLive]);
+  }, [sdkLoaded, channelArn, playbackUrl, showIsLive]);
 
   // Retry handler
   const handleRetry = useCallback(() => {

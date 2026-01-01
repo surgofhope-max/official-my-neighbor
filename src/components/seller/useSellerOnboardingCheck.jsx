@@ -1,22 +1,33 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { supabaseApi as base44 } from "@/api/supabaseClient";
-import { createPageUrl } from "@/utils";
+import { supabase } from "@/lib/supabase/supabaseClient";
+import { requireSellerAsync, isAdmin, isSuperAdmin } from "@/lib/auth/routeGuards";
 
 /**
- * Hook to check if seller needs to complete onboarding
- * Returns { isLoading, needsOnboarding, user, seller }
+ * Hook to check seller onboarding state (INFORMATIONAL ONLY)
  * 
- * If needsOnboarding is true, automatically redirects to SellerSafetyAgreement
+ * STEP 3 REFACTOR: This hook NO LONGER blocks or redirects.
+ * Seller access gating is handled by Option B in each page's loadUser/loadSeller.
+ * 
+ * This hook returns onboarding metadata for UI messaging purposes ONLY:
+ * - Show banners about incomplete onboarding steps
+ * - Display pending approval messages
+ * - Indicate safety agreement status for informational purposes
+ * 
+ * Returns { isLoading, user, seller, onboardingInfo }
  */
-export default function useSellerOnboardingCheck(options = {}) {
-  const { redirectOnReset = true, checkSeller = true } = options;
-  const navigate = useNavigate();
+export default function useSellerOnboardingCheck() {
   const [state, setState] = useState({
     isLoading: true,
-    needsOnboarding: false,
     user: null,
-    seller: null
+    seller: null,
+    onboardingInfo: {
+      isApprovedSeller: false,
+      sellerStatus: null,
+      // These are now INFORMATIONAL ONLY - not used for gating
+      safetyAgreed: false,
+      onboardingCompleted: false,
+      onboardingReset: false,
+    }
   });
 
   useEffect(() => {
@@ -25,102 +36,87 @@ export default function useSellerOnboardingCheck(options = {}) {
 
   const checkOnboardingStatus = async () => {
     try {
-      // Check authentication
-      const isAuthenticated = await base44.auth.isAuthenticated();
-      if (!isAuthenticated) {
-        if (redirectOnReset) {
-          base44.auth.redirectToLogin(createPageUrl("SellerSafetyAgreement"));
-        }
-        setState({ isLoading: false, needsOnboarding: true, user: null, seller: null });
-        return;
-      }
-
-      const currentUser = await base44.auth.me();
-      
-      // Admin bypass - admins skip onboarding checks unless impersonating
-      const isImpersonating = sessionStorage.getItem('admin_impersonate_seller_id');
-      if (currentUser.role === "admin" && !isImpersonating) {
-        // Load seller for admin
-        const sellers = await base44.entities.Seller.filter({ created_by: currentUser.email });
+      // Get current user
+      const { data, error } = await supabase.auth.getUser();
+      if (error || !data?.user) {
         setState({
           isLoading: false,
-          needsOnboarding: false,
-          user: currentUser,
-          seller: sellers.length > 0 ? sellers[0] : null
+          user: null,
+          seller: null,
+          onboardingInfo: {
+            isApprovedSeller: false,
+            sellerStatus: null,
+            safetyAgreed: false,
+            onboardingCompleted: false,
+            onboardingReset: false,
+          }
         });
         return;
       }
 
-      // Check if onboarding was reset by admin
-      if (currentUser.seller_onboarding_reset === true) {
-        console.log("🔄 Seller onboarding reset detected - full re-onboarding required");
-        if (redirectOnReset) {
-          navigate(createPageUrl("SellerSafetyAgreement"), { replace: true });
-        }
-        setState({ isLoading: false, needsOnboarding: true, user: currentUser, seller: null });
+      const currentUser = data.user;
+
+      // Read metadata for INFORMATIONAL purposes only
+      const safetyAgreed = currentUser.user_metadata?.seller_safety_agreed === true;
+      const onboardingCompleted = currentUser.user_metadata?.seller_onboarding_completed === true;
+      const onboardingReset = currentUser.user_metadata?.seller_onboarding_reset === true;
+
+      // Check for admin/superadmin
+      if (isSuperAdmin(currentUser) || isAdmin(currentUser)) {
+        // Load seller for admin
+        const { data: sellerProfile } = await supabase
+          .from("sellers")
+          .select("*")
+          .eq("user_id", currentUser.id)
+          .maybeSingle();
+
+        setState({
+          isLoading: false,
+          user: currentUser,
+          seller: sellerProfile,
+          onboardingInfo: {
+            isApprovedSeller: true, // Admin bypass
+            sellerStatus: sellerProfile?.status || null,
+            safetyAgreed,
+            onboardingCompleted,
+            onboardingReset,
+          }
+        });
         return;
       }
 
-      // Check if seller safety agreement was accepted
-      if (currentUser.seller_safety_agreed !== true) {
-        console.log("🛡️ Seller safety agreement required");
-        if (redirectOnReset) {
-          navigate(createPageUrl("SellerSafetyAgreement"), { replace: true });
-        }
-        setState({ isLoading: false, needsOnboarding: true, user: currentUser, seller: null });
-        return;
-      }
+      // ═══════════════════════════════════════════════════════════════════════════
+      // OPTION B CHECK: Query DB for role + seller status (INFORMATIONAL)
+      // ═══════════════════════════════════════════════════════════════════════════
+      const sellerCheck = await requireSellerAsync(currentUser.id);
 
-      // Check if seller onboarding is completed
-      if (!currentUser.seller_onboarding_completed && currentUser.role !== "admin") {
-        // Check for auto-repair (completed steps but missing flag)
-        const completedSteps = currentUser.seller_onboarding_steps_completed || [];
-        if (completedSteps.length >= 9) {
-           console.log("🔧 Auto-repairing seller completion flag in hook...");
-           // We can't await async update here easily without blocking, but we can assume it's done for flow
-           // Let's allow pass-through
-        } else {
-          console.log("📋 Seller onboarding incomplete");
-          if (redirectOnReset) {
-            navigate(createPageUrl("SellerOnboarding"), { replace: true });
-          }
-          setState({ isLoading: false, needsOnboarding: true, user: currentUser, seller: null });
-          return;
-        }
-      }
-
-      // Check for seller profile if required
-      let sellerProfile = null;
-      if (checkSeller) {
-        const sellers = await base44.entities.Seller.filter({ created_by: currentUser.email });
-        if (sellers.length > 0) {
-          sellerProfile = sellers[0];
-          
-          // Check if seller is approved
-          if (sellerProfile.status !== "approved") {
-             // Pending approval is fine - allow access to dashboard
-             // Do NOT set needsOnboarding=true which might trigger redirects elsewhere
-             // Just return state with seller
-          }
-        } else {
-          // No seller profile but onboarding is complete (checked above)
-          // This means they are in the "New Seller" state in Dashboard (filling profile)
-          // Allow access to Dashboard
-          console.log("📝 No seller profile yet - allowing access to Dashboard to create one");
-        }
-      }
-
-      // All checks passed
       setState({
         isLoading: false,
-        needsOnboarding: false,
         user: currentUser,
-        seller: sellerProfile
+        seller: sellerCheck.sellerRow,
+        onboardingInfo: {
+          isApprovedSeller: sellerCheck.ok,
+          sellerStatus: sellerCheck.sellerStatus,
+          safetyAgreed,
+          onboardingCompleted,
+          onboardingReset,
+        }
       });
 
     } catch (error) {
-      console.error("Error checking seller onboarding status:", error);
-      setState({ isLoading: false, needsOnboarding: true, user: null, seller: null });
+      console.error("[useSellerOnboardingCheck] Error:", error);
+      setState({
+        isLoading: false,
+        user: null,
+        seller: null,
+        onboardingInfo: {
+          isApprovedSeller: false,
+          sellerStatus: null,
+          safetyAgreed: false,
+          onboardingCompleted: false,
+          onboardingReset: false,
+        }
+      });
     }
   };
 

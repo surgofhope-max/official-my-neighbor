@@ -2,7 +2,8 @@ import React, { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Star, CheckCircle } from "lucide-react";
-import { supabaseApi as base44 } from "@/api/supabaseClient";
+import { supabase } from "@/lib/supabase/supabaseClient";
+import { supabaseApi as base44 } from "@/api/supabaseClient"; // Keep for entities
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 export default function ReviewRequestBubble({ message }) {
@@ -17,7 +18,11 @@ export default function ReviewRequestBubble({ message }) {
 
   const submitReviewMutation = useMutation({
     mutationFn: async () => {
-      const user = await base44.auth.me();
+      const { data: authData, error: authError } = await supabase.auth.getUser();
+      if (authError || !authData?.user) {
+        throw new Error("Not authenticated");
+      }
+      const user = authData.user;
       
       return await base44.entities.Review.create({
         seller_id: message.metadata.seller_id,

@@ -10,6 +10,7 @@
 import { supabase } from "@/lib/supabase/supabaseClient";
 import type { Batch } from "./batches";
 import type { Order } from "./orders";
+import { createPickupCompletedNotification } from "./notifications";
 
 // Fulfillment error types
 export type FulfillmentErrorType =
@@ -43,6 +44,118 @@ const VALID_TRANSITIONS: Record<string, string[]> = {
   cancelled: [], // Terminal state
 };
 
+// ═══════════════════════════════════════════════════════════════════════════
+// ANALYTICS EVENTS (SHADOW MODE - FAIL-OPEN DB INSERT)
+// Append-only event emission for analytics tracking.
+// Events are inserted into public.analytics_events table.
+// FAIL-OPEN: Errors are caught and logged, never thrown or blocking.
+//
+// Table schema (FINAL):
+//   event_type, event_at, actor_user_id, buyer_id, seller_user_id,
+//   seller_id, show_id, batch_id, order_id, payload, source, schema_version
+// ═══════════════════════════════════════════════════════════════════════════
+
+export type AnalyticsEventType = 
+  | "batch_picked_up"
+  | "orders_completed"
+  | "batch_cancelled"
+  | "order_refunded";
+
+export interface AnalyticsEventPayload {
+  batch_id?: string;
+  order_id?: string;           // Single order ID (use first if multiple)
+  order_ids?: string[];        // Multiple order IDs (stored in payload)
+  seller_id?: string;          // Seller entity ID (public.sellers.id)
+  seller_user_id?: string;     // Seller user ID (auth.users.id)
+  buyer_id?: string;           // Buyer user ID (auth.users.id)
+  actor_user_id?: string;      // User who triggered the event
+  show_id?: string;
+  event_at?: string;
+  metadata?: Record<string, unknown>;  // Extra context (stored in payload)
+}
+
+/**
+ * Emit an analytics event via Edge Function (server-side insert).
+ * 
+ * Calls emit-analytics-event Edge Function which uses service role to insert.
+ * FAIL-OPEN: Errors are caught and logged, never thrown.
+ * Does NOT block fulfillment or any calling code.
+ * 
+ * @param type - The event type (required)
+ * @param payload - Event payload with context (defaults to {})
+ */
+export async function emitAnalyticsEvent(
+  type: AnalyticsEventType | string,
+  payload: AnalyticsEventPayload = {}
+): Promise<void> {
+  // Validate event_type is required
+  if (!type) {
+    console.error("[analytics_events] event_type is required, skipping");
+    return;
+  }
+
+  try {
+    const eventAt = payload.event_at || new Date().toISOString();
+    
+    // Build payload JSON (contains order_ids array, metadata, and any extra context)
+    const payloadJson: Record<string, unknown> = {};
+    if (payload.order_ids && payload.order_ids.length > 0) {
+      payloadJson.order_ids = payload.order_ids;
+    }
+    if (payload.metadata) {
+      payloadJson.metadata = payload.metadata;
+    }
+
+    // Get current user access token if available (for Authorization header)
+    let accessToken: string | null = null;
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      accessToken = sessionData?.session?.access_token || null;
+    } catch {
+      // Ignore - will proceed without Authorization header
+    }
+
+    // Build request headers
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (accessToken) {
+      headers["Authorization"] = `Bearer ${accessToken}`;
+    }
+
+    // POST to Edge Function (server-side insert with service role)
+    const edgeFunctionUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/emit-analytics-event`;
+    
+    const response = await fetch(edgeFunctionUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        event_type: type,
+        event_at: eventAt,
+        actor_user_id: payload.actor_user_id || null,
+        buyer_id: payload.buyer_id || null,
+        seller_user_id: payload.seller_user_id || null,
+        seller_id: payload.seller_id || null,
+        show_id: payload.show_id || null,
+        batch_id: payload.batch_id || null,
+        order_id: payload.order_id || (payload.order_ids?.[0]) || null,
+        payload: Object.keys(payloadJson).length > 0 ? payloadJson : {},
+        source: "fulfillment",
+        schema_version: 1,
+      }),
+    });
+
+    if (!response.ok) {
+      // Log error but do NOT throw - fail-open
+      const errorText = await response.text().catch(() => "unknown");
+      console.error("[analytics_events] Edge function failed:", response.status, errorText);
+    }
+  } catch (err) {
+    // Analytics should NEVER block fulfillment operations - fail-open
+    console.error("[analytics_events] Edge function call failed:", err);
+  }
+}
+
 /**
  * Get all batches for a seller (for fulfillment dashboard).
  *
@@ -61,7 +174,7 @@ export async function getBatchesForSeller(
       .from("batches")
       .select("*")
       .eq("seller_id", sellerId)
-      .order("created_date", { ascending: false });
+      .order("created_at", { ascending: false });
 
     if (error) {
       console.warn("Failed to fetch seller batches:", error.message);
@@ -96,7 +209,7 @@ export async function getBatchesForShow(
       .select("*")
       .eq("show_id", showId)
       .eq("seller_id", sellerId)
-      .order("created_date", { ascending: false });
+      .order("created_at", { ascending: false });
 
     if (error) {
       console.warn("Failed to fetch show batches:", error.message);
@@ -128,7 +241,7 @@ export async function getOrdersForBatch(
       .from("orders")
       .select("*")
       .eq("batch_id", batchId)
-      .order("created_date", { ascending: true });
+      .order("created_at", { ascending: true });
 
     if (error) {
       console.warn("Failed to fetch batch orders:", error.message);
@@ -313,7 +426,9 @@ export async function completeBatchPickup(
   }
 
   try {
-    // Fetch the batch first
+    // ─────────────────────────────────────────────────────────────────────
+    // STEP 0: Fetch the batch first
+    // ─────────────────────────────────────────────────────────────────────
     const { data: batch, error: fetchError } = await supabase
       .from("batches")
       .select("*")
@@ -345,17 +460,19 @@ export async function completeBatchPickup(
       };
     }
 
-    // Validate status transition
     const currentStatus = batch.status;
+    console.log("[Pickup] batchStatus:", currentStatus);
+
+    // ─────────────────────────────────────────────────────────────────────
+    // IDEMPOTENCY: If batch already completed → return success (no-op)
+    // ─────────────────────────────────────────────────────────────────────
     if (currentStatus === "picked_up" || currentStatus === "completed") {
+      console.log("[Pickup] Batch already completed, returning success (idempotent)");
       return {
-        batch: null,
+        batch: batch as Batch,
         ordersUpdated: 0,
         notificationSent: false,
-        error: {
-          type: "ALREADY_COMPLETED",
-          message: "This batch has already been completed",
-        },
+        error: null, // No error - idempotent success
       };
     }
 
@@ -363,64 +480,173 @@ export async function completeBatchPickup(
     const completedBy = sellerEmail;
 
     // ─────────────────────────────────────────────────────────────────────
-    // STEP A: Update EACH order in batch (Base44 order)
+    // STEP A: Fetch orders for this batch to determine eligibility
     // ─────────────────────────────────────────────────────────────────────
-    const { data: updatedOrders, error: ordersError } = await supabase
+    const { data: batchOrders, error: ordersFetchError } = await supabase
       .from("orders")
-      .update({
-        status: "picked_up",
-        picked_up_at: now,
-        picked_up_by: completedBy,
-      })
-      .eq("batch_id", batchId)
-      .in("status", ["paid", "ready"])
-      .select();
+      .select("id, status")
+      .eq("batch_id", batchId);
 
-    if (ordersError) {
-      console.warn("Failed to update orders:", ordersError.message);
+    if (ordersFetchError) {
+      console.warn("[Pickup] Failed to fetch orders:", ordersFetchError.message);
     }
 
-    const ordersUpdated = updatedOrders?.length || 0;
-    const firstOrder = updatedOrders?.[0];
+    const allOrders = batchOrders || [];
+    const eligibleOrders = allOrders.filter(o => o.status === "paid" || o.status === "ready");
+    const skippedOrders = allOrders.filter(o => o.status !== "paid" && o.status !== "ready");
+
+    console.log("[Pickup] eligibleOrders count:", eligibleOrders.length);
+    console.log("[Pickup] skippedOrders count:", skippedOrders.length);
 
     // ─────────────────────────────────────────────────────────────────────
-    // STEP B: Update batch to "completed" (Base44 uses "completed", not "picked_up")
+    // STEP B: Update ONLY eligible orders (status = 'paid' or 'ready')
     // ─────────────────────────────────────────────────────────────────────
-    const { data: updatedBatch, error: updateError } = await supabase
-      .from("batches")
-      .update({
-        status: "completed",
-        picked_up_at: now, // Also set picked_up_at for compatibility
-      })
-      .eq("id", batchId)
-      .select()
-      .single();
+    let updatedOrders: any[] = [];
+    let ordersUpdated = 0;
 
-    if (updateError) {
-      console.warn("Failed to complete batch:", updateError.message);
-      return {
-        batch: null,
-        ordersUpdated,
-        notificationSent: false,
-        error: {
-          type: "UNKNOWN_ERROR",
-          message: "Failed to complete batch pickup",
-        },
-      };
+    if (eligibleOrders.length > 0) {
+      const eligibleOrderIds = eligibleOrders.map(o => o.id);
+      
+      const { data: updated, error: ordersError } = await supabase
+        .from("orders")
+        .update({
+          status: "fulfilled",
+          picked_up_at: now,
+          picked_up_by: completedBy,
+        })
+        .in("id", eligibleOrderIds)
+        .select();
+
+      if (ordersError) {
+        console.warn("[Pickup] Failed to update orders:", ordersError.message);
+      } else {
+        updatedOrders = updated || [];
+        ordersUpdated = updatedOrders.length;
+
+        // ─────────────────────────────────────────────────────────────────────
+        // STEP B.2: IMMEDIATELY FINALIZE TO COMPLETED (TERMINAL STATE)
+        // Seller verification = completion. Reviews unlock. No hanging orders.
+        // ─────────────────────────────────────────────────────────────────────
+        if (ordersUpdated > 0) {
+          const { error: completedError } = await supabase
+            .from("orders")
+            .update({
+              status: "completed",
+              completed_at: now,
+            })
+            .in("id", eligibleOrderIds);
+
+          if (completedError) {
+            console.warn("[Pickup] Failed to finalize orders to completed:", completedError.message);
+          } else {
+            console.log("[Pickup] Orders finalized to completed:", eligibleOrderIds.length);
+          }
+        }
+      }
+    }
+
+    console.log("[Pickup] ordersUpdated:", ordersUpdated);
+
+    const firstOrder = updatedOrders[0] || allOrders[0];
+
+    // ─────────────────────────────────────────────────────────────────────
+    // ANALYTICS: Emit orders_fulfilled for EACH order that was updated
+    // GUARDS:
+    //   - Only orders with previous status 'paid'/'ready' were updated
+    //   - This point reached ONLY after successful DB update
+    //   - No emission for already-fulfilled orders (filtered by .in() above)
+    // EMIT EXACTLY ONCE per order.
+    // ─────────────────────────────────────────────────────────────────────
+    if (updatedOrders && updatedOrders.length > 0) {
+      for (const order of updatedOrders) {
+        emitAnalyticsEvent("orders_fulfilled", {
+          order_id: order.id,
+          batch_id: batchId,
+          buyer_id: batch.buyer_id,
+          seller_id: batch.seller_id,           // Entity ID (public.sellers.id)
+          seller_user_id: null,                 // Not directly available
+          show_id: batch.show_id,
+          actor_user_id: sellerId,              // Seller who completed the pickup
+          event_at: now,
+          metadata: {
+            product_id: order.product_id,
+            price: order.price,
+            completed_by: completedBy,
+          },
+        });
+      }
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // STEP C: Create notifications for buyer (Base44 parity)
+    // STEP C: Update batch to "completed" (only if not already terminal)
+    // This avoids batches_unique_active conflicts
+    // ─────────────────────────────────────────────────────────────────────
+    let updatedBatch = batch;
+    
+    // Only update batch if it's not already in a terminal state
+    if (currentStatus !== "completed" && currentStatus !== "picked_up") {
+      // Guard: Check if a completed batch already exists for same buyer/seller/show
+      // to avoid unique constraint violation on (buyer_id, seller_id, show_id, status)
+      const { data: existingCompletedBatch, error: existingErr } = await supabase
+        .from("batches")
+        .select("id, status")
+        .eq("buyer_id", batch.buyer_id)
+        .eq("seller_id", batch.seller_id)
+        .eq("show_id", batch.show_id)
+        .eq("status", "completed")
+        .maybeSingle();
+
+      if (existingErr) {
+        console.warn("[Pickup] Failed to check existing completed batch:", existingErr.message);
+        // Fail-open: continue with update attempt
+      }
+
+      // If a different batch is already completed for this buyer/seller/show, skip update
+      if (existingCompletedBatch && existingCompletedBatch.id !== batchId) {
+        console.log("[Pickup] Completed batch already exists; skipping status update to avoid unique conflict");
+        // Keep updatedBatch = batch (no update performed)
+      } else {
+        // Safe to update: no conflicting completed batch exists
+        const { data: batchUpdateResult, error: updateError } = await supabase
+          .from("batches")
+          .update({
+            status: "completed",
+            picked_up_at: now, // Also set picked_up_at for compatibility
+          })
+          .eq("id", batchId)
+          .select()
+          .single();
+
+        if (updateError) {
+          console.warn("[Pickup] Failed to complete batch:", updateError.message);
+          // Don't fail the whole operation - batch may have been updated by another process
+        } else if (batchUpdateResult) {
+          updatedBatch = batchUpdateResult;
+        }
+      }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // STEP D: Create notifications for buyer (Base44 parity)
+    // ONLY send notifications if orders were actually transitioned
+    // FAIL-SAFE: Notification failures must never block fulfillment
     // ─────────────────────────────────────────────────────────────────────
     let notificationSent = false;
     
-    // Get buyer_id from batch (could be buyer_id or buyer_user_id)
-    const buyerUserId = batch.buyer_user_id || batch.buyer_id;
+    // FIX: Use buyer_id only (buyer_user_id does not exist in batches table)
+    const buyerUserId = batch.buyer_id;
     
-    if (buyerUserId && firstOrder) {
+    // Helper: validate UUID format to prevent DB constraint violations
+    const isUuid = (v: unknown): v is string =>
+      typeof v === "string" &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+    
+    // Only send notifications if:
+    // - At least one order was newly transitioned
+    // - buyerUserId is a valid UUID (prevents NOT NULL constraint violation)
+    if (firstOrder && ordersUpdated > 0 && buyerUserId && isUuid(buyerUserId)) {
+      // D.1: Create "Order Completed" notification (order_update type)
       try {
-        // C.1: Create "Order Completed" notification (order_update type)
-        // Check for existing to ensure idempotency
         const { data: existingOrderNotif } = await supabase
           .from("notifications")
           .select("id")
@@ -430,7 +656,7 @@ export async function completeBatchPickup(
           .maybeSingle();
 
         if (!existingOrderNotif) {
-          await supabase
+          const { error: orderNotifErr } = await supabase
             .from("notifications")
             .insert({
               user_id: buyerUserId,
@@ -447,10 +673,16 @@ export async function completeBatchPickup(
               read: false,
               read_at: null,
             });
+          if (orderNotifErr) {
+            console.warn("[Pickup] Failed to create order_completed notification:", orderNotifErr.message);
+          }
         }
+      } catch (e) {
+        console.warn("[Pickup] Unexpected error creating order_completed notification:", e);
+      }
 
-        // C.2: Create "Leave a Review" notification (review_request type)
-        // Check for existing to ensure idempotency
+      // D.2: Create "Leave a Review" notification (review_request type)
+      try {
         const { data: existingReviewNotif } = await supabase
           .from("notifications")
           .select("id")
@@ -478,14 +710,35 @@ export async function completeBatchPickup(
             });
 
           if (notifError) {
-            console.warn("Failed to create review notification:", notifError.message);
+            console.warn("[Pickup] Failed to create review_request notification:", notifError.message);
           } else {
             notificationSent = true;
           }
         }
-      } catch (notifErr) {
-        console.warn("Unexpected error creating notification:", notifErr);
+      } catch (e) {
+        console.warn("[Pickup] Unexpected error creating review_request notification:", e);
       }
+
+      // D.3: Create "Order picked up" notification (pickup_completed type)
+      try {
+        await createPickupCompletedNotification({
+          buyerUserId,
+          sellerId: batch.seller_id,
+          sellerName,
+          batchId,
+          showId: batch.show_id,
+        });
+      } catch (e) {
+        console.warn("[Pickup] Unexpected error creating pickup_completed notification:", e);
+      }
+    } else if (ordersUpdated > 0) {
+      // Orders were updated but notifications skipped due to invalid buyerUserId
+      console.warn("[Pickup] Skipping buyer notifications (missing/invalid buyerUserId)", {
+        buyerUserId,
+        ordersUpdated,
+        hasBuyerUserId: !!buyerUserId,
+        isValidUuid: isUuid(buyerUserId),
+      });
     }
 
     // Log admin override for audit
@@ -493,6 +746,48 @@ export async function completeBatchPickup(
       console.log(
         `[AUDIT] Admin (${sellerEmail}) completed batch ${batchId} for seller ${batch.seller_id}`
       );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // STEP E: Emit analytics events (fail-open, non-blocking)
+    // ONLY emit if orders were actually transitioned (not on idempotent retries)
+    // ─────────────────────────────────────────────────────────────────────
+    const orderIds = updatedOrders.map((o: Order) => o.id);
+    
+    // E.1: Emit batch_picked_up event - ONLY if orders were transitioned
+    if (ordersUpdated > 0) {
+      emitAnalyticsEvent("batch_picked_up", {
+        batch_id: batchId,
+        buyer_id: buyerUserId,
+        seller_id: batch.seller_id,           // Entity ID (public.sellers.id)
+        seller_user_id: sellerEmail ? null : null,  // User ID not directly available
+        show_id: batch.show_id,
+        actor_user_id: sellerId,              // Seller who completed the pickup
+        event_at: now,
+        metadata: {
+          completed_by: completedBy,
+          total_items: batch.total_items,
+          total_amount: batch.total_amount,
+          orders_count: ordersUpdated,
+          previous_status: currentStatus,     // For audit trail
+        },
+      });
+
+      // E.2: Emit orders_completed event (one per batch, contains all order IDs)
+      if (orderIds.length > 0) {
+        emitAnalyticsEvent("orders_completed", {
+          batch_id: batchId,
+          order_ids: orderIds,
+          buyer_id: buyerUserId,
+          seller_id: batch.seller_id,
+          show_id: batch.show_id,  // Added for show-level attribution
+          actor_user_id: sellerId,
+          event_at: now,
+          metadata: {
+            completed_by: completedBy,
+          },
+        });
+      }
     }
 
     return {
@@ -524,7 +819,8 @@ export async function completeBatchPickup(
  *   - picked_up_at = batch.completed_at (or batch.picked_up_at)
  *   - picked_up_by = "auto-sync"
  *
- * @param sellerId - The seller's ID to scope the sync
+ * @param sellerId - The seller entity ID (public.sellers.id)
+ *                   NOTE: batches.seller_id uses seller entity id, NOT user id
  * @returns Number of orders healed
  */
 export async function autoSyncHealOrders(
@@ -536,9 +832,11 @@ export async function autoSyncHealOrders(
 
   try {
     // Find completed batches with orders still in "paid" status
+    // FIX: Use select("*") instead of partial select — PostgREST rejects
+    // partial selects like "id, picked_up_at" when combined with filters
     const { data: batches, error: batchError } = await supabase
       .from("batches")
-      .select("id, picked_up_at")
+      .select("*")
       .eq("seller_id", sellerId)
       .eq("status", "completed");
 
@@ -591,10 +889,13 @@ export async function autoSyncHealBuyerOrders(
 
   try {
     // Find completed batches for this buyer
+    // FIX: Use select("*") instead of partial select — PostgREST rejects
+    // partial selects like "id, picked_up_at" when combined with filters
+    // FIX: Use buyer_id only (buyer_user_id does not exist in batches table)
     const { data: batches, error: batchError } = await supabase
       .from("batches")
-      .select("id, picked_up_at")
-      .or(`buyer_id.eq.${buyerId},buyer_user_id.eq.${buyerId}`)
+      .select("*")
+      .eq("buyer_id", buyerId)
       .eq("status", "completed");
 
     if (batchError || !batches || batches.length === 0) {

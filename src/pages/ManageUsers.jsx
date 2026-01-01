@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { supabaseApi as base44 } from "@/api/supabaseClient";
+import { supabase } from "@/lib/supabase/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -19,10 +19,40 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Users, Search, Ban, CheckCircle, XCircle, Trash2, AlertCircle, Shield, UserX, ArrowLeft, Power, PowerOff, Eye, FileText } from "lucide-react";
+import { Users, Search, Ban, CheckCircle, XCircle, Trash2, AlertCircle, Shield, UserX, ArrowLeft, Power, PowerOff, Eye, FileText, RefreshCw } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import UserProfileDialog from "../components/admin/UserProfileDialog";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import {
+  isBuyerAccessReady,
+  isSellerAccessReady,
+  isSellerPaymentReady,
+  getOnboardingReadiness,
+} from "@/lib/auth/onboardingState";
+
+// ═══════════════════════════════════════════════════════════════════════════
+// HELPER: Detect degraded Supabase errors (503/timeout)
+// ═══════════════════════════════════════════════════════════════════════════
+function isDegradedSupabaseError(error) {
+  if (!error) return false;
+  const msg = (error?.message || "").toLowerCase();
+  const code = error?.code || "";
+  const status = error?.status || error?.statusCode;
+  
+  return (
+    status === 503 ||
+    code === "503" ||
+    msg.includes("503") ||
+    msg.includes("service unavailable") ||
+    msg.includes("upstream connect error") ||
+    msg.includes("disconnect/reset before headers") ||
+    msg.includes("connection timeout") ||
+    msg.includes("fetch failed") ||
+    msg.includes("network error") ||
+    msg.includes("failed to fetch")
+  );
+}
 
 export default function ManageUsers() {
   const navigate = useNavigate();
@@ -33,243 +63,353 @@ export default function ManageUsers() {
   const [selectedUser, setSelectedUser] = useState(null);
   const [actionDialog, setActionDialog] = useState({ open: false, action: "", user: null });
   const [profileDialog, setProfileDialog] = useState({ open: false, user: null });
+  
+  // Track degraded state for error-truth UI
+  const [isLoadDegraded, setIsLoadDegraded] = useState(false);
 
-  // Fetch all users - AUTO REFRESH every 10 seconds
-  const { data: allUsers = [], isLoading: usersLoading, error: usersError } = useQuery({
+  // ─────────────────────────────────────────────────────────────────────────
+  // DATA FETCHING: Direct Supabase queries (replaces broken base44.entities)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  // Fetch all users - AUTO REFRESH every 10 seconds (disabled when degraded)
+  // CRITICAL: This query MUST include account_status from public.users
+  const { data: allUsers = [], isLoading: usersLoading, error: usersError, refetch: refetchUsers } = useQuery({
     queryKey: ['all-users-manage'],
     queryFn: async () => {
-      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-      console.log("📊 MANAGE USERS - Fetching ALL platform users");
-      
-      const users = await base44.entities.User.list('-created_date');
-      console.log("✅ Total users fetched:", users.length);
-      console.log("   User emails:", users.map(u => u.email).join(", "));
-      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-      return users;
+      try {
+        const { data, error } = await supabase
+          .from("users")
+          .select("*")
+          .order("created_at", { ascending: false });
+        
+        if (error) {
+          console.warn("[ManageUsers] Failed to load users:", error.message);
+          if (isDegradedSupabaseError(error)) {
+            setIsLoadDegraded(true);
+          }
+          throw error;
+        }
+        setIsLoadDegraded(false);
+        
+        // Debug log: show account_status values after fetch
+        if (data && data.length > 0) {
+          const statusCounts = data.reduce((acc, u) => {
+            const s = u.account_status || 'active';
+            acc[s] = (acc[s] || 0) + 1;
+            return acc;
+          }, {});
+          console.log('[ManageUsers] Fetched users - account_status distribution:', statusCounts);
+        }
+        
+        return data || [];
+      } catch (err) {
+        if (isDegradedSupabaseError(err)) {
+          setIsLoadDegraded(true);
+        }
+        throw err;
+      }
     },
-    refetchInterval: 10000,
-    staleTime: 5000
+    refetchInterval: isLoadDegraded ? false : 10000, // Disable auto-refresh when degraded
+    staleTime: 5000,
+    retry: (failureCount, error) => {
+      if (isDegradedSupabaseError(error)) return false;
+      return failureCount < 2;
+    }
   });
 
-  // Fetch all buyer profiles - AUTO REFRESH
+  // Fetch all buyer profiles - AUTO REFRESH (disabled when degraded)
   const { data: buyerProfiles = [] } = useQuery({
     queryKey: ['all-buyer-profiles-manage'],
-    queryFn: () => base44.entities.BuyerProfile.list('-created_date'),
-    refetchInterval: 10000,
-    staleTime: 5000
+    queryFn: async () => {
+      try {
+        const { data, error } = await supabase
+          .from("buyer_profiles")
+          .select("*");
+        
+        if (error) {
+          console.warn("[ManageUsers] Failed to load buyer profiles:", error.message);
+          return [];
+        }
+        return data || [];
+      } catch (err) {
+        console.warn("[ManageUsers] Unexpected error loading buyer profiles:", err);
+        return [];
+      }
+    },
+    refetchInterval: isLoadDegraded ? false : 10000,
+    staleTime: 5000,
+    retry: (failureCount, error) => {
+      if (isDegradedSupabaseError(error)) return false;
+      return failureCount < 2;
+    }
   });
 
-  // Fetch all sellers - AUTO REFRESH
+  // Fetch all sellers - AUTO REFRESH (disabled when degraded)
   const { data: sellers = [] } = useQuery({
     queryKey: ['all-sellers-manage'],
-    queryFn: () => base44.entities.Seller.list('-created_date'),
-    refetchInterval: 10000,
-    staleTime: 5000
+    queryFn: async () => {
+      try {
+        const { data, error } = await supabase
+          .from("sellers")
+          .select("*");
+        
+        if (error) {
+          console.warn("[ManageUsers] Failed to load sellers:", error.message);
+          return [];
+        }
+        return data || [];
+      } catch (err) {
+        console.warn("[ManageUsers] Unexpected error loading sellers:", err);
+        return [];
+      }
+    },
+    refetchInterval: isLoadDegraded ? false : 10000,
+    staleTime: 5000,
+    retry: (failureCount, error) => {
+      if (isDegradedSupabaseError(error)) return false;
+      return failureCount < 2;
+    }
   });
 
-  // Create maps for quick lookup
-  const buyerMap = buyerProfiles.reduce((acc, buyer) => {
-    acc[buyer.user_id] = buyer;
+  // ─────────────────────────────────────────────────────────────────────────
+  // ID MAPS: Quick lookup by auth user ID (uuid)
+  // - buyerMap: keyed by buyer_profiles.user_id (auth.users.id)
+  // - sellerMap: keyed by sellers.user_id (auth.users.id)
+  // ─────────────────────────────────────────────────────────────────────────
+  const buyerMap = (buyerProfiles || []).reduce((acc, buyer) => {
+    if (buyer?.user_id) {
+      acc[buyer.user_id] = buyer;
+    }
     return acc;
   }, {});
 
-  const sellerMap = sellers.reduce((acc, seller) => {
-    acc[seller.created_by] = seller;
+  const sellerMap = (sellers || []).reduce((acc, seller) => {
+    // Key by seller.user_id (auth user id), NOT created_by (email)
+    if (seller?.user_id) {
+      acc[seller.user_id] = seller;
+    }
     return acc;
   }, {});
 
-  // Update user account status mutation
+  // ═══════════════════════════════════════════════════════════════════════════
+  // UPDATE USER ACCOUNT STATUS: Suspend / Unsuspend
+  // Uses canonical public.users columns:
+  // - account_status: 'active' | 'suspended'
+  // - account_status_reason: Admin-provided reason
+  // - account_status_updated_at: Timestamp
+  // - account_status_updated_by: Admin user ID
+  //
+  // FIX: Uses .select() to detect RLS blocking (0-row updates)
+  // FIX: Uses optimistic update + delayed refetch to prevent stale data overwrite
+  // ═══════════════════════════════════════════════════════════════════════════
   const updateUserStatusMutation = useMutation({
     mutationFn: async ({ userId, status, reason }) => {
-      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-      console.log("🔧 UPDATING USER STATUS");
-      console.log("   User ID:", userId);
-      console.log("   New Status:", status);
-      console.log("   Reason:", reason);
+      const { data: authData } = await supabase.auth.getUser();
+      const currentUser = authData?.user ?? null;
+      const now = new Date().toISOString();
       
-      const currentUser = await base44.auth.me();
       const updateData = {
         account_status: status,
-        suspended_at: status !== 'active' ? new Date().toISOString() : null,
-        suspended_by: status !== 'active' ? currentUser.email : null,
-        suspension_reason: reason || null
+        account_status_reason: status !== 'active' ? (reason || null) : null,
+        account_status_updated_at: now,
+        account_status_updated_by: currentUser?.id || null
       };
       
-      console.log("   Update Data:", updateData);
+      // ═══════════════════════════════════════════════════════════════════════════
+      // FIX: Use .select() to get returned rows - detects RLS blocking
+      // If RLS blocks the update, 0 rows are returned even though no error is thrown
+      // ═══════════════════════════════════════════════════════════════════════════
+      const { data, error } = await supabase
+        .from("users")
+        .update(updateData)
+        .eq("id", userId)
+        .select("id, account_status");
       
-      await base44.entities.User.update(userId, updateData);
+      if (error) {
+        console.error('[ManageUsers] Update error:', error);
+        throw new Error(error.message);
+      }
       
-      console.log("✅ User status updated successfully");
-      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+      // ═══════════════════════════════════════════════════════════════════════════
+      // FIX: Detect 0-row updates caused by RLS policy blocking
+      // This happens when the current user's role is not allowed to UPDATE
+      // ═══════════════════════════════════════════════════════════════════════════
+      if (!data || data.length === 0) {
+        console.error('[ManageUsers] RLS blocked update: 0 rows returned');
+        throw new Error('Permission denied: your admin role is not allowed to update users. Check RLS policy.');
+      }
+      
+      console.log('[ManageUsers] account_status after mutation:', status, '- rows updated:', data.length);
+      console.log('[ManageUsers] Updated row:', data[0]);
+      
+      // Return the update info for cache update
+      return { userId, status, reason, updatedAt: now, updatedBy: currentUser?.id };
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['all-users-manage'] });
-      queryClient.invalidateQueries({ queryKey: ['all-users'] });
+    // ═══════════════════════════════════════════════════════════════════════════
+    // OPTIMISTIC UPDATE: Immediately update the cache before server confirms
+    // This makes the button swap instantly without waiting for refetch
+    // ═══════════════════════════════════════════════════════════════════════════
+    onMutate: async ({ userId, status, reason }) => {
+      // Cancel any outgoing refetches to prevent race conditions
+      await queryClient.cancelQueries({ queryKey: ['all-users-manage'] });
+      
+      // Snapshot previous value for rollback
+      const previousUsers = queryClient.getQueryData(['all-users-manage']);
+      
+      // Optimistically update the cache
+      const now = new Date().toISOString();
+      queryClient.setQueryData(['all-users-manage'], (old) => {
+        if (!old) return old;
+        const updated = old.map(user => 
+          user.id === userId 
+            ? { 
+                ...user, 
+                account_status: status,
+                account_status_reason: status !== 'active' ? (reason || null) : null,
+                account_status_updated_at: now
+              }
+            : user
+        );
+        console.log('[ManageUsers] Optimistic update applied for user:', userId, '→', status);
+        return updated;
+      });
+      
+      return { previousUsers, userId, status };
+    },
+    onSuccess: (data, variables, context) => {
+      // ═══════════════════════════════════════════════════════════════════════════
+      // FIX: Do NOT immediately invalidate queries - this causes stale data race
+      // Instead, directly set the cache with confirmed server data
+      // The background polling will eventually sync, but UI stays correct
+      // ═══════════════════════════════════════════════════════════════════════════
+      
+      // Re-apply the update to cache to ensure it persists
+      queryClient.setQueryData(['all-users-manage'], (old) => {
+        if (!old) return old;
+        return old.map(user => 
+          user.id === data.userId 
+            ? { 
+                ...user, 
+                account_status: data.status,
+                account_status_reason: data.status !== 'active' ? (data.reason || null) : null,
+                account_status_updated_at: data.updatedAt,
+                account_status_updated_by: data.updatedBy
+              }
+            : user
+        );
+      });
+      
+      console.log('[ManageUsers] Mutation success - cache updated:', data.userId, '→', data.status);
+      
+      // Close dialog and show success
       setActionDialog({ open: false, action: "", user: null });
       alert('User status updated successfully');
+      
+      // Delay invalidation to allow DB replication to settle
+      // This ensures the next refetch gets fresh data
+      setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: ['all-users-manage'] });
+        queryClient.invalidateQueries({ queryKey: ['all-users'] });
+      }, 2000);
     },
-    onError: (error) => {
+    onError: (error, variables, context) => {
+      // Rollback to previous state on error
+      if (context?.previousUsers) {
+        queryClient.setQueryData(['all-users-manage'], context.previousUsers);
+      }
       console.error("❌ Failed to update user status:", error);
       alert(`Failed to update user: ${error.message}`);
     }
   });
 
   // Delete user account mutation (HARD DELETE - TEST MODE)
+  // Uses direct Supabase queries instead of base44.entities
   const deleteUserMutation = useMutation({
     mutationFn: async (userId) => {
-      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-      console.log("🗑️ HARD DELETE USER ACCOUNT (TEST MODE)");
-      console.log("   User ID:", userId);
-      
       const user = allUsers.find(u => u.id === userId);
       if (!user) {
-        console.log("❌ User not found");
         return;
       }
-      console.log("   User Email:", user.email);
-      console.log("   PERFORMING COMPLETE DATA WIPE...");
+
+      // Find seller profile by user_id (not email)
+      const seller = sellers.find(s => s.user_id === userId);
 
       // 1. Delete buyer profile
-      const buyerProfile = buyerProfiles.find(b => b.user_id === userId);
-      if (buyerProfile) {
-        console.log("   Deleting buyer profile:", buyerProfile.id);
-        await base44.entities.BuyerProfile.delete(buyerProfile.id);
-      }
+      await supabase.from("buyer_profiles").delete().eq("user_id", userId);
 
-      // 2. Delete seller profile and all related data
-      const seller = sellers.find(s => s.created_by === user.email);
+      // 2. Delete seller profile and related data
       if (seller) {
-        console.log("   Deleting seller profile:", seller.id);
-        
         // Delete products
-        const products = await base44.entities.Product.filter({ seller_id: seller.id });
-        console.log("   Deleting", products.length, "products");
-        for (const product of products) {
-          await base44.entities.Product.delete(product.id);
-        }
-
+        await supabase.from("products").delete().eq("seller_id", seller.id);
         // Delete shows
-        const shows = await base44.entities.Show.filter({ seller_id: seller.id });
-        console.log("   Deleting", shows.length, "shows");
-        for (const show of shows) {
-          await base44.entities.Show.delete(show.id);
-        }
-
-        await base44.entities.Seller.delete(seller.id);
+        await supabase.from("shows").delete().eq("seller_id", seller.id);
+        // Delete seller
+        await supabase.from("sellers").delete().eq("id", seller.id);
       }
 
-      // 3. Delete all orders (as buyer)
-      const buyerOrders = await base44.entities.Order.filter({ buyer_id: userId });
-      console.log("   Deleting", buyerOrders.length, "buyer orders");
-      for (const order of buyerOrders) {
-        await base44.entities.Order.delete(order.id);
-      }
+      // 3. Delete orders (as buyer)
+      await supabase.from("orders").delete().eq("buyer_id", userId);
 
-      // 4. Delete all orders (as seller)
+      // 4. Delete orders (as seller)
       if (seller) {
-        const sellerOrders = await base44.entities.Order.filter({ seller_id: seller.id });
-        console.log("   Deleting", sellerOrders.length, "seller orders");
-        for (const order of sellerOrders) {
-          await base44.entities.Order.delete(order.id);
-        }
+        await supabase.from("orders").delete().eq("seller_id", seller.id);
       }
 
-      // 5. Delete all batches
-      const batches = await base44.entities.Batch.filter({ buyer_id: userId });
-      console.log("   Deleting", batches.length, "batches");
-      for (const batch of batches) {
-        await base44.entities.Batch.delete(batch.id);
-      }
+      // 5. Delete batches
+      await supabase.from("batches").delete().eq("buyer_id", userId);
 
       // 6. Delete conversations and messages
-      const buyerConversations = await base44.entities.Conversation.filter({ buyer_id: userId });
-      const sellerConversations = seller ? await base44.entities.Conversation.filter({ seller_id: seller.id }) : [];
-      const allConversations = [...buyerConversations, ...sellerConversations];
+      // First get conversation IDs
+      const { data: buyerConvs } = await supabase
+        .from("conversations")
+        .select("id")
+        .eq("buyer_id", userId);
       
-      console.log("   Deleting", allConversations.length, "conversations");
-      for (const conv of allConversations) {
-        const messages = await base44.entities.Message.filter({ conversation_id: conv.id });
-        for (const msg of messages) {
-          await base44.entities.Message.delete(msg.id);
-        }
-        await base44.entities.Conversation.delete(conv.id);
+      const sellerConvs = seller 
+        ? (await supabase.from("conversations").select("id").eq("seller_id", seller.id)).data || []
+        : [];
+      
+      const allConvIds = [...(buyerConvs || []), ...sellerConvs].map(c => c.id);
+      
+      if (allConvIds.length > 0) {
+        await supabase.from("messages").delete().in("conversation_id", allConvIds);
+        await supabase.from("conversations").delete().in("id", allConvIds);
       }
 
       // 7. Delete follows
-      const follows = await base44.entities.FollowedSeller.filter({ buyer_id: userId });
-      console.log("   Deleting", follows.length, "followed sellers");
-      for (const follow of follows) {
-        await base44.entities.FollowedSeller.delete(follow.id);
-      }
+      await supabase.from("followed_sellers").delete().eq("buyer_id", userId);
 
       // 8. Delete bookmarks
-      const bookmarks = await base44.entities.BookmarkedShow.filter({ buyer_id: userId });
-      console.log("   Deleting", bookmarks.length, "bookmarked shows");
-      for (const bookmark of bookmarks) {
-        await base44.entities.BookmarkedShow.delete(bookmark.id);
-      }
+      await supabase.from("bookmarked_shows").delete().eq("buyer_id", userId);
 
       // 9. Delete community follows
-      const communityFollows = await base44.entities.FollowedCommunity.filter({ user_id: userId });
-      console.log("   Deleting", communityFollows.length, "followed communities");
-      for (const follow of communityFollows) {
-        await base44.entities.FollowedCommunity.delete(follow.id);
-      }
+      await supabase.from("followed_communities").delete().eq("user_id", userId);
 
       // 10. Delete notifications
-      const notifications = await base44.entities.Notification.filter({ user_id: userId });
-      console.log("   Deleting", notifications.length, "notifications");
-      for (const notification of notifications) {
-        await base44.entities.Notification.delete(notification.id);
-      }
+      await supabase.from("notifications").delete().eq("user_id", userId);
 
       // 11. Delete GIVI entries
-      const giviEntries = await base44.entities.GIVIEntry.filter({ user_id: userId });
-      console.log("   Deleting", giviEntries.length, "GIVI entries");
-      for (const entry of giviEntries) {
-        await base44.entities.GIVIEntry.delete(entry.id);
-      }
+      await supabase.from("givi_entries").delete().eq("user_id", userId);
 
-      // 12. Delete reviews (as author)
-      const reviews = await base44.entities.Review.filter({ reviewer_id: userId });
-      console.log("   Deleting", reviews.length, "reviews");
-      for (const review of reviews) {
-        await base44.entities.Review.delete(review.id);
-      }
+      // 12. Delete reviews
+      await supabase.from("reviews").delete().eq("reviewer_id", userId);
 
       // 13. Delete share logs
-      const shareLogs = await base44.entities.ShareLog.filter({ sharer_id: userId });
-      console.log("   Deleting", shareLogs.length, "share logs");
-      for (const log of shareLogs) {
-        await base44.entities.ShareLog.delete(log.id);
-      }
+      await supabase.from("share_logs").delete().eq("sharer_id", userId);
 
-      // 14. Delete viewer bans (as banned viewer)
-      const viewerBans = await base44.entities.ViewerBan.filter({ viewer_id: userId });
-      console.log("   Deleting", viewerBans.length, "viewer bans");
-      for (const ban of viewerBans) {
-        await base44.entities.ViewerBan.delete(ban.id);
-      }
+      // 14. Delete viewer bans
+      await supabase.from("viewer_bans").delete().eq("viewer_id", userId);
 
-      // 15. Delete buyer bans (as banned buyer)
+      // 15. Delete buyer bans
       if (seller) {
-        const buyerBans = await base44.entities.SellerBannedBuyer.filter({ seller_id: seller.id });
-        console.log("   Deleting", buyerBans.length, "seller banned buyers");
-        for (const ban of buyerBans) {
-          await base44.entities.SellerBannedBuyer.delete(ban.id);
-        }
+        await supabase.from("seller_banned_buyers").delete().eq("seller_id", seller.id);
       }
 
-      // 16. CRITICAL: Delete the User record itself (hard delete)
-      console.log("   ⚠️ DELETING USER RECORD - This invalidates authentication");
-      await base44.entities.User.delete(userId);
-      
-      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-      console.log("✅ HARD DELETE COMPLETE");
-      console.log("   User email:", user.email, "has been PERMANENTLY removed");
-      console.log("   All data wiped. User cannot log in with old credentials.");
-      console.log("   If they sign up again, they will be a NEW user.");
-      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+      // 16. Delete the User record itself (hard delete)
+      const { error } = await supabase.from("users").delete().eq("id", userId);
+      if (error) {
+        throw new Error(error.message);
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['all-users-manage'] });
@@ -323,27 +463,30 @@ export default function ManageUsers() {
   };
 
   // Filter users - Show ALL users (remove profile requirement for global account control)
-  const filteredUsers = allUsers.filter(user => {
-    // Skip admin accounts
-    if (user.email === 'admin@surge.org') return false;
+  // Use safe guards to prevent crashes on undefined data
+  const filteredUsers = (allUsers || []).filter(user => {
+    // Skip if user is undefined or admin accounts
+    if (!user || user.email === 'admin@surge.org') return false;
 
-    // Search filter
-    const buyer = buyerMap[user.id];
-    const seller = sellerMap[user.email];
+    // Search filter (with safe optional chaining)
+    // Maps are keyed by user.id (auth user id), not email
+    const buyer = user?.id ? buyerMap[user.id] : null;
+    const seller = user?.id ? sellerMap[user.id] : null;
     const matchesSearch = !searchTerm || 
-      user.email?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      user.full_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      buyer?.full_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      buyer?.phone?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      seller?.business_name?.toLowerCase().includes(searchTerm.toLowerCase());
+      user.email?.toLowerCase()?.includes(searchTerm.toLowerCase()) ||
+      user.full_name?.toLowerCase()?.includes(searchTerm.toLowerCase()) ||
+      buyer?.full_name?.toLowerCase()?.includes(searchTerm.toLowerCase()) ||
+      buyer?.phone?.toLowerCase()?.includes(searchTerm.toLowerCase()) ||
+      seller?.business_name?.toLowerCase()?.includes(searchTerm.toLowerCase());
 
     // Status filter
     const userStatus = user.account_status || 'active';
     const matchesStatus = statusFilter === 'all' || userStatus === statusFilter;
 
     // Role filter - Show ALL users by default
-    const hasBuyerProfile = !!buyerMap[user.id];
-    const hasSellerProfile = !!sellerMap[user.email];
+    // Maps are keyed by user.id (auth user id)
+    const hasBuyerProfile = user?.id ? !!buyerMap[user.id] : false;
+    const hasSellerProfile = user?.id ? !!sellerMap[user.id] : false;
     
     const matchesRole = roleFilter === 'all' || 
       (roleFilter === 'buyer-only' && hasBuyerProfile && !hasSellerProfile) ||
@@ -352,22 +495,6 @@ export default function ManageUsers() {
     // Show ALL users - this is the global account control center
     return matchesSearch && matchesStatus && matchesRole;
   });
-
-  // Debug logging
-  React.useEffect(() => {
-    if (!usersLoading && allUsers.length > 0) {
-      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-      console.log("🔍 MANAGE USERS - Data Summary");
-      console.log("   Total Users:", allUsers.length);
-      console.log("   Buyer Profiles:", buyerProfiles.length);
-      console.log("   Sellers:", sellers.length);
-      console.log("   Users with Buyer Profile:", allUsers.filter(u => buyerMap[u.id]).length);
-      console.log("   Users with Seller Profile:", allUsers.filter(u => sellerMap[u.email]).length);
-      console.log("   Users with BOTH:", allUsers.filter(u => buyerMap[u.id] && sellerMap[u.email]).length);
-      console.log("   Filtered Users (visible):", filteredUsers.length);
-      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    }
-  }, [allUsers, buyerProfiles, sellers, filteredUsers.length, usersLoading]);
 
   const getStatusColor = (status) => {
     switch(status) {
@@ -392,10 +519,12 @@ export default function ManageUsers() {
   };
 
   const getAccountTypeBadge = (user) => {
+    // Maps are keyed by user.id (auth user id)
     const hasBuyerProfile = !!buyerMap[user.id];
-    const hasSellerProfile = !!sellerMap[user.email];
+    const hasSellerProfile = !!sellerMap[user.id];
 
-    if (user.role === 'admin') {
+    // Role from public.users.role (canonical truth)
+    if (user.role === 'admin' || user.role === 'super_admin') {
       return <Badge className="bg-gradient-to-r from-purple-600 to-blue-600 text-white border-0">Admin</Badge>;
     }
     if (hasSellerProfile && hasBuyerProfile) {
@@ -408,25 +537,29 @@ export default function ManageUsers() {
     return <Badge className="bg-gray-100 text-gray-800 border-gray-200">Registered User</Badge>;
   };
 
+  // Check if we have a load error
+  const hasLoadError = !!usersError;
+  
+  // Stats - show "—" when degraded/error, actual counts when loaded successfully
   const stats = [
     {
       label: "Total Accounts",
-      value: allUsers.filter(u => u.email !== 'admin@surge.org').length,
+      value: hasLoadError ? "—" : allUsers.filter(u => u?.email !== 'admin@surge.org').length,
       color: "from-blue-500 to-cyan-500"
     },
     {
       label: "Active",
-      value: allUsers.filter(u => (u.account_status || 'active') === 'active' && u.email !== 'admin@surge.org').length,
+      value: hasLoadError ? "—" : allUsers.filter(u => (u?.account_status || 'active') === 'active' && u?.email !== 'admin@surge.org').length,
       color: "from-green-500 to-emerald-500"
     },
     {
       label: "Suspended",
-      value: allUsers.filter(u => u.account_status === 'suspended').length,
+      value: hasLoadError ? "—" : allUsers.filter(u => u?.account_status === 'suspended').length,
       color: "from-yellow-500 to-orange-500"
     },
     {
       label: "Banned",
-      value: allUsers.filter(u => u.account_status === 'banned').length,
+      value: hasLoadError ? "—" : allUsers.filter(u => u?.account_status === 'banned').length,
       color: "from-red-500 to-pink-500"
     }
   ];
@@ -448,6 +581,48 @@ export default function ManageUsers() {
             <p className="text-gray-600 mt-1">Global account control center - All platform users (buyers & sellers)</p>
           </div>
         </div>
+
+        {/* Degraded Mode Banner */}
+        {isLoadDegraded && (
+          <Alert className="border-orange-300 bg-orange-50">
+            <AlertCircle className="h-5 w-5 text-orange-600" />
+            <AlertDescription className="flex items-center justify-between w-full">
+              <span className="text-orange-900">
+                <strong>Backend temporarily unavailable</strong> (Supabase 503/timeout). Auto-refresh paused. Data may be incomplete.
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => refetchUsers()}
+                className="ml-4 border-orange-300 text-orange-700 hover:bg-orange-100"
+              >
+                <RefreshCw className="w-4 h-4 mr-1" />
+                Retry
+              </Button>
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {/* Generic Error Banner (non-degraded) */}
+        {hasLoadError && !isLoadDegraded && (
+          <Alert className="border-red-300 bg-red-50">
+            <AlertCircle className="h-5 w-5 text-red-600" />
+            <AlertDescription className="flex items-center justify-between w-full">
+              <span className="text-red-900">
+                <strong>Failed to load users:</strong> {usersError?.message || "Unknown error"}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => refetchUsers()}
+                className="ml-4 border-red-300 text-red-700 hover:bg-red-100"
+              >
+                <RefreshCw className="w-4 h-4 mr-1" />
+                Retry
+              </Button>
+            </AlertDescription>
+          </Alert>
+        )}
 
         {/* Stats */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -547,11 +722,24 @@ export default function ManageUsers() {
           <CardContent>
             {usersError ? (
               <div className="text-center py-12">
-                <AlertCircle className="w-16 h-16 text-red-500 mx-auto mb-4" />
-                <h3 className="text-lg font-semibold text-gray-900 mb-2">Error Loading Users</h3>
-                <p className="text-red-600 mb-4">{usersError.message}</p>
+                <AlertCircle className={`w-16 h-16 mx-auto mb-4 ${isLoadDegraded ? "text-orange-500" : "text-red-500"}`} />
+                <h3 className="text-lg font-semibold text-gray-900 mb-2">
+                  {isLoadDegraded ? "Unable to load users (backend unavailable)" : "Error Loading Users"}
+                </h3>
+                <p className={`mb-4 ${isLoadDegraded ? "text-orange-600" : "text-red-600"}`}>
+                  {isLoadDegraded 
+                    ? "Supabase is temporarily unavailable. This does not mean there are 0 users." 
+                    : usersError?.message || "Unknown error"}
+                </p>
                 <p className="text-sm text-gray-600 mb-4">Check browser console for detailed logs</p>
-                <Button onClick={() => queryClient.invalidateQueries({ queryKey: ['all-users-manage'] })}>
+                <Button 
+                  variant="outline"
+                  onClick={() => refetchUsers()}
+                  className={isLoadDegraded 
+                    ? "border-orange-300 text-orange-700 hover:bg-orange-100" 
+                    : "border-red-300 text-red-700 hover:bg-red-100"}
+                >
+                  <RefreshCw className="w-4 h-4 mr-1" />
                   Retry
                 </Button>
               </div>
@@ -585,8 +773,9 @@ export default function ManageUsers() {
             ) : (
               <div className="space-y-3">
                 {filteredUsers.map((user) => {
+                  // Maps are keyed by user.id (auth user id)
                   const buyer = buyerMap[user.id];
-                  const seller = sellerMap[user.email];
+                  const seller = sellerMap[user.id];
                   const status = user.account_status || 'active';
 
                   return (
@@ -617,16 +806,17 @@ export default function ManageUsers() {
                               <p><strong>Email:</strong> {user.email}</p>
                               {buyer?.phone && <p><strong>Phone:</strong> {buyer.phone}</p>}
                               {seller && <p><strong>Business:</strong> {seller.business_name}</p>}
-                              {user.suspension_reason && (
-                                <p className="text-red-600"><strong>Reason:</strong> {user.suspension_reason}</p>
+                              {user.account_status_reason && (
+                                <p className="text-red-600"><strong>Reason:</strong> {user.account_status_reason}</p>
                               )}
                             </div>
                           </div>
 
-                          {/* Safety Status Indicators */}
-                          <div className="flex flex-col gap-1 flex-shrink-0 min-w-[100px]">
+                          {/* Profile & Onboarding Status Indicators */}
+                          <div className="flex flex-col gap-1 flex-shrink-0 min-w-[120px]">
+                            {/* Buyer Profile Badge - based on buyer_profiles.user_id existence */}
                             <div className="flex items-center gap-1">
-                              {user.buyer_safety_agreed ? (
+                              {buyer ? (
                                 <Badge className="bg-green-100 text-green-800 text-[10px] px-1.5 py-0.5">
                                   <CheckCircle className="w-2.5 h-2.5 mr-0.5" />
                                   Buyer ✓
@@ -637,43 +827,25 @@ export default function ManageUsers() {
                                 </Badge>
                               )}
                             </div>
+                            {/* Seller Profile Badge - based on sellers.user_id existence */}
                             <div className="flex items-center gap-1">
-                              {/* CRITICAL: Check BOTH User.seller_safety_agreed AND Seller entity status */}
-                              {(() => {
-                                const sellerProfile = seller; // seller from sellerMap[user.email]
-                                const sellerStatus = sellerProfile?.status || user.seller_status;
-                                const hasSellerSafetyAgreed = user.seller_safety_agreed;
-                                const isApprovedSeller = sellerStatus === "approved";
-
-                                if (isApprovedSeller) {
-                                  return (
-                                    <Badge className="bg-green-100 text-green-800 text-[10px] px-1.5 py-0.5">
-                                      <CheckCircle className="w-2.5 h-2.5 mr-0.5" />
-                                      Seller ✓
-                                    </Badge>
-                                  );
-                                } else if (hasSellerSafetyAgreed && sellerStatus === "pending") {
-                                  return (
-                                    <Badge className="bg-yellow-100 text-yellow-800 text-[10px] px-1.5 py-0.5">
-                                      Seller (Pending)
-                                    </Badge>
-                                  );
-                                } else if (hasSellerSafetyAgreed) {
-                                  return (
-                                    <Badge className="bg-blue-100 text-blue-800 text-[10px] px-1.5 py-0.5">
-                                      Seller Safety ✓
-                                    </Badge>
-                                  );
-                                } else {
-                                  return (
-                                    <Badge className="bg-gray-100 text-gray-600 text-[10px] px-1.5 py-0.5">
-                                      Seller ✗
-                                    </Badge>
-                                  );
-                                }
-                              })()}
+                              {seller ? (
+                                <Badge className={`text-[10px] px-1.5 py-0.5 ${
+                                  seller.status === "approved" ? "bg-green-100 text-green-800" :
+                                  seller.status === "pending" ? "bg-yellow-100 text-yellow-800" :
+                                  seller.status === "declined" ? "bg-red-100 text-red-800" :
+                                  "bg-blue-100 text-blue-800"
+                                }`}>
+                                  {seller.status === "approved" && <CheckCircle className="w-2.5 h-2.5 mr-0.5 inline" />}
+                                  Seller {seller.status === "approved" ? "✓" : `(${seller.status || "unknown"})`}
+                                </Badge>
+                              ) : (
+                                <Badge className="bg-gray-100 text-gray-600 text-[10px] px-1.5 py-0.5">
+                                  Seller ✗
+                                </Badge>
+                              )}
                             </div>
-                            {/* Show Seller entity status if exists */}
+                            {/* Seller Approval Status (canonical: sellers.status) */}
                             {seller && (
                               <Badge className={`text-[10px] px-1.5 py-0.5 ${
                                 seller.status === "approved" ? "bg-green-100 text-green-800" :
@@ -682,9 +854,94 @@ export default function ManageUsers() {
                                 seller.status === "suspended" ? "bg-orange-100 text-orange-800" :
                                 "bg-gray-100 text-gray-800"
                               }`}>
-                                Seller: {seller.status}
+                                Status: {seller.status || "unknown"}
                               </Badge>
                             )}
+                            {/* Stripe Connected (if seller) */}
+                            {seller && (
+                              <Badge className={`text-[10px] px-1.5 py-0.5 ${
+                                (seller.stripe_account_id || seller.stripe_connected) 
+                                  ? "bg-purple-100 text-purple-800" 
+                                  : "bg-gray-100 text-gray-500"
+                              }`}>
+                                Stripe: {(seller.stripe_account_id || seller.stripe_connected) ? "Connected" : "Not Connected"}
+                              </Badge>
+                            )}
+                            {/* Onboarding Completeness Summary using Canonical Helpers */}
+                            {(() => {
+                              // Use canonical onboarding state machine
+                              const readiness = getOnboardingReadiness(user, buyer, seller);
+                              
+                              // Build list of missing buyer requirements
+                              const buyerMissing = [];
+                              if (buyer) {
+                                if (!readiness.buyerSafetyAgreed) buyerMissing.push("Safety Agreement");
+                              }
+
+                              // Build list of missing seller requirements
+                              // NOTE: Stripe is listed but NOT required for seller access
+                              const sellerMissing = [];
+                              if (seller) {
+                                if (!readiness.sellerApproved) sellerMissing.push("Approval");
+                                if (!readiness.sellerSafetyAgreed) sellerMissing.push("Safety Agreement");
+                                if (!readiness.sellerOnboardingCompleted) sellerMissing.push("Onboarding Steps");
+                                if (!readiness.identityVerified) sellerMissing.push("Identity");
+                              }
+
+                              return (
+                                <div className="flex flex-col gap-0.5">
+                                  {/* Buyer Access Status (using canonical helper) */}
+                                  {buyer && (
+                                    <Badge className={`text-[10px] px-1.5 py-0.5 ${
+                                      readiness.buyerAccessReady
+                                        ? "bg-teal-100 text-teal-800"
+                                        : "bg-amber-100 text-amber-700"
+                                    }`}>
+                                      B-Access: {readiness.buyerAccessReady ? "Ready ✓" : "Incomplete"}
+                                    </Badge>
+                                  )}
+                                  {buyer && buyerMissing.length > 0 && (
+                                    <span className="text-[9px] text-amber-600 ml-1">
+                                      Missing: {buyerMissing.join(", ")}
+                                    </span>
+                                  )}
+                                  
+                                  {/* Seller Access Status (using canonical helper - NO Stripe required) */}
+                                  {seller && (
+                                    <Badge className={`text-[10px] px-1.5 py-0.5 ${
+                                      readiness.sellerAccessReady
+                                        ? "bg-teal-100 text-teal-800"
+                                        : "bg-amber-100 text-amber-700"
+                                    }`}>
+                                      S-Access: {readiness.sellerAccessReady ? "Ready ✓" : "Incomplete"}
+                                    </Badge>
+                                  )}
+                                  {seller && sellerMissing.length > 0 && (
+                                    <span className="text-[9px] text-amber-600 ml-1">
+                                      Missing: {sellerMissing.join(", ")}
+                                    </span>
+                                  )}
+                                  
+                                  {/* Seller Payment Status (Stripe required - display only) */}
+                                  {seller && readiness.sellerAccessReady && (
+                                    <Badge className={`text-[10px] px-1.5 py-0.5 ${
+                                      readiness.sellerPaymentReady
+                                        ? "bg-purple-100 text-purple-800"
+                                        : "bg-gray-100 text-gray-500"
+                                    }`}>
+                                      S-Payment: {readiness.sellerPaymentReady ? "Ready ✓" : "No Stripe"}
+                                    </Badge>
+                                  )}
+                                  
+                                  {/* No profiles at all */}
+                                  {!buyer && !seller && (
+                                    <Badge className="bg-gray-100 text-gray-500 text-[10px] px-1.5 py-0.5">
+                                      No Profiles
+                                    </Badge>
+                                  )}
+                                </div>
+                              );
+                            })()}
                           </div>
 
                           {/* Actions */}
@@ -784,7 +1041,7 @@ export default function ManageUsers() {
         onOpenChange={(open) => setProfileDialog({ ...profileDialog, open })}
         user={profileDialog.user}
         buyerProfile={profileDialog.user ? buyerMap[profileDialog.user.id] : null}
-        sellerProfile={profileDialog.user ? sellerMap[profileDialog.user.email] : null}
+        sellerProfile={profileDialog.user ? sellerMap[profileDialog.user.id] : null}
       />
 
       {/* Action Confirmation Dialog */}

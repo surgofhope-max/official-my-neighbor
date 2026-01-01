@@ -2,7 +2,10 @@
  * Supabase Edge Function: sync-ivs-stream-status
  *
  * Synchronizes AWS IVS stream runtime state with Show records.
- * This is the authoritative source for determining live/offline status.
+ * 
+ * ⚠️  NOTE: Under Strategy A, this is NOT the authoritative source for
+ *     business lifecycle. Human actions (Start Broadcast, End Show) are
+ *     authoritative. This function provides IVS telemetry only.
  *
  * Usage:
  * - Called on a schedule (cron) to keep all shows in sync
@@ -13,6 +16,29 @@
  * - Requires admin auth or service role key
  * - AWS credentials never exposed
  * - No stream keys accessed
+ */
+
+/*
+ * ═══════════════════════════════════════════════════════════════════════════
+ * STRATEGY A — IMPLEMENTED
+ * ═══════════════════════════════════════════════════════════════════════════
+ * 
+ * stream_status lifecycle: starting | live | ended
+ * 
+ * This edge function is ADVISORY ONLY. It:
+ * ✅ CONFIRMS live: promotes "starting" → "live" when IVS confirms stream
+ * ✅ Updates viewer_count while stream is active
+ * 
+ * It NEVER:
+ * ❌ Writes stream_status = "offline" or "ended"
+ * ❌ Sets status = "ended" 
+ * ❌ Terminates shows on IVS disconnect
+ * ❌ Overrides human intent
+ * 
+ * Human actions (Start Broadcast, End Show) are the ONLY authority
+ * for lifecycle transitions. IVS can confirm, but never terminate.
+ * 
+ * ═══════════════════════════════════════════════════════════════════════════
  */
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
@@ -234,6 +260,7 @@ interface ShowRecord {
   is_streaming: boolean | null;
   status: string | null;
   viewer_count: number | null;
+  started_at: string | null;  // Added for Strategy A: preserve human-set timestamp
 }
 
 interface SyncResult {
@@ -248,17 +275,26 @@ interface SyncResult {
 /**
  * Determine the new stream_status based on AWS IVS state
  */
-function mapIvsStateToStatus(stream: StreamInfo | null): string {
+// ┌─────────────────────────────────────────────────────────────────────────┐
+// │ STRATEGY A IMPLEMENTED:                                                 │
+// │                                                                         │
+// │ - Returns "live" ONLY when IVS confirms stream.state === "LIVE"         │
+// │ - Returns null for all other cases (offline, no stream, etc.)           │
+// │ - Null means: DO NOT mutate stream_status                               │
+// │                                                                         │
+// │ This ensures IVS can CONFIRM live, but never DOWNGRADE or TERMINATE.    │
+// └─────────────────────────────────────────────────────────────────────────┘
+function mapIvsStateToStatus(stream: StreamInfo | null): string | null {
   if (!stream) {
-    return "offline";
+    return null;  // No stream = no lifecycle mutation
   }
 
   // IVS stream states
   switch (stream.state) {
     case "LIVE":
-      return "live";
+      return "live";  // IVS confirms stream is active
     default:
-      return "offline";
+      return null;  // All other states = no lifecycle mutation
   }
 }
 
@@ -291,76 +327,102 @@ async function syncShowStreamStatus(
     return result;
   }
 
-  // Determine new status
-  const newStatus = mapIvsStateToStatus(stream);
-  result.newStatus = newStatus;
+  // Determine IVS-reported status (null = no change recommended)
+  const ivsStatus = mapIvsStateToStatus(stream);
+  
+  // ┌─────────────────────────────────────────────────────────────────────────┐
+  // │ STRATEGY A IMPLEMENTED:                                                 │
+  // │                                                                         │
+  // │ IVS sync is ADVISORY ONLY. It can:                                      │
+  // │ - CONFIRM live (promote "starting" → "live" when IVS confirms)          │
+  // │ - Update viewer_count while live                                        │
+  // │                                                                         │
+  // │ It must NEVER:                                                          │
+  // │ - Downgrade stream_status                                               │
+  // │ - Set status = "ended"                                                  │
+  // │ - Write ended_at                                                        │
+  // │ - Override human intent                                                 │
+  // └─────────────────────────────────────────────────────────────────────────┘
 
-  // Check if status has changed
-  const statusChanged = show.stream_status !== newStatus;
-  const streamingChanged = show.is_streaming !== (newStatus === "live");
-
-  if (!statusChanged && !streamingChanged) {
-    // No changes needed, but update viewer count if live
-    if (stream && stream.viewerCount !== show.viewer_count) {
+  // CASE 1: IVS reports no actionable state (null) — update viewer count only if live
+  if (ivsStatus === null) {
+    result.newStatus = show.stream_status || "unknown";
+    
+    // If show is currently live, update viewer count from IVS (even if stream temporarily unavailable)
+    if (show.stream_status === "live" && stream && stream.viewerCount !== show.viewer_count) {
       await supabaseAdmin
         .from("shows")
         .update({ viewer_count: stream.viewerCount })
         .eq("id", show.id);
       result.viewerCount = stream.viewerCount;
     }
+    
+    // No lifecycle mutation — IVS offline does NOT end the show
+    console.log(`[SYNC-IVS] Show ${show.id}: IVS offline/unavailable — no lifecycle change (Strategy A)`);
     return result;
   }
 
-  result.changed = true;
-
-  // Build update object
-  const updates: Record<string, unknown> = {
-    stream_status: newStatus,
-    is_streaming: newStatus === "live",
-  };
-
-  // Handle state transitions
-  if (newStatus === "live" && show.stream_status !== "live") {
-    // Stream just went live
-    updates.went_live_at = new Date().toISOString();
-    updates.actual_start = new Date().toISOString();
+  // CASE 2: IVS confirms stream is LIVE
+  if (ivsStatus === "live") {
+    result.newStatus = "live";
     
-    // Also update show status if it was scheduled
-    if (show.status === "scheduled") {
-      updates.status = "live";
-    }
-  } else if (newStatus === "offline" && show.stream_status === "live") {
-    // Stream just ended
-    updates.ended_at = new Date().toISOString();
-    updates.actual_end = new Date().toISOString();
+    // Only promote if show is in "starting" state (human clicked Start Broadcast)
+    // This prevents auto-promoting scheduled shows that haven't been started by seller
+    const canPromote = show.stream_status === "starting" || show.stream_status === "live";
     
-    // Optionally mark show as ended (only if it was live)
-    if (show.status === "live") {
-      updates.status = "ended";
+    if (!canPromote) {
+      // Show is not in a promotable state — log but don't mutate
+      console.log(`[SYNC-IVS] Show ${show.id}: IVS is LIVE but show.stream_status="${show.stream_status}" — not promoting (Strategy A)`);
+      
+      // Still update viewer count
+      if (stream && stream.viewerCount !== show.viewer_count) {
+        await supabaseAdmin
+          .from("shows")
+          .update({ viewer_count: stream.viewerCount })
+          .eq("id", show.id);
+        result.viewerCount = stream.viewerCount;
+      }
+      return result;
     }
+    
+    // Build update object for promotion to live
+    const updates: Record<string, unknown> = {
+      is_streaming: true,
+      viewer_count: stream?.viewerCount ?? 0,
+    };
+    result.viewerCount = stream?.viewerCount ?? 0;
+    
+    // Only update stream_status if not already live
+    if (show.stream_status !== "live") {
+      updates.stream_status = "live";
+      updates.started_at = show.started_at || new Date().toISOString();  // Preserve if already set
+      result.changed = true;
+      
+      // Also update show.status if it was scheduled or starting
+      if (show.status === "scheduled") {
+        updates.status = "live";
+      }
+      
+      console.log(`[SYNC-IVS] Show ${show.id}: Promoting to LIVE (was "${show.stream_status}")`);
+    }
+    
+    // Perform the update
+    const { error: updateError } = await supabaseAdmin
+      .from("shows")
+      .update(updates)
+      .eq("id", show.id);
+
+    if (updateError) {
+      console.error(`[SYNC-IVS] Failed to update show ${show.id}:`, updateError.message);
+      result.error = "Database update failed";
+    }
+    
+    return result;
   }
-
-  // Update viewer count if available
-  if (stream) {
-    updates.viewer_count = stream.viewerCount;
-    result.viewerCount = stream.viewerCount;
-  }
-
-  // Perform the update
-  const { error: updateError } = await supabaseAdmin
-    .from("shows")
-    .update(updates)
-    .eq("id", show.id);
-
-  if (updateError) {
-    console.error(`[SYNC-IVS] Failed to update show ${show.id}:`, updateError.message);
-    result.error = "Database update failed";
-  } else {
-    console.log(
-      `[SYNC-IVS] Show ${show.id}: ${show.stream_status || "null"} → ${newStatus}`
-    );
-  }
-
+  
+  // CASE 3: Unexpected ivsStatus value (should not happen with current mapIvsStateToStatus)
+  console.warn(`[SYNC-IVS] Show ${show.id}: Unexpected ivsStatus="${ivsStatus}" — ignoring`);
+  result.newStatus = show.stream_status || "unknown";
   return result;
 }
 
@@ -466,7 +528,7 @@ serve(async (req: Request) => {
       // Sync single show
       const { data, error } = await supabaseAdmin
         .from("shows")
-        .select("id, ivs_channel_arn, stream_status, is_streaming, status, viewer_count")
+        .select("id, ivs_channel_arn, stream_status, is_streaming, status, viewer_count, started_at")
         .eq("id", showId)
         .single();
 
@@ -486,7 +548,7 @@ serve(async (req: Request) => {
       // Only sync shows that are potentially live or recently active
       const { data, error } = await supabaseAdmin
         .from("shows")
-        .select("id, ivs_channel_arn, stream_status, is_streaming, status, viewer_count")
+        .select("id, ivs_channel_arn, stream_status, is_streaming, status, viewer_count, started_at")
         .not("ivs_channel_arn", "is", null)
         .in("status", ["scheduled", "live"]) // Only sync active shows
         .order("created_date", { ascending: false })
