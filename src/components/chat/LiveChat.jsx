@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useRef } from "react";
 import { supabase } from "@/lib/supabase/supabaseClient";
-import { supabaseApi as base44 } from "@/api/supabaseClient";
+import { getLiveShowMessages, sendLiveShowMessage } from "@/api/liveChat";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Send, Pin, Users, MessageCircle, MoreVertical, Ban, AlertCircle } from "lucide-react";
+import { Send, Users, MoreVertical, Ban, AlertCircle } from "lucide-react";
 import { format } from "date-fns";
 import {
   DropdownMenu,
@@ -47,11 +47,18 @@ export default function LiveChat({ showId, isSeller = false, isEmbedded = false,
     queryKey: ['viewer-ban-check', sellerId, user?.id],
     queryFn: async () => {
       if (!sellerId || !user?.id) return null;
-      const bans = await base44.entities.ViewerBan.filter({
-        seller_id: sellerId,
-        viewer_id: user.id
-      });
-      return bans.length > 0 ? bans[0] : null;
+      const { data, error } = await supabase
+        .from('viewer_bans')
+        .select('id, ban_type, reason')
+        .eq('seller_id', sellerId)
+        .eq('viewer_id', user.id)
+        .maybeSingle();
+
+      if (error) {
+        console.warn('[CHAT] Failed to check ban status:', error.message);
+        return null;
+      }
+      return data;
     },
     enabled: !!sellerId && !!user && !isSeller,
     staleTime: 300000, // 5 minutes - ban status rarely changes
@@ -59,57 +66,49 @@ export default function LiveChat({ showId, isSeller = false, isEmbedded = false,
     refetchOnWindowFocus: false
   });
 
-  const { data: messages = [] } = useQuery({
+  const { data: messagesResult } = useQuery({
     queryKey: ['chat-messages', showId],
-    queryFn: () => base44.entities.ChatMessage.filter({ show_id: showId }, 'created_date'),
-    refetchInterval: 2000,
-    enabled: !!showId
+    queryFn: async () => {
+      const result = await getLiveShowMessages(showId, { limit: 200 });
+      return result;
+    },
+    enabled: !!showId,
+    staleTime: 3000
   });
+
+  const messages = messagesResult?.messages || [];
 
   const sendMessageMutation = useMutation({
-    mutationFn: (messageData) => base44.entities.ChatMessage.create(messageData),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['chat-messages', showId] });
-      setMessage("");
+    mutationFn: async (trimmedMessage) => {
+      const senderRole = isSeller ? "seller" : "viewer";
+      return await sendLiveShowMessage(showId, trimmedMessage, senderRole);
     },
-  });
-
-  const pinMessageMutation = useMutation({
-    mutationFn: ({ id, isPinned }) => base44.entities.ChatMessage.update(id, { is_pinned: isPinned }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['chat-messages', showId] });
+    onSuccess: (result) => {
+      if (!result.error) {
+        queryClient.invalidateQueries({ queryKey: ['chat-messages', showId] });
+        setMessage("");
+      }
     },
   });
 
   const handleSend = (e) => {
     e.preventDefault();
-    if (!message.trim() || !user) return;
+    const trimmedMessage = message.trim();
+    if (!trimmedMessage || !user) return;
 
     if (userBan && (userBan.ban_type === 'chat' || userBan.ban_type === 'view' || userBan.ban_type === 'full')) {
       alert("You have been banned from chatting in this seller's shows.");
       return;
     }
 
-    sendMessageMutation.mutate({
-      show_id: showId,
-      user_id: user.id,
-      user_name: user.full_name || user.email.split('@')[0],
-      user_avatar: user.profile_image_url || null,
-      message: message.trim(),
-      is_seller: isSeller
-    });
-  };
-
-  const handlePin = (msg) => {
-    if (!isSeller) return;
-    pinMessageMutation.mutate({ id: msg.id, isPinned: !msg.is_pinned });
+    sendMessageMutation.mutate(trimmedMessage);
   };
 
   const handleBanViewer = (msg) => {
     console.log("🚫 Ban viewer clicked for message:", msg);
     setBanningViewer({
-      user_id: msg.user_id,
-      user_name: msg.user_name
+      user_id: msg.sender_id,
+      user_name: msg.sender_name || msg.sender_id
     });
   };
 
@@ -117,43 +116,25 @@ export default function LiveChat({ showId, isSeller = false, isEmbedded = false,
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  const pinnedMessages = messages.filter(m => m.is_pinned);
-  const regularMessages = messages.filter(m => !m.is_pinned);
+  // Note: live_show_messages table doesn't support pinning
+  const regularMessages = messages;
   const isChatBanned = userBan && (userBan.ban_type === 'chat' || userBan.ban_type === 'view' || userBan.ban_type === 'full');
 
   if (isEmbedded) {
     return (
       <div className="flex flex-col h-full bg-white rounded-lg shadow-lg overflow-hidden">
-        {pinnedMessages.length > 0 && (
-          <div className="bg-yellow-50 border-b border-yellow-200 p-2 space-y-1">
-            {pinnedMessages.map((msg) => (
-              <div key={msg.id} className="flex items-start gap-2 text-xs">
-                <Pin className="w-3 h-3 text-yellow-600 flex-shrink-0 mt-0.5" />
-                <div className="flex-1 min-w-0">
-                  <span className="font-semibold text-yellow-900">{msg.user_name}:</span>{" "}
-                  <span className="text-yellow-800">{msg.message}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
         <div className="flex-1 overflow-y-auto p-3 space-y-2 bg-gray-50 pb-4">
           {regularMessages.map((msg) => (
             <div key={msg.id} className="flex items-start gap-2 text-sm">
               <div className="w-6 h-6 rounded-full bg-gradient-to-r from-purple-600 to-blue-600 flex items-center justify-center text-white font-semibold text-xs flex-shrink-0">
-                {msg.user_avatar ? (
-                  <img src={msg.user_avatar} alt={msg.user_name} className="w-full h-full rounded-full object-cover" />
-                ) : (
-                  msg.user_name[0].toUpperCase()
-                )}
+                {(msg.sender_name || msg.sender_id)?.[0]?.toUpperCase() || '?'}
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-baseline gap-1">
-                  <span className={`font-semibold text-xs ${msg.is_seller ? 'text-purple-600' : 'text-gray-900'}`}>
-                    {msg.user_name}
+                  <span className={`font-semibold text-xs ${msg.sender_role === 'seller' ? 'text-purple-600' : 'text-gray-900'}`}>
+                    {msg.sender_name || msg.sender_id}
                   </span>
-                  {msg.is_seller && (
+                  {msg.sender_role === 'seller' && (
                     <Badge className="bg-purple-100 text-purple-800 border-purple-200 border text-[10px] px-1 py-0">
                       Seller
                     </Badge>
@@ -172,6 +153,10 @@ export default function LiveChat({ showId, isSeller = false, isEmbedded = false,
               You are banned from chatting
             </div>
           ) : user ? (
+            <>
+            {console.log("[CHAT DEBUG DESKTOP] user:", user)}
+            {console.log("[CHAT DEBUG DESKTOP] isSeller:", isSeller)}
+            {console.log("[CHAT DEBUG DESKTOP] showId:", showId)}
             <div className="flex gap-2">
               <Input
                 value={message}
@@ -189,6 +174,7 @@ export default function LiveChat({ showId, isSeller = false, isEmbedded = false,
                 <Send className="w-4 h-4" />
               </Button>
             </div>
+            </>
           ) : (
             <div className="text-center text-gray-500 py-2 text-xs">
               Log in to chat
@@ -212,20 +198,6 @@ export default function LiveChat({ showId, isSeller = false, isEmbedded = false,
       </CardHeader>
 
       <CardContent className="flex-1 flex flex-col p-0 overflow-hidden">
-        {pinnedMessages.length > 0 && (
-          <div className="bg-yellow-50 border-b border-yellow-200 p-3 space-y-2">
-            {pinnedMessages.map((msg) => (
-              <div key={msg.id} className="flex items-start gap-2 text-sm">
-                <Pin className="w-4 h-4 text-yellow-600 flex-shrink-0 mt-0.5" />
-                <div className="flex-1">
-                  <span className="font-semibold text-yellow-900">{msg.user_name}:</span>{" "}
-                  <span className="text-yellow-800">{msg.message}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
         <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-gray-50">
           {regularMessages.length === 0 && (
             <div className="text-center text-gray-500 py-8">
@@ -237,40 +209,28 @@ export default function LiveChat({ showId, isSeller = false, isEmbedded = false,
           {regularMessages.map((msg) => (
             <div key={msg.id} className="flex items-start gap-3 group">
               <div className="w-8 h-8 rounded-full bg-gradient-to-r from-purple-600 to-blue-600 flex items-center justify-center text-white font-semibold text-sm flex-shrink-0">
-                {msg.user_avatar ? (
-                  <img src={msg.user_avatar} alt={msg.user_name} className="w-full h-full rounded-full object-cover" />
-                ) : (
-                  msg.user_name[0].toUpperCase()
-                )}
+                {(msg.sender_name || msg.sender_id)?.[0]?.toUpperCase() || '?'}
               </div>
 
               <div className="flex-1 min-w-0">
                 <div className="flex items-baseline gap-2 flex-wrap">
-                  <span className={`font-semibold text-sm ${msg.is_seller ? 'text-purple-600' : 'text-gray-900'}`}>
-                    {msg.user_name}
+                  <span className={`font-semibold text-sm ${msg.sender_role === 'seller' ? 'text-purple-600' : 'text-gray-900'}`}>
+                    {msg.sender_name || msg.sender_id}
                   </span>
-                  {msg.is_seller && (
+                  {msg.sender_role === 'seller' && (
                     <Badge className="bg-purple-100 text-purple-800 border-purple-200 border text-xs">
                       Seller
                     </Badge>
                   )}
                   <span className="text-xs text-gray-500">
-                    {format(new Date(msg.created_date), 'h:mm a')}
+                    {format(new Date(msg.created_at), 'h:mm a')}
                   </span>
                 </div>
                 <p className="text-sm text-gray-700 break-words">{msg.message}</p>
               </div>
 
-              {isSeller && !msg.is_seller && (
+              {isSeller && msg.sender_role !== 'seller' && (
                 <div className="opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
-                  <button
-                    onClick={() => handlePin(msg)}
-                    className="p-1 hover:bg-gray-200 rounded"
-                    title={msg.is_pinned ? "Unpin message" : "Pin message"}
-                  >
-                    <Pin className={`w-4 h-4 ${msg.is_pinned ? 'text-yellow-600' : 'text-gray-600'}`} />
-                  </button>
-                  
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <button className="p-1 hover:bg-gray-200 rounded" title="More options">
@@ -283,7 +243,7 @@ export default function LiveChat({ showId, isSeller = false, isEmbedded = false,
                         onClick={() => handleBanViewer(msg)}
                       >
                         <Ban className="w-4 h-4 mr-2" />
-                        Ban Viewer
+                        Mute from chat
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>

@@ -5,7 +5,7 @@ import { queryClientInstance } from '@/lib/query-client'
 import VisualEditAgent from '@/lib/VisualEditAgent'
 import NavigationTracker from '@/lib/NavigationTracker'
 import { pagesConfig } from './pages.config'
-import { BrowserRouter as Router, Route, Routes } from 'react-router-dom';
+import { BrowserRouter as Router, Route, Routes, useLocation } from 'react-router-dom';
 import { setupIframeMessaging } from './lib/iframe-messaging';
 import PageNotFound from './lib/PageNotFound';
 import {
@@ -26,6 +26,11 @@ const LayoutWrapper = ({ children, currentPageName }) => Layout ?
 
 const AuthenticatedApp = () => {
   const { isLoadingAuth, isLoadingPublicSettings, authError, isAuthenticated, navigateToLogin } = useAuth();
+  const location = useLocation();
+  
+  // Derive current page name from URL path (enables route guards)
+  const pathKey = location.pathname.replace(/^\/+/, "").split("?")[0].split("#")[0];
+  const currentPageName = (pathKey || mainPageKey || "marketplace").toLowerCase();
 
   // Show loading placeholder while checking auth
   if (isLoadingAuth) {
@@ -45,7 +50,7 @@ const AuthenticatedApp = () => {
 
   // Render the main app
   return (
-    <LayoutWrapper currentPageName={mainPageKey}>
+    <LayoutWrapper currentPageName={currentPageName}>
       <Routes>
         <Route path="/" element={<MainPage />} />
         {Object.entries(Pages).map(([path, Page]) => (

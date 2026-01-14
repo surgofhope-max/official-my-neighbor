@@ -398,7 +398,7 @@ export default function CommunityPage() {
                     key={show.id}
                     show={show}
                     seller={sellersMap[show.seller_id]}
-                    onClick={() => navigate(createPageUrl(`LiveShow?showId=${show.id}`))}
+                    onClick={() => navigate(createPageUrl("LiveShow") + `?showId=${show.id}`)}
                   />
                 ))}
               </div>

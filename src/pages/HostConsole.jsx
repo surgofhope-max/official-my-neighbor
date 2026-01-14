@@ -27,10 +27,7 @@ import {
   Package,
   Search,
   Star,
-  Eye,
-  EyeOff,
   Video,
-  Smartphone,
   Monitor,
   AlertTriangle,
   XCircle,
@@ -46,7 +43,6 @@ import {
   QrCode,
   ShoppingBag
 } from "lucide-react";
-import WebRTCBroadcaster from "../components/streaming/WebRTCBroadcaster";
 import HostBottomControls from "../components/host/HostBottomControls";
 import SellerProductDetailCard from "../components/host/SellerProductDetailCard";
 import LiveChat from "../components/chat/LiveChat";
@@ -60,6 +56,7 @@ import GIVIWinnerBanner from "../components/givi/GIVIWinnerBanner";
 import BottomDrawer from "../components/host/BottomDrawer";
 import PickupVerification from "../components/fulfillment/PickupVerification";
 import BatchFulfillmentList from "../components/fulfillment/BatchFulfillmentList";
+import DailyBroadcaster from "@/components/streaming/DailyBroadcaster";
 
 export default function HostConsole() {
   const navigate = useNavigate();
@@ -67,7 +64,11 @@ export default function HostConsole() {
   const urlParams = new URLSearchParams(window.location.search);
   const showId = urlParams.get('showId');
   const [searchTerm, setSearchTerm] = useState("");
-  const [streamingMethod, setStreamingMethod] = useState("in-app");
+  // Daily In-App Camera State
+  const [dailyRoomUrl, setDailyRoomUrl] = useState(null);
+  const [dailyToken, setDailyToken] = useState(null);
+  const [dailyLoading, setDailyLoading] = useState(false);
+  const [dailyError, setDailyError] = useState(null);
   const [currentUser, setCurrentUser] = useState(null);
   const [currentSeller, setCurrentSeller] = useState(null);
   const [accessError, setAccessError] = useState(null);
@@ -91,6 +92,11 @@ export default function HostConsole() {
   const [showFulfillmentDialog, setShowFulfillmentDialog] = useState(false);
   const [showPurchaseBanner, setShowPurchaseBanner] = useState(false);
   
+  // Viewport detection to prevent dual DailyBroadcaster mount
+  const [isDesktop, setIsDesktop] = useState(() =>
+    window.matchMedia("(min-width: 640px)").matches
+  );
+  
   // Ref to prevent NO_SHOWID guard from re-triggering after initial mount
   const noShowIdGuardRan = useRef(false);
   const lastSalesCountRef = useRef(null);
@@ -105,6 +111,22 @@ export default function HostConsole() {
       return;
     }
   }, []); // Empty deps = only on mount
+
+  // Viewport listener for single DailyBroadcaster mount
+  useEffect(() => {
+    const mql = window.matchMedia("(min-width: 640px)");
+    const handler = (e) => setIsDesktop(e.matches);
+
+    if (mql.addEventListener) mql.addEventListener("change", handler);
+    else mql.addListener(handler);
+
+    setIsDesktop(mql.matches);
+
+    return () => {
+      if (mql.removeEventListener) mql.removeEventListener("change", handler);
+      else mql.removeListener(handler);
+    };
+  }, []);
 
   // ENHANCED: Load user and seller with better error handling
   useEffect(() => {
@@ -264,6 +286,13 @@ export default function HostConsole() {
     show?.stream_status === 'starting' ||
     show?.stream_status === 'live';
 
+  // Sync Daily room URL from show data when it loads/changes
+  useEffect(() => {
+    if (show?.daily_room_url) {
+      setDailyRoomUrl(show.daily_room_url);
+    }
+  }, [show?.daily_room_url]);
+
   // Access control
   useEffect(() => {
     // Only run access control after user, show, and showSeller are loaded and not in a loading state
@@ -357,7 +386,7 @@ export default function HostConsole() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from('orders')
-        .select('id, show_id, price, delivery_fee, created_at')
+        .select('id,show_id,price,delivery_fee,created_at,product_id,buyer_id,buyer:buyer_id(display_name),product:product_id(image_urls,title)')
         .eq('show_id', showId);
 
       if (error) throw error;
@@ -629,100 +658,100 @@ export default function HostConsole() {
     console.log("⏹️ HostConsole - Stream stopped for ShowID:", showId);
   };
 
+  // Check if broadcasting is allowed based on show status
+  const isBroadcastBlocked = show?.status === "ended" || show?.status === "cancelled";
+  
+  // Check if show is already live (one-way: cannot revert)
+  const isAlreadyLive = show?.stream_status === "live";
+
   // ═══════════════════════════════════════════════════════════════════════════
-  // LIFECYCLE: Start Broadcast - DB-driven live flip
+  // DAILY IN-APP CAMERA BROADCAST
   // ═══════════════════════════════════════════════════════════════════════════
-  const startBroadcastMutation = useMutation({
-    mutationFn: async () => {
-      console.log("📡 HostConsole - Starting broadcast for show:", showId);
+  const startDailyBroadcast = async () => {
+    if (!show?.id) return;
+    
+    setDailyLoading(true);
+    setDailyError(null);
+    
+    try {
+      // ═══════════════════════════════════════════════════════════════════════════
+      // TEMP DEBUG: Log show state BEFORE daily-create-room call
+      // ═══════════════════════════════════════════════════════════════════════════
+      console.log("[DAILY-DEBUG] PRE-CALL STATE:", {
+        show_id: show?.id,
+        streaming_provider: show?.streaming_provider,
+        status: show?.status,
+        stream_status: show?.stream_status,
+        user_id: currentUser?.id,
+        timestamp: new Date().toISOString()
+      });
       
-      // Build payload - stream_status="live" triggers viewer playback
-      // Only set started_at if not already set (avoid overwriting)
-      const payload = {
-        status: "live",
-        stream_status: "live",
-        ...(show?.started_at ? {} : { started_at: new Date().toISOString() })
-      };
+      // Step 1: Call Daily room creation Edge Function FIRST
+      // (daily-create-room writes daily_room_name and daily_room_url to DB)
+      const { data: resp, error: fnError } = await supabase.functions.invoke("daily-create-room", {
+        body: { show_id: show.id }
+      });
       
-      console.log("📝 Start Broadcast payload:", payload);
+      // TEMP DEBUG: Log response from daily-create-room
+      console.log("[DAILY-DEBUG] POST-CALL RESPONSE:", {
+        resp,
+        fnError,
+        fnError_message: fnError?.message,
+        fnError_context: fnError?.context,
+        resp_error: resp?.error,
+        timestamp: new Date().toISOString()
+      });
       
-      const { data, error } = await supabase
-        .from("shows")
-        .update(payload)
-        .eq("id", showId)
-        .select()
-        .maybeSingle();
-      
-      if (error) {
-        console.error("[StartBroadcast] supabase update failed", error);
-        throw error;
+      if (fnError) {
+        throw new Error(fnError.message || "Failed to create Daily room");
       }
       
-      console.log("✅ Broadcast started - stream_status now 'live'");
-      return data;
-    },
-    onSuccess: () => {
+      if (resp?.error) {
+        throw new Error(resp.error);
+      }
+      
+      // Step 2: Verify room was created successfully
+      if (!resp?.room_url || !resp?.room_name) {
+        throw new Error("Daily room creation returned invalid response");
+      }
+      
+      // Store room URL and token locally
+      setDailyRoomUrl(resp.room_url);
+      setDailyToken(resp.token);
+      
+      // Step 3: ONLY NOW mark show as daily + live (strict invariant)
+      // Room is guaranteed to exist at this point
+      const { error: updateError } = await supabase
+        .from("shows")
+        .update({
+          streaming_provider: "daily",
+          status: "live",
+          stream_status: "live",
+          started_at: new Date().toISOString()
+        })
+        .eq("id", show.id);
+      
+      if (updateError) {
+        console.error("Failed to update show status:", updateError);
+        throw new Error("Room created but failed to go live. Please try again.");
+      }
+      
+      // Update local state
       setIsBroadcasting(true);
+      
       // Invalidate queries so other pages see the update
       queryClient.invalidateQueries({ queryKey: ['seller-shows'] });
       queryClient.invalidateQueries({ queryKey: ['all-shows'] });
       queryClient.invalidateQueries({ queryKey: ['marketplace-live-shows'] });
       queryClient.invalidateQueries({ queryKey: ['show', showId] });
-    },
-    onError: (error) => {
-      console.error("❌ Error starting broadcast:", error);
-      alert(`Failed to start broadcast: ${error.message}`);
-    }
-  });
-
-  const stopBroadcastMutation = useMutation({
-    mutationFn: async () => {
-      console.log("⏹️ HostConsole - Stopping broadcast for show:", showId);
       
-      // Set stream_status back to "starting" (host stopped but show not ended)
-      // TODO: Wire provider stop function here when integrating Daily/IVS
-      const { data, error } = await supabase
-        .from("shows")
-        .update({ stream_status: "starting" })
-        .eq("id", showId)
-        .select()
-        .maybeSingle();
-      
-      if (error) {
-        console.error("[StopBroadcast] supabase update failed", error);
-        throw error;
-      }
-      
-      console.log("✅ Broadcast stopped - stream_status now 'starting'");
-      return data;
-    },
-    onSuccess: () => {
-      setIsBroadcasting(false);
-      queryClient.invalidateQueries({ queryKey: ['show', showId] });
-    },
-    onError: (error) => {
-      console.error("❌ Error stopping broadcast:", error);
-      alert(`Failed to stop broadcast: ${error.message}`);
-    }
-  });
-
-  const handleToggleBroadcast = () => {
-    // Guard: Block broadcasting for ended/cancelled shows
-    if (show?.status === "ended" || show?.status === "cancelled") {
-      alert(`Cannot start broadcast. This show has been ${show.status}.`);
-      return;
-    }
-    
-    if (isBroadcasting) {
-      stopBroadcastMutation.mutate();
-    } else {
-      startBroadcastMutation.mutate();
+    } catch (err) {
+      console.error("Daily broadcast error:", err);
+      setDailyError(err?.message || "Failed to start broadcast");
+    } finally {
+      setDailyLoading(false);
     }
   };
-  
-  // Check if broadcasting is allowed based on show status
-  const isBroadcastBlocked = show?.status === "ended" || show?.status === "cancelled" || 
-                              startBroadcastMutation.isPending || stopBroadcastMutation.isPending;
 
   const handleSaveProduct = (productData) => {
     createProductMutation.mutate(productData);
@@ -782,14 +811,21 @@ export default function HostConsole() {
     mutationFn: async () => {
       console.log("⏹️ HostConsole - Ending show:", showId);
       
+      // CRITICAL: Stop Daily broadcast FIRST to release camera/mic immediately
+      if (window.__stopDailyHost) {
+        try {
+          await window.__stopDailyHost();
+          console.log("✅ Daily broadcast stopped - camera released");
+        } catch (e) {
+          console.warn("[HostConsole] stopDailyHost failed", e);
+        }
+      }
+      
       // CRITICAL: Change URL IMMEDIATELY before making the API call
       // This prevents refresh from reloading the dead showId
       const showsUrl = createPageUrl("SellerShows");
       window.history.replaceState({}, '', showsUrl);
       console.log("✅ URL immediately changed to prevent refresh loading dead showId");
-      
-      // TODO: Wire provider stop function here when integrating Daily/IVS
-      // For now, we just update DB state
       
       // Build payload - only set ended_at if not already set (avoid overwriting)
       const payload = {
@@ -1100,12 +1136,21 @@ export default function HostConsole() {
                   <span>Products</span>
                 </Button>
                 
-                <Button
-                  onClick={() => setIsBroadcasting(!isBroadcasting)}
-                  className="bg-gradient-to-r from-red-600 to-pink-600 px-3 py-3 h-auto text-sm min-w-[70px] font-bold"
-                >
-                  <span>{isBroadcasting ? "Stop" : "Start"}</span>
-                </Button>
+                {/* Mobile Broadcast Status - One-way live indicator */}
+                {isAlreadyLive ? (
+                  <div className="bg-red-600 px-3 py-3 h-auto text-sm min-w-[70px] font-bold rounded-md flex items-center justify-center">
+                    <Radio className="w-3 h-3 mr-1 animate-pulse" />
+                    <span>LIVE</span>
+                  </div>
+                ) : (
+                  <Button
+                    onClick={startDailyBroadcast}
+                    disabled={isBroadcastBlocked || dailyLoading}
+                    className="bg-gradient-to-r from-green-600 to-emerald-600 px-3 py-3 h-auto text-sm min-w-[70px] font-bold"
+                  >
+                    <span>{dailyLoading ? "Starting…" : "Go Live"}</span>
+                  </Button>
+                )}
               </div>
             </div>
             
@@ -1266,30 +1311,44 @@ export default function HostConsole() {
             <ArrowLeft className="w-5 h-5" />
           </Button>
           
-          {/* Video Background - Placeholder/Waiting Screen */}
-          <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-gray-900 to-gray-800">
-            {show.thumbnail_url && (
-              <img 
-                src={show.thumbnail_url} 
-                alt={show.title}
-                className="absolute inset-0 w-full h-full object-cover opacity-50"
-              />
-            )}
-            <div className="relative z-10 text-center p-6">
-              <Video className="w-16 h-16 text-white/50 mx-auto mb-4" />
-              <p className="text-white/70 text-lg mb-2">Waiting for Stream</p>
-              <p className="text-white/50 text-sm">Host will start broadcasting soon...</p>
+          {/* Video Background - Daily SDK Broadcaster or Placeholder */}
+          {/* CRITICAL: Only mount DailyBroadcaster when viewport is mobile to prevent duplicate Daily instances */}
+          {!isDesktop && dailyRoomUrl && dailyToken ? (
+            <DailyBroadcaster roomUrl={dailyRoomUrl} token={dailyToken} />
+          ) : (
+            <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-gray-900 to-gray-800">
+              {show.thumbnail_url && (
+                <img 
+                  src={show.thumbnail_url} 
+                  alt={show.title}
+                  className="absolute inset-0 w-full h-full object-cover opacity-50"
+                />
+              )}
+              <div className="relative z-10 text-center p-6">
+                <Video className="w-16 h-16 text-white/50 mx-auto mb-4" />
+                <p className="text-white/70 text-lg mb-2">
+                  {isAlreadyLive ? "🔴 LIVE — In-App Camera" : "Ready to Go Live"}
+                </p>
+                <p className="text-white/50 text-sm">
+                  {isAlreadyLive ? "Your broadcast is active" : "Tap Go Live to start your camera stream"}
+                </p>
+              </div>
             </div>
-          </div>
+          )}
           
           {/* Chat Overlay - Left Side, Transparent */}
           <div style={{ zIndex: 100 }}>
+            {console.log("[HOSTCONSOLE AUTH DEBUG][MOBILE]", {
+              currentUserId: currentUser?.id ?? null,
+              currentUserRole: currentUser?.role ?? null
+            })}
             {useSupabaseChat ? (
               <SupabaseLiveChat
                 showId={showId}
                 sellerId={currentSeller?.id}
                 isSeller={true}
                 isOverlay={true}
+                user={currentUser}
               />
             ) : (
               <LiveChatOverlay 
@@ -1398,22 +1457,26 @@ export default function HostConsole() {
               <ClipboardCheck className="w-5 h-5 text-white" />
             </Button>
 
-                {/* Broadcast Button (Icon Only) - GATED: Disabled if show ended/cancelled */}
-                <Button
-                  onClick={handleToggleBroadcast}
-                  size="icon"
-                  disabled={isBroadcastBlocked}
-                  className={`h-10 w-10 rounded-full shadow-lg border border-white/20 ${
-                    isBroadcastBlocked
-                      ? "bg-gray-600 cursor-not-allowed opacity-50"
-                      : isBroadcasting 
-                        ? "bg-gradient-to-r from-red-600 to-pink-600 animate-pulse" 
+                {/* Broadcast Button (Icon Only) - ONE-WAY: Shows LIVE or Start */}
+                {isAlreadyLive ? (
+                  <div className="h-10 w-10 rounded-full shadow-lg border border-red-500 bg-red-600 flex items-center justify-center">
+                    <Radio className="w-5 h-5 text-white animate-pulse" />
+                  </div>
+                ) : (
+                  <Button
+                    onClick={startDailyBroadcast}
+                    size="icon"
+                    disabled={isBroadcastBlocked || dailyLoading}
+                    className={`h-10 w-10 rounded-full shadow-lg border border-white/20 ${
+                      isBroadcastBlocked || dailyLoading
+                        ? "bg-gray-600 cursor-not-allowed opacity-50"
                         : "bg-gradient-to-r from-green-600 to-emerald-600"
-                  }`}
-                  title={isBroadcastBlocked ? `Cannot broadcast - show is ${show?.status}` : ""}
-                >
-                  <Radio className="w-5 h-5 text-white" />
-                </Button>
+                    }`}
+                    title={isBroadcastBlocked ? `Cannot broadcast - show is ${show?.status}` : "Go Live"}
+                  >
+                    <Radio className="w-5 h-5 text-white" />
+                  </Button>
+                )}
           </div>
         </div>
         
@@ -1432,21 +1495,43 @@ export default function HostConsole() {
                   </p>
                 </div>
               )}
+
+              {/* ═══════════════════════════════════════════════════════════════════════════ */}
+              {/* DAILY IN-APP CAMERA BROADCAST */}
+              {/* ═══════════════════════════════════════════════════════════════════════════ */}
               
-              <Button
-                onClick={handleToggleBroadcast}
-                disabled={isBroadcastBlocked}
-                className={`w-full font-bold py-3 ${
-                  isBroadcastBlocked
-                    ? 'bg-gray-600 cursor-not-allowed opacity-50'
-                    : isBroadcasting 
-                      ? 'bg-gradient-to-r from-red-600 to-pink-600 hover:from-red-700 hover:to-pink-700' 
+              {/* Daily Error Display */}
+              {dailyError && (
+                <div className="bg-red-500/20 border border-red-500/30 rounded-lg p-3">
+                  <p className="text-red-400 text-sm">{dailyError}</p>
+                </div>
+              )}
+              
+              {/* ONE-WAY BROADCAST: Shows "LIVE" status or "Go Live" button */}
+              {isAlreadyLive ? (
+                <div className="bg-red-600/20 border border-red-500 rounded-lg p-3 text-center">
+                  <div className="flex items-center justify-center gap-2 mb-1">
+                    <Radio className="w-4 h-4 text-red-400 animate-pulse" />
+                    <span className="text-red-400 font-bold">🔴 LIVE — In-App Camera</span>
+                  </div>
+                  <p className="text-gray-400 text-xs">
+                    Your broadcast is active. End Show when you're done.
+                  </p>
+                </div>
+              ) : (
+                <Button
+                  onClick={startDailyBroadcast}
+                  disabled={isBroadcastBlocked || dailyLoading}
+                  className={`w-full font-bold py-3 ${
+                    isBroadcastBlocked || dailyLoading
+                      ? 'bg-gray-600 cursor-not-allowed opacity-50'
                       : 'bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700'
-                } text-white`}
-              >
-                <Radio className="w-4 h-4 mr-2" />
-                {isBroadcasting ? 'Stop Broadcast' : 'Start Broadcast'}
-              </Button>
+                  } text-white`}
+                >
+                  <Radio className="w-4 h-4 mr-2" />
+                  {dailyLoading ? "Starting Camera…" : "Go Live"}
+                </Button>
+              )}
               
               <Button
                 onClick={() => {
@@ -1647,21 +1732,31 @@ export default function HostConsole() {
 
           {/* CENTER COLUMN - Live Video */}
           <div className="relative bg-black flex items-center justify-center">
-            {/* Video Placeholder */}
-            <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-gray-900 to-gray-800">
-              {show.thumbnail_url && (
-                <img 
-                  src={show.thumbnail_url} 
-                  alt={show.title}
-                  className="absolute inset-0 w-full h-full object-cover opacity-50"
-                />
-              )}
-              <div className="relative z-10 text-center p-6">
-                <Video className="w-16 h-16 text-white/50 mx-auto mb-4" />
-                <p className="text-white/70 text-lg mb-2">Host Console</p>
-                <p className="text-white/50 text-sm">Click Start Broadcast to go live</p>
+            {/* Daily SDK Broadcaster OR Placeholder */}
+            {/* CRITICAL: Only mount DailyBroadcaster when viewport is desktop to prevent duplicate Daily instances */}
+            {isDesktop && dailyRoomUrl && dailyToken ? (
+              <DailyBroadcaster roomUrl={dailyRoomUrl} token={dailyToken} />
+            ) : (
+              <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-gray-900 to-gray-800">
+                {show.thumbnail_url && (
+                  <img 
+                    src={show.thumbnail_url} 
+                    alt={show.title}
+                    className="absolute inset-0 w-full h-full object-cover opacity-50"
+                  />
+                )}
+                <div className="relative z-10 text-center p-6">
+                  <Video className="w-16 h-16 text-white/50 mx-auto mb-4" />
+                  <p className="text-white/70 text-lg mb-2">Host Console</p>
+                  <p className="text-white/50 text-sm">
+                    {isAlreadyLive 
+                      ? "🔴 LIVE — In-App Camera"
+                      : "Tap Go Live to start your in-app camera stream."
+                    }
+                  </p>
+                </div>
               </div>
-            </div>
+            )}
             
             {/* Header overlay */}
             <div className="absolute top-0 left-0 right-0 z-50 bg-gradient-to-b from-black/80 via-black/40 to-transparent p-4">
@@ -1728,12 +1823,17 @@ export default function HostConsole() {
 
             {/* Chat Component */}
             <div className="flex-1 flex flex-col min-h-0 pb-6">
+              {console.log("[HOSTCONSOLE AUTH DEBUG][DESKTOP]", {
+                currentUserId: currentUser?.id ?? null,
+                currentUserRole: currentUser?.role ?? null
+              })}
               {useSupabaseChat ? (
                 <SupabaseLiveChat
                   showId={showId}
                   sellerId={currentSeller?.id}
                   isSeller={true}
                   isOverlay={false}
+                  user={currentUser}
                 />
               ) : (
                 <LiveChat
@@ -1765,13 +1865,13 @@ export default function HostConsole() {
                       className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors"
                     >
                       <img
-                        src={order.product_image_url || "/placeholder.png"}
-                        alt={order.product_title}
+                        src={order.product?.image_urls?.[0] || "/placeholder.png"}
+                        alt={order.product?.title}
                         className="w-16 h-16 object-cover rounded-lg flex-shrink-0"
                       />
                       <div className="flex-1 min-w-0">
-                        <p className="font-semibold text-gray-900 truncate">{order.product_title}</p>
-                        <p className="text-sm text-gray-600">{order.buyer_name}</p>
+                        <p className="font-semibold text-gray-900 truncate">{order.product?.title}</p>
+                        <p className="text-sm text-gray-600">{order.buyer?.display_name || 'Buyer'}</p>
                       </div>
                       <p className="text-lg font-bold text-gray-900 flex-shrink-0">${order.price?.toFixed(2)}</p>
                     </div>

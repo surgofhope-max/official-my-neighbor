@@ -185,7 +185,7 @@ export default function AdminSellers() {
     }
     
     // Navigate directly without access logging (access log removed - was Base44 dependent)
-    navigate(createPageUrl(`AdminSellerData?sellerid=${seller.id}`));
+    navigate(createPageUrl("AdminSellerData") + `?sellerId=${seller.id}`);
   };
 
   const handleImpersonate = (seller) => {

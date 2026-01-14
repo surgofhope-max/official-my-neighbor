@@ -18,6 +18,42 @@ import {
   ArrowRight
 } from "lucide-react";
 
+/**
+ * Validate and sanitize buyer redirect destination.
+ * Prevents redirecting to invalid/unsafe pages (e.g., LiveShow without showId).
+ * 
+ * @param redirect - Raw redirect param from URL
+ * @param searchParams - URLSearchParams to check for showId
+ * @returns Safe, lowercase route name
+ */
+const getSafeBuyerRedirect = (redirect, searchParams) => {
+  // Routes that are always safe for buyer redirect
+  const safeRoutes = ['marketplace', 'buyerprofile'];
+
+  if (!redirect) return 'marketplace';
+
+  const normalized = redirect.toLowerCase();
+
+  // LiveShow requires a showId parameter to be valid
+  if (normalized === 'liveshow') {
+    const showId = searchParams.get('showId') || searchParams.get('showid');
+    if (showId) {
+      return 'liveshow';
+    }
+    console.warn('[BuyerSafetyAgreement] LiveShow redirect blocked: missing showId. Falling back to Marketplace.');
+    return 'marketplace';
+  }
+
+  // Allow known safe routes
+  if (safeRoutes.includes(normalized)) {
+    return normalized;
+  }
+
+  // Default fallback for unknown routes
+  console.warn(`[BuyerSafetyAgreement] Unknown redirect "${redirect}" blocked. Falling back to Marketplace.`);
+  return 'marketplace';
+};
+
 export default function BuyerSafetyAgreement() {
   const navigate = useNavigate();
   const [user, setUser] = useState(null);
@@ -31,9 +67,10 @@ export default function BuyerSafetyAgreement() {
     termsConditions: false
   });
 
-  // Get redirect URL from query params
+  // Get redirect URL from query params with safety validation
   const urlParams = new URLSearchParams(window.location.search);
-  const redirectTo = urlParams.get('redirect') || 'Marketplace';
+  const rawRedirect = urlParams.get('redirect');
+  const redirectTo = getSafeBuyerRedirect(rawRedirect, urlParams);
 
   useEffect(() => {
     loadUser();
@@ -54,7 +91,12 @@ export default function BuyerSafetyAgreement() {
 
       // If already agreed (check user_metadata), redirect
       if (currentUser.user_metadata?.buyer_safety_agreed === true) {
-        navigate(createPageUrl(redirectTo), { replace: true });
+        // Preserve showId for LiveShow redirects
+        const showId = urlParams.get('showId') || urlParams.get('showid');
+        const targetUrl = redirectTo === 'liveshow' && showId
+          ? createPageUrl("liveshow") + `?showId=${showId}`
+          : createPageUrl(redirectTo);
+        navigate(targetUrl, { replace: true });
         return;
       }
     } catch (error) {
@@ -115,8 +157,12 @@ export default function BuyerSafetyAgreement() {
         console.warn("[BuyerSafetyAgreement] metadata update failed (non-blocking):", metadataError);
       }
 
-      // Redirect to intended page
-      navigate(createPageUrl(redirectTo), { replace: true });
+      // Redirect to intended page (preserve showId for LiveShow)
+      const showId = urlParams.get('showId') || urlParams.get('showid');
+      const targetUrl = redirectTo === 'liveshow' && showId
+        ? createPageUrl("liveshow") + `?showId=${showId}`
+        : createPageUrl(redirectTo);
+      navigate(targetUrl, { replace: true });
     } catch (error) {
       console.error("Error saving agreement:", error);
       alert(error.message || "Failed to save agreement. Please try again.");

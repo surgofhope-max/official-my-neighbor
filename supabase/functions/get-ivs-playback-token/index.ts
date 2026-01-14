@@ -231,26 +231,99 @@ serve(async (req: Request) => {
       );
     }
 
-    // TODO: Add show-based authorization
-    // Verify that the user has access to view this channel/show.
-    // This should check:
-    // 1. Is the show live and public?
-    // 2. Is the user a banned viewer?
-    // 3. Is the show restricted to certain users?
-    //
-    // Example implementation:
-    // const { data: show } = await supabase
-    //   .from("shows")
-    //   .select("id, status, ivs_channel_arn")
-    //   .eq("ivs_channel_arn", channelArn)
-    //   .single();
-    //
-    // if (!show || show.status !== "live") {
-    //   return new Response(
-    //     JSON.stringify({ error: "Show not available" }),
-    //     { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    //   );
-    // }
+    // ─────────────────────────────────────────────────────────────────────
+    // AUTHORIZATION: Show lookup + live check + viewer ban check
+    // ─────────────────────────────────────────────────────────────────────
+    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    if (!supabaseServiceKey) {
+      console.error("[IVS-TOKEN] SUPABASE_SERVICE_ROLE_KEY not configured");
+      return new Response(
+        JSON.stringify({ error: "Server configuration error" }),
+        {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        }
+      );
+    }
+
+    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
+      auth: { persistSession: false },
+    });
+
+    // 1) Look up show by channelArn
+    const { data: show, error: showError } = await supabaseAdmin
+      .from("shows")
+      .select("id, seller_id, status, stream_status")
+      .eq("ivs_channel_arn", channelArn)
+      .maybeSingle();
+
+    if (showError) {
+      console.error("[IVS-TOKEN] Show lookup failed:", showError.message);
+      return new Response(
+        JSON.stringify({ error: "Failed to verify show" }),
+        {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        }
+      );
+    }
+
+    if (!show) {
+      console.warn("[IVS-TOKEN] Show not found for channel:", channelArn);
+      return new Response(
+        JSON.stringify({ error: "Show not found for channel" }),
+        {
+          status: 404,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        }
+      );
+    }
+
+    // 2) Enforce live-only playback
+    if (show.stream_status !== "live") {
+      console.warn("[IVS-TOKEN] Show not live:", show.id, "stream_status:", show.stream_status);
+      return new Response(
+        JSON.stringify({ error: "Show is not live" }),
+        {
+          status: 403,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        }
+      );
+    }
+
+    // 3) Enforce viewer bans
+    const { data: viewerBan, error: banError } = await supabaseAdmin
+      .from("viewer_bans")
+      .select("id, ban_type")
+      .eq("seller_id", show.seller_id)
+      .eq("viewer_id", user.id)
+      .in("ban_type", ["view", "full"])
+      .maybeSingle();
+
+    if (banError) {
+      console.error("[IVS-TOKEN] Ban check failed:", banError.message);
+      // Fail closed - deny if we can't verify ban status
+      return new Response(
+        JSON.stringify({ error: "Failed to verify viewer access" }),
+        {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        }
+      );
+    }
+
+    if (viewerBan) {
+      console.warn("[IVS-TOKEN] Viewer banned:", user.id, "seller:", show.seller_id, "ban_type:", viewerBan.ban_type);
+      return new Response(
+        JSON.stringify({ error: "Viewer banned" }),
+        {
+          status: 403,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        }
+      );
+    }
+
+    console.log("[IVS-TOKEN] Authorization passed for show:", show.id);
 
     // ─────────────────────────────────────────────────────────────────────
     // RETRIEVE PRIVATE KEY FROM VAULT

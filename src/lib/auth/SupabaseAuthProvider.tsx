@@ -43,6 +43,7 @@ export const SupabaseAuthProvider: React.FC<{
       try {
         const { data } = await supabase.auth.getSession();
         const sessionUser = data.session?.user ?? null;
+        console.log("[AUTH DEBUG][Provider] checkSession result:", sessionUser?.id ?? null);
         setUser(sessionUser);
         setIsAuthenticated(Boolean(sessionUser));
       } catch (error) {
@@ -58,8 +59,9 @@ export const SupabaseAuthProvider: React.FC<{
 
     // Subscribe to auth state changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (_event, session) => {
+      (event, session) => {
         const sessionUser = session?.user ?? null;
+        console.log("[AUTH DEBUG][Provider] event:", event, "session_user:", sessionUser?.id ?? null);
         setUser(sessionUser);
         setIsAuthenticated(Boolean(sessionUser));
       }

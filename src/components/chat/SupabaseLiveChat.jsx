@@ -24,9 +24,16 @@ import {
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Send, MessageCircle, X, Radio, User, Ban } from "lucide-react";
+import { Send, MessageCircle, X, Radio, User, Ban, MoreVertical } from "lucide-react";
 import { format } from "date-fns";
 import { checkAccountActiveAsync } from "@/lib/auth/accountGuards";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import ViewerBanDialog from "../host/ViewerBanDialog";
 
 /**
  * SupabaseLiveChat Component
@@ -35,6 +42,7 @@ import { checkAccountActiveAsync } from "@/lib/auth/accountGuards";
  * @param {string} props.showId - The show ID
  * @param {string} props.sellerId - The seller ID (for seller detection)
  * @param {boolean} props.isSeller - Whether the current user is the seller
+ * @param {Object} props.user - The canonical authenticated user (from SupabaseAuthProvider)
  * @param {Function} props.onClose - Callback to close the chat panel
  * @param {boolean} props.isOverlay - Whether to render as transparent overlay
  * @param {Function} props.onMessageSeller - Callback for "Message Seller" CTA when show ends
@@ -43,12 +51,18 @@ export default function SupabaseLiveChat({
   showId,
   sellerId,
   isSeller = false,
+  user,
   onClose,
   isOverlay = true,
   onMessageSeller,
 }) {
-  // User state
-  const [user, setUser] = useState(null);
+  console.log("[CHAT PROPS DEBUG][SupabaseLiveChat]", {
+    showId,
+    sellerId,
+    isSeller,
+    userId: user?.id ?? null,
+    userRole: user?.role ?? null,
+  });
 
   // Chat state
   const [messages, setMessages] = useState([]);
@@ -64,6 +78,9 @@ export default function SupabaseLiveChat({
   const [isMinimized, setIsMinimized] = useState(false);
   const [fadeMessages, setFadeMessages] = useState(false);
 
+  // Moderation state
+  const [banningViewer, setBanningViewer] = useState(null);
+
   // Buyer profile names cache (keyed by sender_id)
   const [buyerNames, setBuyerNames] = useState({});
 
@@ -77,29 +94,12 @@ export default function SupabaseLiveChat({
   // Poll interval (ms)
   const POLL_INTERVAL = 2500;
 
-  // ─────────────────────────────────────────────────────────────────────
-  // LOAD USER
-  // ─────────────────────────────────────────────────────────────────────
+  // Cleanup ref on unmount
   useEffect(() => {
-    loadUser();
     return () => {
       mountedRef.current = false;
     };
   }, []);
-
-  const loadUser = async () => {
-    try {
-      const { data, error } = await supabase.auth.getUser();
-      if (error || !mountedRef.current) {
-        // Gracefully handle - user just can't chat
-        return;
-      }
-      setUser(data?.user ?? null);
-    } catch (error) {
-      // Swallow errors - chat is non-critical
-      console.log("[CHAT] User not logged in - view only mode");
-    }
-  };
 
   // ─────────────────────────────────────────────────────────────────────
   // FETCH BUYER NAMES FOR VIEWER MESSAGES
@@ -139,8 +139,10 @@ export default function SupabaseLiveChat({
   // ─────────────────────────────────────────────────────────────────────
   // CHECK VIEWER BAN STATUS
   // ─────────────────────────────────────────────────────────────────────
-  const { data: viewerBan } = useQuery({
-    queryKey: ['viewer-ban-check', sellerId, user?.id],
+  const enabled = !!sellerId && !!user && !isSeller;
+  const viewerBanQueryKey = ['viewer-ban-check', sellerId, user?.id];
+  const viewerBanQuery = useQuery({
+    queryKey: viewerBanQueryKey,
     queryFn: async () => {
       if (!sellerId || !user?.id) return null;
       const { data, error } = await supabase
@@ -156,11 +158,31 @@ export default function SupabaseLiveChat({
       }
       return data;
     },
-    enabled: !!sellerId && !!user && !isSeller,
+    enabled,
     staleTime: 300000, // 5 minutes - ban status rarely changes
     refetchInterval: false,
-    refetchOnWindowFocus: false
+    refetchOnWindowFocus: false,
+    // Debug callbacks
+    onSuccess: (data) => {
+      console.log("[VB QUERY][SUCCESS]", { key: viewerBanQueryKey, data, fetchedAt: Date.now() });
+    },
+    onError: (error) => {
+      console.log("[VB QUERY][ERROR]", { key: viewerBanQueryKey, error });
+    },
   });
+  const viewerBan = viewerBanQuery.data;
+
+  // Debug: observe query state changes
+  useEffect(() => {
+    console.log("[VB QUERY][STATE]", {
+      key: viewerBanQueryKey,
+      enabled,
+      status: viewerBanQuery.status,
+      fetchStatus: viewerBanQuery.fetchStatus,
+      isFetching: viewerBanQuery.isFetching,
+      dataUpdatedAt: viewerBanQuery.dataUpdatedAt,
+    });
+  }, [viewerBanQuery.status, viewerBanQuery.fetchStatus]);
 
   // Compute ban state (matches legacy behavior: chat, view, or full blocks chat)
   const isChatBanned = viewerBan && (
@@ -327,6 +349,14 @@ export default function SupabaseLiveChat({
     }
   };
 
+  // Handle ban viewer action
+  const handleBanViewer = (msg) => {
+    setBanningViewer({
+      user_id: msg.sender_id,
+      user_name: buyerNames[msg.sender_id] || "Buyer"
+    });
+  };
+
   // ─────────────────────────────────────────────────────────────────────
   // RENDER - SHOW ENDED STATE
   // ─────────────────────────────────────────────────────────────────────
@@ -403,13 +433,33 @@ export default function SupabaseLiveChat({
         ) : (
           <div className="space-y-2 px-1">
             {messages.map((msg) => (
-              <ChatMessage
-                key={msg.id}
-                message={msg}
-                isCurrentUser={msg.sender_id === user?.id}
-                isOverlay={isOverlay}
-                buyerName={buyerNames[msg.sender_id]}
-              />
+              <div key={msg.id} className="group flex items-start gap-1">
+                <ChatMessage
+                  message={msg}
+                  isCurrentUser={msg.sender_id === user?.id}
+                  isOverlay={isOverlay}
+                  buyerName={buyerNames[msg.sender_id]}
+                />
+
+                {isSeller && msg.sender_role !== "seller" && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <button className="p-1 opacity-0 group-hover:opacity-100 hover:bg-white/20 rounded">
+                        <MoreVertical className="w-4 h-4 text-white/60" />
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem
+                        className="text-red-600"
+                        onClick={() => handleBanViewer(msg)}
+                      >
+                        <Ban className="w-4 h-4 mr-2" />
+                        Mute from chat
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
+              </div>
             ))}
             <div ref={messagesEndRef} />
           </div>
@@ -417,6 +467,9 @@ export default function SupabaseLiveChat({
       </div>
 
       {/* Input Form */}
+      {console.log("[CHAT DEBUG] viewer user:", user)}
+      {console.log("[CHAT DEBUG] sellerId:", sellerId)}
+      {console.log("[CHAT DEBUG] showId:", showId)}
       {user ? (
         isChatBanned ? (
           <div 
@@ -487,6 +540,15 @@ export default function SupabaseLiveChat({
           <span className="text-white/50 text-xs">Live Chat</span>
         </div>
       )}
+
+      {/* Viewer Ban Dialog */}
+      <ViewerBanDialog
+        open={!!banningViewer}
+        onOpenChange={() => setBanningViewer(null)}
+        viewer={banningViewer}
+        sellerId={sellerId}
+        showId={showId}
+      />
     </div>
   );
 }

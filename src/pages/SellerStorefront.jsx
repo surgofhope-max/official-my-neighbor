@@ -160,23 +160,39 @@ export default function SellerStorefront() {
     queryFn: async () => {
       console.log("🔍 Fetching seller_card by seller_id:", sellerId);
       
-      const { data, error } = await supabase
-        .from('seller_cards')
-        .select(SELLER_CARD_STOREFRONT_FIELDS)
-        .eq('seller_id', sellerId)
-        .maybeSingle();
+      // Fetch seller_cards (stats) and sellers (full bio/address) in parallel
+      const [cardResult, aboutResult] = await Promise.all([
+        supabase
+          .from('seller_cards')
+          .select(SELLER_CARD_STOREFRONT_FIELDS)
+          .eq('seller_id', sellerId)
+          .maybeSingle(),
+        supabase
+          .from('sellers')
+          .select('bio, pickup_address, pickup_zip')
+          .eq('id', sellerId)
+          .maybeSingle()
+      ]);
       
-      if (error) {
-        console.error("❌ seller_cards query error:", error.message);
+      if (cardResult.error) {
+        console.error("❌ seller_cards query error:", cardResult.error.message);
         throw new Error("Failed to load seller");
       }
       
-      if (!data) {
+      if (!cardResult.data) {
         console.error("❌ SellerCard result: not found for seller_id:", sellerId);
         throw new Error("Seller not found");
       }
       
-      const legacySeller = mapSellerCardToLegacy(data);
+      const legacySeller = mapSellerCardToLegacy(cardResult.data);
+      
+      // Merge full bio and pickup_address from sellers table
+      if (aboutResult.data) {
+        legacySeller.bio = aboutResult.data.bio || legacySeller.bio;
+        legacySeller.pickup_address = aboutResult.data.pickup_address || null;
+        legacySeller.pickup_zip = aboutResult.data.pickup_zip || null;
+      }
+      
       console.log("✅ SellerCard result: found -", legacySeller.business_name);
       return legacySeller;
     },
@@ -186,31 +202,39 @@ export default function SellerStorefront() {
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // SUPABASE: Products for this seller (excludes products from ended/cancelled shows)
+  // SUPABASE: Products via show_products join table (canonical pattern)
+  // Products are associated to shows via show_products, not products.show_id
   // ═══════════════════════════════════════════════════════════════════════════
-  const { data: products = [] } = useQuery({
-    queryKey: ['seller-storefront-products', sellerId],
+  const { data: shopProductsData = [] } = useQuery({
+    queryKey: ['seller-storefront-shop-products', sellerId],
     queryFn: async () => {
-      // 1) Fetch products for this seller
-      // NOTE: Removed is_live_item column (does not exist in products table)
-      const { data: allProducts, error: productsError } = await supabase
-        .from("products")
+      // 1) Fetch show_products for this seller with joined product data
+      const { data: showProductsRaw, error: spError } = await supabase
+        .from("show_products")
         .select(`
           id,
-          seller_id,
           show_id,
-          title,
-          price,
-          quantity,
-          status,
-          image_urls,
-          givi_type
+          product_id,
+          seller_id,
+          is_givi,
+          product:products (
+            id,
+            title,
+            description,
+            price,
+            original_price,
+            quantity,
+            quantity_sold,
+            image_urls,
+            category,
+            status,
+            givi_type
+          )
         `)
-        .eq("seller_id", sellerId)
-        .order("created_at", { ascending: false });
+        .eq("seller_id", sellerId);
       
-      if (productsError) {
-        console.warn("[StorefrontProducts] Products query error:", productsError.message);
+      if (spError) {
+        console.warn("[StorefrontShopProducts] show_products query error:", spError.message);
         return [];
       }
       
@@ -220,9 +244,9 @@ export default function SellerStorefront() {
         .select("id, status");
       
       if (showsError) {
-        console.warn("[StorefrontProducts] Shows filter query error:", showsError.message);
-        // Fallback: return all products if show filter fails
-        return allProducts || [];
+        console.warn("[StorefrontShopProducts] Shows filter query error:", showsError.message);
+        // Fallback: return all if show filter fails
+        return showProductsRaw || [];
       }
       
       // 3) Build Set of ended/cancelled show IDs
@@ -232,17 +256,19 @@ export default function SellerStorefront() {
           .map(show => show.id)
       );
       
-      // 4) Filter out products from ended shows
-      // Products with NULL show_id are allowed (standalone products)
-      const totalFetched = (allProducts || []).length;
-      const filtered = (allProducts || []).filter(p => !p.show_id || !endedShowIds.has(p.show_id));
-      const endedFiltered = totalFetched - filtered.length;
+      // 4) Filter out products from ended/cancelled shows
+      // Also exclude hidden/deleted products
+      const filtered = (showProductsRaw || []).filter(sp => 
+        sp.product && 
+        !endedShowIds.has(sp.show_id) &&
+        sp.product.status !== 'hidden' &&
+        sp.product.status !== 'deleted'
+      );
       
       if (import.meta.env.DEV) {
-        console.log('[StorefrontProducts]', {
-          totalFetched,
-          endedFiltered,
-          finalCount: filtered.length
+        console.log('[StorefrontShopProducts]', {
+          totalFetched: (showProductsRaw || []).length,
+          afterFilter: filtered.length
         });
       }
       
@@ -250,6 +276,14 @@ export default function SellerStorefront() {
     },
     enabled: !!sellerId
   });
+
+  // Derive products array from show_products for Shop tab rendering
+  // Each entry has: show_id (from show_products) + flattened product fields
+  const products = shopProductsData.map(sp => ({
+    ...sp.product,
+    show_id: sp.show_id, // Use show_id from show_products (canonical)
+    is_givi: sp.is_givi
+  }));
 
   // ═══════════════════════════════════════════════════════════════════════════
   // SUPABASE: Live shows for this seller (status = 'live')
@@ -518,10 +552,10 @@ export default function SellerStorefront() {
   const showPickupAddress = seller.show_pickup_address !== false;
 
   const availableProducts = products.filter(p =>
-    p.status === "available" && p.quantity > 0
+    p.status === "active" && p.quantity > 0
   );
 
-  const bioPreview = seller.bio?.length > 120 ? seller.bio.substring(0, 120) + "..." : seller.bio;
+  const bioPreview = seller.bio?.length > 50 ? seller.bio.substring(0, 50) + "…" : seller.bio;
 
   return (
     <>
@@ -588,7 +622,7 @@ export default function SellerStorefront() {
             <p className="text-gray-400 text-sm mb-2">@{seller.business_name?.toLowerCase().replace(/\s+/g, '')}</p>
             
             {/* Stats Row: Followers / Rating / Sold */}
-            <div className="flex items-center gap-4 text-sm mb-3">
+            <div className="flex items-center gap-4 text-sm mb-3 flex-wrap">
               <div>
                 <span className="font-bold text-white">{followerCount.toLocaleString()}</span>
                 <span className="text-gray-400 ml-1">Followers</span>
@@ -613,7 +647,7 @@ export default function SellerStorefront() {
               <p className="text-gray-300 text-sm leading-relaxed whitespace-pre-wrap">
                 {showFullBio ? seller.bio : bioPreview}
               </p>
-              {seller.bio.length > 120 && (
+              {seller.bio.length > 50 && (
                 <button
                   onClick={() => setShowFullBio(!showFullBio)}
                   className="text-purple-400 text-sm font-semibold mt-1 hover:text-purple-300"
@@ -673,8 +707,9 @@ export default function SellerStorefront() {
             <TabsContent value="shop" className="space-y-4 mt-4">
               {!selectedShopShow ? (
                 // LEVEL 1: Show Grid View
+                // Products are linked via show_products join table (canonical)
                 <>
-                  {allShows.filter(s => products.some(p => p.show_id === s.id)).length === 0 ? (
+                  {products.length === 0 ? (
                     <div className="text-center py-12">
                       <Package className="w-16 h-16 text-gray-600 mx-auto mb-4" />
                       <h3 className="text-lg font-semibold text-gray-400 mb-2">No products yet</h3>
@@ -683,10 +718,10 @@ export default function SellerStorefront() {
                       </p>
                     </div>
                   ) : (
-                    <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                       {allShows.filter(s => products.some(p => p.show_id === s.id)).map((show) => {
                         const showProducts = products.filter(p => p.show_id === show.id);
-                        const availableCount = showProducts.filter(p => p.status === 'available').length;
+                        const availableCount = showProducts.filter(p => p.status === 'active').length;
                         
                         return (
                           <Card 
@@ -694,7 +729,7 @@ export default function SellerStorefront() {
                             className="bg-gray-800 border-gray-700 hover:shadow-xl transition-all cursor-pointer"
                             onClick={() => setSelectedShopShow(show)}
                           >
-                            <div className="relative h-40 bg-gradient-to-br from-purple-600 to-blue-600 overflow-hidden">
+                            <div className="relative h-48 bg-gray-900 overflow-hidden">
                               {show.thumbnail_url ? (
                                 <img 
                                   src={show.thumbnail_url}
@@ -703,31 +738,27 @@ export default function SellerStorefront() {
                                 />
                               ) : (
                                 <div className="w-full h-full flex items-center justify-center">
-                                  <Video className="w-12 h-12 text-white" />
+                                  <Video className="w-12 h-12 text-gray-600" />
                                 </div>
                               )}
                               <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent"></div>
-                              <div className="absolute bottom-3 left-3 right-3">
-                                <h3 className="text-white font-bold text-lg line-clamp-2">{show.title}</h3>
-                              </div>
                             </div>
                             <CardContent className="p-4">
-                              <div className="space-y-3">
-                                <div className="flex items-center justify-between text-sm">
-                                  <span className="text-gray-400">Date:</span>
-                                  <span className="font-medium text-white">
-                                    {format(new Date(show.scheduled_start), "MMM d, yyyy")}
-                                  </span>
+                              <h3 className="font-semibold text-white text-lg mb-2 line-clamp-2">{show.title}</h3>
+                              <div className="flex items-center justify-between text-sm mb-2">
+                                <span className="text-gray-400">Date:</span>
+                                <span className="font-medium text-white">
+                                  {format(new Date(show.scheduled_start), "MMM d, yyyy")}
+                                </span>
+                              </div>
+                              <div className="grid grid-cols-2 gap-2 pt-2 border-t border-gray-700">
+                                <div className="text-center">
+                                  <p className="text-xs text-gray-400">Products</p>
+                                  <p className="text-lg font-bold text-white">{showProducts.length}</p>
                                 </div>
-                                <div className="grid grid-cols-2 gap-2 pt-3 border-t border-gray-700">
-                                  <div className="text-center">
-                                    <p className="text-xs text-gray-400">Products</p>
-                                    <p className="text-lg font-bold text-white">{showProducts.length}</p>
-                                  </div>
-                                  <div className="text-center">
-                                    <p className="text-xs text-gray-400">Available</p>
-                                    <p className="text-lg font-bold text-green-400">{availableCount}</p>
-                                  </div>
+                                <div className="text-center">
+                                  <p className="text-xs text-gray-400">Available</p>
+                                  <p className="text-lg font-bold text-green-400">{availableCount}</p>
                                 </div>
                               </div>
                             </CardContent>
@@ -766,7 +797,7 @@ export default function SellerStorefront() {
                             </div>
                           )}
                                           <div className="absolute top-2 right-2 flex gap-2">
-                                            {product.status === 'sold' && (
+                                            {product.status === 'sold_out' && (
                                               <Badge className="bg-gray-600 text-white border-0">Sold</Badge>
                                             )}
                                             {product.givi_type && (
@@ -792,14 +823,14 @@ export default function SellerStorefront() {
             <TabsContent value="shows" className="space-y-4 mt-4">
               {/* Live Shows */}
               {liveShows.length > 0 && (
-                <div className="space-y-3">
+                <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                   {liveShows.map((show) => (
                     <Card
                       key={show.id}
-                      className="bg-gray-800 border-gray-700 overflow-hidden cursor-pointer hover:bg-gray-750 transition-colors"
-                      onClick={() => navigate(createPageUrl(`LiveShow?showId=${show.id}`))}
+                      className="bg-gray-800 border-gray-700 overflow-hidden cursor-pointer hover:shadow-xl transition-all"
+                      onClick={() => navigate(createPageUrl("LiveShow") + `?showId=${show.id}`)}
                     >
-                      <div className="relative h-48">
+                      <div className="relative h-48 bg-gray-900">
                         {show.thumbnail_url ? (
                           <img
                             src={show.thumbnail_url}
@@ -807,43 +838,25 @@ export default function SellerStorefront() {
                             className="w-full h-full object-cover"
                           />
                         ) : (
-                          <div className="w-full h-full bg-gradient-to-br from-red-900 to-orange-900 flex items-center justify-center">
-                            <Radio className="w-16 h-16 text-white opacity-50" />
+                          <div className="w-full h-full flex items-center justify-center">
+                            <Radio className="w-12 h-12 text-gray-600" />
                           </div>
                         )}
                         {/* Live Badge */}
-                        <div className="absolute top-3 left-3">
+                        <div className="absolute top-2 left-2">
                           <Badge className="bg-red-500 text-white border-0 animate-pulse flex items-center gap-1">
                             <div className="w-2 h-2 bg-white rounded-full"></div>
                             Live • {show.viewer_count || 0}
                           </Badge>
                         </div>
-                        {/* Seller info overlay */}
-                        <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 to-transparent p-3">
-                          <div className="flex items-center gap-2">
-                            {seller.profile_image_url ? (
-                              <img
-                                src={seller.profile_image_url}
-                                alt={seller.business_name}
-                                className="w-8 h-8 rounded-full object-cover border-2 border-white"
-                              />
-                            ) : (
-                              <div className="w-8 h-8 rounded-full bg-purple-600 flex items-center justify-center border-2 border-white">
-                                <span className="text-xs font-bold text-white">
-                                  {seller.business_name?.[0]}
-                                </span>
-                              </div>
-                            )}
-                            <span className="text-white font-semibold text-sm">{seller.business_name}</span>
-                          </div>
-                        </div>
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent"></div>
                       </div>
-                      <CardContent className="p-3">
-                        <h3 className="font-semibold text-white text-sm line-clamp-1">
+                      <CardContent className="p-4">
+                        <h3 className="font-semibold text-white text-lg mb-2 line-clamp-2">
                           {show.title}
                         </h3>
                         {show.description && (
-                          <p className="text-gray-400 text-xs line-clamp-2 mt-1">
+                          <p className="text-gray-400 text-xs line-clamp-2">
                             {show.description}
                           </p>
                         )}
@@ -855,13 +868,13 @@ export default function SellerStorefront() {
 
               {/* Upcoming Shows */}
               {upcomingShows.length > 0 && (
-                <div className="space-y-3">
+                <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                   {upcomingShows.map((show) => (
                     <Card
                       key={show.id}
-                      className="bg-gray-800 border-gray-700 overflow-hidden cursor-pointer hover:bg-gray-750 transition-colors"
+                      className="bg-gray-800 border-gray-700 overflow-hidden cursor-pointer hover:shadow-xl transition-all"
                     >
-                      <div className="relative h-48">
+                      <div className="relative h-48 bg-gray-900">
                         {show.thumbnail_url ? (
                           <img
                             src={show.thumbnail_url}
@@ -869,48 +882,28 @@ export default function SellerStorefront() {
                             className="w-full h-full object-cover"
                           />
                         ) : (
-                          <div className="w-full h-full bg-gradient-to-br from-blue-900 to-purple-900 flex items-center justify-center">
-                            <Calendar className="w-16 h-16 text-white opacity-50" />
+                          <div className="w-full h-full flex items-center justify-center">
+                            <Calendar className="w-12 h-12 text-gray-600" />
                           </div>
                         )}
                         {/* Time Badge */}
-                        <div className="absolute top-3 left-3">
-                          <Badge className="bg-gray-900/90 text-white border-0">
-                            {format(new Date(show.scheduled_start), "MMM d")}
-                            <br />
-                            {format(new Date(show.scheduled_start), "h:mm a")}
+                        <div className="absolute top-2 left-2">
+                          <Badge className="bg-gray-900/90 text-white border-0 text-xs">
+                            {format(new Date(show.scheduled_start), "MMM d, h:mm a")}
                           </Badge>
                         </div>
                         {/* Bookmark Icon */}
-                        <button className="absolute top-3 right-3 w-8 h-8 rounded-full bg-black/50 backdrop-blur-sm flex items-center justify-center hover:bg-black/70">
+                        <button className="absolute top-2 right-2 w-7 h-7 rounded-full bg-black/50 backdrop-blur-sm flex items-center justify-center hover:bg-black/70">
                           <Bookmark className="w-4 h-4 text-white" />
                         </button>
-                        {/* Seller info overlay */}
-                        <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 to-transparent p-3">
-                          <div className="flex items-center gap-2">
-                            {seller.profile_image_url ? (
-                              <img
-                                src={seller.profile_image_url}
-                                alt={seller.business_name}
-                                className="w-8 h-8 rounded-full object-cover border-2 border-white"
-                              />
-                            ) : (
-                              <div className="w-8 h-8 rounded-full bg-purple-600 flex items-center justify-center border-2 border-white">
-                                <span className="text-xs font-bold text-white">
-                                  {seller.business_name?.[0]}
-                                </span>
-                              </div>
-                            )}
-                            <span className="text-white font-semibold text-sm">{seller.business_name}</span>
-                          </div>
-                        </div>
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent"></div>
                       </div>
-                      <CardContent className="p-3">
-                        <h3 className="font-semibold text-white text-sm line-clamp-1">
+                      <CardContent className="p-4">
+                        <h3 className="font-semibold text-white text-lg mb-2 line-clamp-2">
                           {show.title}
                         </h3>
                         {show.description && (
-                          <p className="text-gray-400 text-xs line-clamp-2 mt-1">
+                          <p className="text-gray-400 text-xs line-clamp-2">
                             {show.description}
                           </p>
                         )}
@@ -1024,7 +1017,7 @@ export default function SellerStorefront() {
                       </h3>
                       {(seller.pickup_city || seller.pickup_state) && (
                         <p className="text-gray-400 text-sm">
-                          {seller.pickup_city}{seller.pickup_city && seller.pickup_state ? ', ' : ''}{seller.pickup_state}
+                          {seller.pickup_city}{seller.pickup_city && seller.pickup_state ? ', ' : ''}{seller.pickup_state}{seller.pickup_zip ? ` ${seller.pickup_zip}` : ''}
                         </p>
                       )}
                       {seller.pickup_address && (
@@ -1032,6 +1025,16 @@ export default function SellerStorefront() {
                           {seller.pickup_address}
                         </p>
                       )}
+                    </div>
+                  )}
+
+                  {/* About / Bio - Full bio displayed here */}
+                  {seller.bio && (
+                    <div>
+                      <h3 className="font-semibold text-white mb-2">About</h3>
+                      <p className="text-gray-400 text-sm leading-relaxed whitespace-pre-wrap">
+                        {seller.bio}
+                      </p>
                     </div>
                   )}
 
@@ -1062,7 +1065,7 @@ export default function SellerStorefront() {
                     <div className="grid grid-cols-3 gap-3 text-center">
                       <div className="bg-gray-900 rounded-lg p-3">
                         <div className="text-xl font-bold text-white">{seller?.total_sales ?? 0}</div>
-                        <div className="text-gray-400 text-xs">Sales</div>
+                        <div className="text-gray-400 text-xs">Sold</div>
                       </div>
                       <div className="bg-gray-900 rounded-lg p-3">
                         <div className="text-xl font-bold text-white">{products.length}</div>

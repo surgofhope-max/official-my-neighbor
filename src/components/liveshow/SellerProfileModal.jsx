@@ -47,13 +47,6 @@ export default function SellerProfileModal({ seller, user, onClose }) {
     enabled: !!seller?.id
   });
 
-  // Fetch orders for sold count
-  const { data: orders = [] } = useQuery({
-    queryKey: ['seller-modal-orders', seller.id],
-    queryFn: () => base44.entities.Order.filter({ seller_id: seller.id }),
-    enabled: !!seller?.id
-  });
-
   // Fetch upcoming shows
   const { data: upcomingShows = [] } = useQuery({
     queryKey: ['seller-modal-upcoming-shows', seller.id],
@@ -132,7 +125,7 @@ export default function SellerProfileModal({ seller, user, onClose }) {
                     </div>
                   )}
                   <div className="flex items-center gap-1">
-                    <span className="font-bold text-white">{orders.length}</span>
+                    <span className="font-bold text-white">{seller?.total_sales ?? 0}</span>
                     <span className="text-gray-400 ml-1">Sold</span>
                   </div>
                 </div>

@@ -33,7 +33,7 @@ export default function MessageSellerButton({ seller, orderId = null, variant = 
       // SAFETY CHECK: Verify buyer safety agreement before messaging
       if (user.user_metadata?.buyer_safety_agreed !== true) {
         setIsLoading(false);
-        navigate(createPageUrl(`BuyerSafetyAgreement?redirect=Messages`));
+        navigate(createPageUrl("BuyerSafetyAgreement") + `?redirect=Messages`);
         return;
       }
       
@@ -47,7 +47,7 @@ export default function MessageSellerButton({ seller, orderId = null, variant = 
       
       // Navigate to Messages page with conversation ID
       const timestamp = Date.now();
-      navigate(createPageUrl(`Messages?conversationId=${conversation.id}&t=${timestamp}`));
+      navigate(createPageUrl("Messages") + `?conversationId=${conversation.id}&t=${timestamp}`);
 
     } catch (error) {
       console.warn("Error creating conversation:", error);

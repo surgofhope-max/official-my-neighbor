@@ -5,7 +5,14 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Send, Pin, MessageCircle, X, Ban } from "lucide-react";
+import { Send, Pin, MessageCircle, X, Ban, MoreVertical } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem
+} from "@/components/ui/dropdown-menu";
+import ViewerBanDialog from "@/components/host/ViewerBanDialog";
 
 /**
  * LiveChatOverlay Component
@@ -17,6 +24,7 @@ export default function LiveChatOverlay({ showId, isSeller = false, onClose, inp
   const [user, setUser] = useState(null);
   const [isVisible, setIsVisible] = useState(true);
   const [fadeMessages, setFadeMessages] = useState(false);
+  const [banningViewer, setBanningViewer] = useState(null);
   const messagesEndRef = useRef(null);
   const queryClient = useQueryClient();
   const fadeTimeoutRef = useRef(null);
@@ -46,11 +54,18 @@ export default function LiveChatOverlay({ showId, isSeller = false, onClose, inp
     queryKey: ['viewer-ban-check', sellerId, user?.id],
     queryFn: async () => {
       if (!sellerId || !user?.id) return null;
-      const bans = await base44.entities.ViewerBan.filter({
-        seller_id: sellerId,
-        viewer_id: user.id
-      });
-      return bans.length > 0 ? bans[0] : null;
+      const { data, error } = await supabase
+        .from('viewer_bans')
+        .select('id, ban_type, reason')
+        .eq('seller_id', sellerId)
+        .eq('viewer_id', user.id)
+        .maybeSingle();
+
+      if (error) {
+        console.warn('[CHAT] Failed to check ban status:', error.message);
+        return null;
+      }
+      return data;
     },
     enabled: !!sellerId && !!user && !isSeller,
     staleTime: 300000, // 5 minutes - ban status rarely changes
@@ -128,6 +143,14 @@ export default function LiveChatOverlay({ showId, isSeller = false, onClose, inp
     pinMessageMutation.mutate({ id: msg.id, isPinned: !msg.is_pinned });
   };
 
+  const handleBanViewer = (msg) => {
+    console.log("🚫 Mute viewer clicked (overlay):", msg);
+    setBanningViewer({
+      user_id: msg.user_id,
+      user_name: msg.user_name
+    });
+  };
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
@@ -144,6 +167,9 @@ export default function LiveChatOverlay({ showId, isSeller = false, onClose, inp
 
   // Input-only mode for bottom bar
   if (inputOnly) {
+    console.log("[CHAT DEBUG OVERLAY] user:", user);
+    console.log("[CHAT DEBUG OVERLAY] isSeller:", isSeller);
+    console.log("[CHAT DEBUG OVERLAY] showId:", showId);
     return (
       <form onSubmit={handleSend} className="w-full">
         {user ? (
@@ -328,6 +354,28 @@ export default function LiveChatOverlay({ showId, isSeller = false, onClose, inp
                   <Pin className="w-3 h-3 text-white/80" />
                 </button>
               )}
+
+              {/* Moderation menu (seller only, viewer messages only) */}
+              {isSeller && !msg.is_seller && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-black/30 rounded shadow-lg"
+                      title="More options"
+                    >
+                      <MoreVertical className="w-3 h-3 text-white/80" />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem
+                      className="text-red-600"
+                      onClick={() => handleBanViewer(msg)}
+                    >
+                      Mute from chat
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
             </div>
           ))}
           <div ref={messagesEndRef} />
@@ -365,6 +413,15 @@ export default function LiveChatOverlay({ showId, isSeller = false, onClose, inp
           animation: slide-in 0.3s ease-out;
         }
       `}</style>
+
+      {/* Viewer Ban Dialog */}
+      <ViewerBanDialog
+        open={!!banningViewer}
+        onOpenChange={() => setBanningViewer(null)}
+        viewer={banningViewer}
+        sellerId={sellerId}
+        showId={showId}
+      />
     </>
   );
 }

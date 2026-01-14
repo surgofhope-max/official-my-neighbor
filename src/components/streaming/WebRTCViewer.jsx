@@ -1,420 +1,462 @@
-import React, { useEffect, useRef, useState } from "react";
-import { supabaseApi as base44 } from "@/api/supabaseClient";
+import React, { useEffect, useRef, useState, useCallback } from "react";
+import { supabase } from "@/lib/supabase/supabaseClient";
 import { isShowLive } from "@/api/streamSync";
 import { AlertCircle, Radio, Clock } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 
-// CRITICAL: Must match broadcaster's room URL EXACTLY
-const DAILY_ROOM_URL = "https://azlivemarket.daily.co/AZLiveMarket";
-const DAILY_ROOM_NAME = "AZLiveMarket";
+/**
+ * WebRTCViewer - Daily.co HEADLESS viewer component (NO Prebuilt iframe)
+ * 
+ * BROADCAST MODE (receive-only):
+ * - Fetches viewer token via daily-join-room edge function
+ * - Uses Daily call object (NOT iframe) - NEVER requests camera/mic
+ * - Only subscribes to and renders remote tracks from host
+ * - Per-show room isolation (no hardcoded shared room)
+ */
 
-console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-console.log("👁️ VIEWER CONFIGURATION");
-console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-console.log("📍 DAILY_ROOM_URL:", DAILY_ROOM_URL);
-console.log("🏷️ DAILY_ROOM_NAME:", DAILY_ROOM_NAME);
-console.log("🔑 API Key Required:", "No (public room)");
-console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-
-// Load Daily SDK
+// Load Daily SDK from CDN (only once)
 const loadDailySDK = () => {
   return new Promise((resolve, reject) => {
-    if (typeof window !== 'undefined' && window.DailyIframe) {
-      resolve(window.DailyIframe);
+    // Already loaded
+    if (window.DailyIframe) {
+      console.log("[WebRTCViewer] Daily SDK already loaded");
+      resolve(true);
       return;
     }
 
-    const script = document.createElement('script');
-    script.src = 'https://unpkg.com/@daily-co/daily-js';
+    // Check if script is already injected
+    if (document.getElementById("daily-js-sdk")) {
+      // Wait for it to load
+      const checkLoaded = setInterval(() => {
+        if (window.DailyIframe) {
+          clearInterval(checkLoaded);
+          resolve(true);
+        }
+      }, 100);
+      setTimeout(() => {
+        clearInterval(checkLoaded);
+        reject(new Error("Daily SDK load timeout"));
+      }, 10000);
+      return;
+    }
+
+    // Inject script
+    const script = document.createElement("script");
+    script.id = "daily-js-sdk";
+    script.src = "https://unpkg.com/@daily-co/daily-js@0.58.0";
     script.async = true;
+
     script.onload = () => {
-      if (window.DailyIframe) {
-        resolve(window.DailyIframe);
-      } else {
-        reject(new Error('Daily SDK loaded but DailyIframe not found'));
-      }
+      console.log("[WebRTCViewer] Daily SDK script loaded, waiting for init...");
+      let attempts = 0;
+      const maxAttempts = 50;
+      
+      const checkDaily = () => {
+        attempts++;
+        if (window.DailyIframe && typeof window.DailyIframe.createCallObject === "function") {
+          console.log("[WebRTCViewer] Daily SDK initialized");
+          resolve(true);
+        } else if (attempts >= maxAttempts) {
+          reject(new Error("Daily SDK init timeout"));
+        } else {
+          setTimeout(checkDaily, 100);
+        }
+      };
+      checkDaily();
     };
-    script.onerror = () => reject(new Error('Failed to load Daily SDK'));
+
+    script.onerror = () => {
+      reject(new Error("Failed to load Daily SDK"));
+    };
+
     document.head.appendChild(script);
   });
 };
 
 export default function WebRTCViewer({ show, onViewerCountChange }) {
-  const callObjectRef = useRef(null);
   const containerRef = useRef(null);
-  const videoElementRef = useRef(null);
-  const remoteStreamRef = useRef(null);
-  const [connectionStatus, setConnectionStatus] = useState('initializing');
-  const [error, setError] = useState(null);
-  const [sdkLoaded, setSDKLoaded] = useState(false);
+  const videoRef = useRef(null);
+  const audioRef = useRef(null);
+  const callObjectRef = useRef(null);
   const mountedRef = useRef(true);
-  const statusCheckIntervalRef = useRef(null);
-  const reconnectTimeoutRef = useRef(null);
-  const reconnectAttemptsRef = useRef(0);
-  const lastStatusCheckRef = useRef(0);
-
-  // CRITICAL: Exponential backoff for reconnection
-  const MAX_RECONNECT_ATTEMPTS = 5;
-  const BASE_RECONNECT_DELAY = 2000; // 2 seconds
+  const joiningRef = useRef(false);
   
-  // CRITICAL: Rate limiting for status checks - INCREASED to 25s
-  const MIN_STATUS_CHECK_INTERVAL = 25000; // 25 seconds minimum between checks
+  // Viewer room state (fetched from daily-join-room)
+  const [viewerRoomUrl, setViewerRoomUrl] = useState(null);
+  const [viewerToken, setViewerToken] = useState(null);
+  const [joinError, setJoinError] = useState(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState('initializing');
+  const [isJoined, setIsJoined] = useState(false);
+  const [hasRemoteVideo, setHasRemoteVideo] = useState(false);
+  
+  // Track if we've attempted to join this show
+  const joinAttemptedRef = useRef(false);
 
-  // Minimal logging - removed verbose console spam
+  // Helper: Stop tracks on a MediaStream and clear srcObject
+  const clearMediaElement = (ref) => {
+    try {
+      const el = ref?.current;
+      if (!el) return;
+      const stream = el.srcObject;
+      if (stream && typeof stream.getTracks === "function") {
+        stream.getTracks().forEach(t => { try { t.stop(); } catch {} });
+      }
+      el.srcObject = null;
+    } catch {}
+  };
 
-  // Load SDK on mount
+  // Cleanup on unmount
   useEffect(() => {
-    console.log("🔧 WebRTCViewer: Loading Daily SDK...");
-    loadDailySDK()
-      .then(() => {
-        if (mountedRef.current) {
-          console.log("✅ Daily SDK loaded successfully");
-          setSDKLoaded(true);
-        }
-      })
-      .catch((err) => {
-        if (mountedRef.current) {
-          console.error("❌ Failed to load Daily SDK:", err);
-          setError("Failed to load streaming SDK. Please refresh the page.");
-        }
-      });
-
+    mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      
+      // Clear video/audio srcObject and stop tracks
+      clearMediaElement(videoRef);
+      clearMediaElement(audioRef);
+      
+      // Cleanup call object
+      if (callObjectRef.current) {
+        console.log("[WebRTCViewer] Cleanup: leaving and destroying call");
+        try {
+          callObjectRef.current.leave();
+          callObjectRef.current.destroy();
+        } catch (e) {
+          console.warn("[WebRTCViewer] Cleanup error:", e);
+        }
+        callObjectRef.current = null;
+      }
+      joiningRef.current = false;
     };
   }, []);
-
-  // REMOVED: checkStreamStatus function - no longer needed
-  // Parent LiveShow component handles show polling via react-query
-  // WebRTCViewer only connects when isShowLive(show) is true
 
   // AUTHORITATIVE: stream_status === "live" is the ONLY rule for live
   const showIsLive = isShowLive(show);
 
-  // CRITICAL FIX: ONLY start monitoring when stream is actually live
-  // DO NOT poll when stream is offline - prevents the glitch loop
+  // Fetch viewer token when show is live
   useEffect(() => {
-    if (!sdkLoaded || !show) {
+    if (!show?.id) return;
+    
+    // Only attempt if show is live and we haven't tried yet for this show
+    if (showIsLive && !joinAttemptedRef.current && !viewerToken) {
+      fetchViewerToken();
+    }
+    
+    // Reset when show changes
+    return () => {
+      joinAttemptedRef.current = false;
+    };
+  }, [show?.id, showIsLive]);
+
+  const fetchViewerToken = async () => {
+    if (!show?.id || !mountedRef.current) return;
+    
+    joinAttemptedRef.current = true;
+    setIsLoading(true);
+    setJoinError(null);
+    
+    console.log("[WebRTCViewer] Fetching viewer token for show:", show.id);
+    
+    try {
+      const { data, error } = await supabase.functions.invoke("daily-join-room", {
+        body: { show_id: show.id }
+      });
+
+      console.log("[WebRTCViewer][DAILY-JOIN][DEBUG] invoke result:", {
+        sent_show_id: show?.id,
+        hasData: !!data,
+        hasError: !!error,
+      });
+
+      if (error?.context) {
+        try {
+          const clone = error.context.clone();
+          const text = await clone.text();
+          console.log("[WebRTCViewer][DAILY-JOIN][DEBUG] error.context body:", text);
+        } catch (e) {
+          // ignore
+        }
+      }
+      
+      if (!mountedRef.current) return;
+      
+      if (error) {
+        console.error("[WebRTCViewer] Edge function error:", error);
+        setJoinError(error.message || "Failed to join stream");
+        setIsLoading(false);
+        return;
+      }
+      
+      if (data?.error) {
+        console.log("[WebRTCViewer] Server returned error:", data.error);
+        
+        if (data.error === "show-not-live") {
+          setJoinError("waiting");
+        } else {
+          setJoinError(data.error);
+        }
+        setIsLoading(false);
+        return;
+      }
+      
+      if (!data?.room_url || !data?.token) {
+        console.error("[WebRTCViewer] Invalid response:", data);
+        setJoinError("Invalid stream response");
+        setIsLoading(false);
+        return;
+      }
+      
+      console.log("[WebRTCViewer] Got viewer token for room:", data.room_name);
+      setViewerRoomUrl(data.room_url);
+      setViewerToken(data.token);
+      setConnectionStatus('ready');
+      setIsLoading(false);
+      
+    } catch (err) {
+      if (!mountedRef.current) return;
+      console.error("[WebRTCViewer] Fetch error:", err);
+      setJoinError(err?.message || "Failed to connect");
+      setIsLoading(false);
+    }
+  };
+
+  // Join Daily room using headless call object (NO DEVICE ACCESS)
+  const joinDailyRoom = useCallback(async () => {
+    // CRITICAL: Synchronous lock to prevent duplicate join attempts
+    if (joiningRef.current) {
+      console.log("[WebRTCViewer] Join already in progress, skipping");
+      return;
+    }
+    joiningRef.current = true;
+
+    if (!viewerRoomUrl || !viewerToken || !mountedRef.current) {
+      joiningRef.current = false;
+      return;
+    }
+    if (callObjectRef.current) {
+      console.log("[WebRTCViewer] Already have call object, skipping");
+      joiningRef.current = false;
       return;
     }
 
-    // AUTHORITATIVE: Only connect when stream_status === "live"
-    if (showIsLive && show.stream_url) {
-      // Stream is live - connect immediately
-      if (!callObjectRef.current) {
-        connectToStream(show.stream_url);
-      }
-    }
-    // DO NOT set up polling intervals when stream is not live
-    // The parent LiveShow component handles polling the show status
+    console.log("[WebRTCViewer] Starting headless Daily join...");
+    setConnectionStatus('joining');
 
-    return () => {
-      if (statusCheckIntervalRef.current) {
-        clearInterval(statusCheckIntervalRef.current);
-        statusCheckIntervalRef.current = null;
-      }
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-        reconnectTimeoutRef.current = null;
-      }
-      disconnectFromStream();
-    };
-  }, [sdkLoaded, show?.id, showIsLive, show?.stream_url]);
-
-  const connectToStream = async (streamUrl) => {
-    if (!mountedRef.current) return;
-    
     try {
-      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-      console.log("🔗 VIEWER CONNECTING TO STREAM");
-      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-      console.log("📺 Show ID:", show.id);
-      console.log("📦 Stream URL from DB:", streamUrl);
-      console.log("📍 Expected URL:", DAILY_ROOM_URL);
-      console.log("✅ URLs match:", streamUrl === DAILY_ROOM_URL);
-      console.log("🏷️ Room Name:", DAILY_ROOM_NAME);
-      console.log("🔍 Show is_streaming:", show.is_streaming);
-      console.log("🎥 Container exists:", !!containerRef.current);
+      // Load SDK
+      await loadDailySDK();
       
-      // CRITICAL: Always use hardcoded room URL to ensure consistency
-      const finalRoomUrl = DAILY_ROOM_URL;
-      console.log("🎯 Using room URL:", finalRoomUrl);
-      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-      
-      setConnectionStatus('connecting');
-      setError(null);
+      if (!mountedRef.current) return;
 
-      // CRITICAL: Check if already connected to avoid duplicate connections
-      if (callObjectRef.current) {
-        console.log("⚠️ Already connected - cleaning up old connection first");
-        await disconnectFromStream();
-        await new Promise(resolve => setTimeout(resolve, 1000)); // Wait for cleanup
+      // Create headless call object (NO iframe, NO device prompts)
+      console.log("[WebRTCViewer] Creating headless call object...");
+      const call = window.DailyIframe.createCallObject({
+        // CRITICAL: Auto-subscribe to remote tracks (required for track-started events)
+        subscribeToTracksAutomatically: true,
+        // CRITICAL: Disable all local device access
+        audioSource: false,
+        videoSource: false,
+        dailyConfig: {
+          // Prevent any device enumeration
+          avoidEval: true,
+        }
+      });
+
+      callObjectRef.current = call;
+
+      // CRITICAL: Force local devices OFF before joining
+      call.setLocalAudio(false);
+      call.setLocalVideo(false);
+
+      // Additional safeguard: disable input devices if API available
+      if (typeof call.updateInputSettings === 'function') {
+        try {
+          await call.updateInputSettings({ audio: false, video: false });
+        } catch (e) {
+          console.log("[WebRTCViewer] updateInputSettings not supported:", e.message);
+        }
       }
 
-      // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-      // CRITICAL VALIDATION: Container Element
-      // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-      console.log("🔍 STEP 1: VALIDATING CONTAINER ELEMENT");
-      console.log("   containerRef.current:", containerRef.current);
-      console.log("   Is null?", containerRef.current === null);
-      console.log("   Is undefined?", containerRef.current === undefined);
-      
-      if (!containerRef.current) {
-        throw new Error("❌ CRITICAL: Video container is NULL - DOM not ready");
-      }
-
-      console.log("   ✅ Container exists");
-      console.log("   Tag name:", containerRef.current.tagName);
-      console.log("   In DOM?", document.body.contains(containerRef.current));
-      console.log("   Parent:", containerRef.current.parentElement?.tagName);
-      
-      const rect = containerRef.current.getBoundingClientRect();
-      console.log("   Dimensions:", rect.width, "x", rect.height);
-      console.log("   Position:", rect.top, rect.left);
-      
-      if (rect.width === 0 || rect.height === 0) {
-        throw new Error("❌ CRITICAL: Container has zero dimensions");
-      }
-
-      // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-      // CRITICAL VALIDATION: Daily SDK
-      // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-      console.log("🔍 STEP 2: VALIDATING DAILY SDK");
-      console.log("   window.DailyIframe:", typeof window.DailyIframe);
-      console.log("   Is undefined?", window.DailyIframe === undefined);
-      
-      if (!window.DailyIframe) {
-        throw new Error("❌ CRITICAL: Daily SDK not loaded - window.DailyIframe is undefined");
-      }
-      
-      console.log("   ✅ Daily SDK loaded");
-      console.log("   createFrame method:", typeof window.DailyIframe.createFrame);
-      
-      if (typeof window.DailyIframe.createFrame !== 'function') {
-        throw new Error("❌ CRITICAL: createFrame is not a function");
-      }
-
-      // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-      // CREATING DAILY IFRAME
-      // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-      console.log("🎬 STEP 3: CREATING DAILY IFRAME");
-      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-      console.log("   Room URL:", DAILY_ROOM_URL);
-      console.log("   Room Name:", DAILY_ROOM_NAME);
-      console.log("   Container:", containerRef.current.tagName);
-      console.log("   Mode: IFRAME with URL (auto pre-join)");
-      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-
-      const createFrameOptions = {
-        url: DAILY_ROOM_URL,
-        userName: `Viewer_${Date.now()}`,
-        iframeStyle: {
-          position: 'absolute',
-          width: '100%',
-          height: '100%',
-          border: '0',
-          borderRadius: '0'
-        },
-        showLeaveButton: false,
-        showFullscreenButton: false
-      };
-
-      console.log("   Options:", JSON.stringify(createFrameOptions, null, 2));
-      console.log("   Calling createFrame()...");
-
-      try {
-        callObjectRef.current = window.DailyIframe.createFrame(
-          containerRef.current,
-          createFrameOptions
-        );
-      } catch (createError) {
-        console.error("❌ createFrame() threw error:", createError);
-        throw new Error(`createFrame failed: ${createError.message}`);
-      }
-
-      // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-      // VALIDATE FRAME CREATION
-      // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-      console.log("🔍 STEP 4: VALIDATING FRAME CREATION");
-      console.log("   callObjectRef.current:", callObjectRef.current);
-      console.log("   Is null?", callObjectRef.current === null);
-      console.log("   Is undefined?", callObjectRef.current === undefined);
-      console.log("   Type:", typeof callObjectRef.current);
-      
-      if (!callObjectRef.current) {
-        throw new Error("❌ CRITICAL: createFrame() returned null/undefined");
-      }
-
-      console.log("   ✅ Frame created successfully");
-      console.log("   Has join method?", typeof callObjectRef.current.join === 'function');
-      console.log("   Has on method?", typeof callObjectRef.current.on === 'function');
-      console.log("   Has participants method?", typeof callObjectRef.current.participants === 'function');
-
-      // Check if iframe was actually inserted into DOM
-      const iframe = containerRef.current.querySelector('iframe');
-      console.log("   Iframe in DOM?", !!iframe);
-      if (iframe) {
-        console.log("   Iframe src:", iframe.src);
-        console.log("   Iframe dimensions:", iframe.offsetWidth, "x", iframe.offsetHeight);
-      } else {
-        console.warn("⚠️ WARNING: No iframe found in container after createFrame()");
-      }
-
-      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-      console.log("✅ DAILY IFRAME SETUP COMPLETE");
-      console.log("   Pre-join UI should now be visible");
-      console.log("   User should see: Camera preview + Join Now button");
-      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-
-      // Setup event listeners for when user clicks Join Now
-      console.log("🔊 Setting up event listeners for pre-join flow...");
-      callObjectRef.current
-        .on('loading', () => {
-          console.log("⏳ [Viewer] Daily iframe loading pre-join UI...");
-        })
-        .on('loaded', () => {
-          console.log("✅ [Viewer] Pre-join UI loaded - waiting for user to click Join");
-        })
-        .on('joined-meeting', () => {
-          if (!mountedRef.current) return;
-          console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-          console.log("✅ VIEWER JOINED (USER CLICKED JOIN NOW)");
-          console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+      // Event handlers
+      call.on("joined-meeting", (event) => {
+        console.log("[WebRTCViewer] ✅ Joined meeting as viewer");
+        if (mountedRef.current) {
+          setIsJoined(true);
           setConnectionStatus('connected');
-          reconnectAttemptsRef.current = 0;
+        }
+        
+        // Force devices off again after join
+        call.setLocalAudio(false);
+        call.setLocalVideo(false);
+      });
 
-          const participants = callObjectRef.current.participants();
-          console.log("👥 Participants in room:", Object.keys(participants).length);
-          Object.values(participants).forEach(p => {
-            console.log(`   - ${p.user_name} (${p.local ? 'LOCAL' : 'REMOTE'})`, {
-              video: p.video,
-              audio: p.audio,
-              tracks: p.tracks ? Object.keys(p.tracks) : []
-            });
-          });
-          console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        })
-        .on('left-meeting', () => {
-          if (!mountedRef.current) return;
-          console.log("👋 [Viewer] Left meeting");
-          setConnectionStatus('disconnected');
-        })
-        .on('error', (e) => {
-          if (!mountedRef.current) return;
-          console.error("❌ [Viewer] Daily error:", e);
-          setError(`Connection error: ${e.errorMsg || 'Unknown error'}`);
-          setConnectionStatus('error');
-        })
-        .on('participant-joined', (e) => {
-          console.log("👤 [Viewer] Participant joined:", e.participant.user_name);
-        })
-        .on('track-started', (e) => {
-          console.log("🎥 [Viewer] Track started:", e.track.kind, "from", e.participant?.user_name);
+      call.on("left-meeting", () => {
+        console.log("[WebRTCViewer] Left meeting");
+        if (mountedRef.current) {
+          setIsJoined(false);
+          setHasRemoteVideo(false);
+        }
+      });
+
+      call.on("error", (event) => {
+        console.error("[WebRTCViewer] Daily error:", event);
+        if (mountedRef.current) {
+          setJoinError(event?.errorMsg || "Stream error");
+        }
+      });
+
+      call.on("participant-joined", (event) => {
+        console.log("[WebRTCViewer] Participant joined:", event.participant?.user_id);
+      });
+
+      call.on("participant-left", (event) => {
+        console.log("[WebRTCViewer] Participant left:", event.participant?.user_id);
+      });
+
+      // Handle remote tracks (this is where we receive the host's video/audio)
+      call.on("track-started", (event) => {
+        const { track, participant } = event;
+        
+        // Only process remote tracks (not local)
+        if (participant?.local) {
+          console.log("[WebRTCViewer] Ignoring local track");
+          return;
+        }
+
+        console.log("[WebRTCViewer] 🎬 Remote track started:", {
+          kind: track?.kind,
+          participantId: participant?.user_id,
+          isOwner: participant?.owner,
         });
 
-      console.log("✅ Iframe created with pre-join UI - NO programmatic join() call");
-      console.log("🎯 Buyer will see Daily's Join Now screen and must click to join");
-
-    } catch (error) {
-      if (!mountedRef.current) return;
-      
-      console.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-      console.error("❌ Failed to connect to stream:", error);
-      console.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-      
-      if (error.message?.toLowerCase().includes('rate limit')) {
-        setError("Connection rate limit reached. Retrying in a moment...");
-        
-        // EXPONENTIAL BACKOFF for reconnection
-        reconnectAttemptsRef.current++;
-        const delay = Math.min(
-          BASE_RECONNECT_DELAY * Math.pow(2, reconnectAttemptsRef.current),
-          30000
-        );
-        
-        console.log(`⏰ Retry connection in ${delay}ms (attempt ${reconnectAttemptsRef.current}/${MAX_RECONNECT_ATTEMPTS})`);
-        
-        if (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
-          reconnectTimeoutRef.current = setTimeout(() => {
-            if (mountedRef.current) {
-              connectToStream(streamUrl);
-            }
-          }, delay);
-        } else {
-          setError("Unable to connect after multiple attempts. Please refresh the page.");
+        if (track?.kind === "video") {
+          // Attach video track to video element
+          if (videoRef.current) {
+            const stream = new MediaStream([track]);
+            videoRef.current.srcObject = stream;
+            videoRef.current.play().catch(e => {
+              console.warn("[WebRTCViewer] Video autoplay blocked:", e);
+            });
+            setHasRemoteVideo(true);
+            console.log("[WebRTCViewer] ✅ Remote video attached");
+          }
+        } else if (track?.kind === "audio") {
+          // Attach audio track to audio element
+          if (audioRef.current) {
+            const stream = new MediaStream([track]);
+            audioRef.current.srcObject = stream;
+            audioRef.current.play().catch(e => {
+              console.warn("[WebRTCViewer] Audio autoplay blocked:", e);
+            });
+            console.log("[WebRTCViewer] ✅ Remote audio attached");
+          }
         }
-      } else {
-        setError(`Failed to connect: ${error.message}`);
+      });
+
+      call.on("track-stopped", (event) => {
+        const { track, participant } = event;
+        if (participant?.local) return;
+        
+        console.log("[WebRTCViewer] Remote track stopped:", track?.kind);
+        
+        if (track?.kind === "video") {
+          setHasRemoteVideo(false);
+        }
+      });
+
+      call.on("participant-counts-updated", (event) => {
+        console.log("[WebRTCViewer] Participant count:", event?.participantCounts);
+        if (onViewerCountChange && event?.participantCounts?.present) {
+          onViewerCountChange(event.participantCounts.present);
+        }
+      });
+
+      // JOIN the room (receive-only, no device access)
+      console.log("[WebRTCViewer] Joining room:", viewerRoomUrl);
+      await call.join({
+        url: viewerRoomUrl,
+        token: viewerToken,
+        // CRITICAL: Explicitly disable sending
+        videoSource: false,
+        audioSource: false,
+        startVideoOff: true,
+        startAudioOff: true,
+      });
+
+      console.log("[WebRTCViewer] ✅ Join call completed");
+
+    } catch (err) {
+      console.error("[WebRTCViewer] Join error:", err);
+      if (mountedRef.current) {
+        setJoinError(err?.message || "Failed to join stream");
         setConnectionStatus('error');
       }
+    } finally {
+      joiningRef.current = false;
     }
-  };
+  }, [viewerRoomUrl, viewerToken, onViewerCountChange]);
 
-  const disconnectFromStream = async () => {
+  // Auto-join when we have credentials
+  useEffect(() => {
+    if (viewerRoomUrl && viewerToken && !isJoined && !callObjectRef.current) {
+      joinDailyRoom();
+    }
+  }, [viewerRoomUrl, viewerToken, isJoined, joinDailyRoom]);
+
+  // Retry fetching token
+  const retryFetch = () => {
+    joinAttemptedRef.current = false;
+    setJoinError(null);
+    setIsJoined(false);
+    setHasRemoteVideo(false);
+    
+    // Clear video/audio srcObject and stop tracks
+    clearMediaElement(videoRef);
+    clearMediaElement(audioRef);
+    
     if (callObjectRef.current) {
       try {
-        console.log("🔌 Disconnecting from Daily.co stream");
-        await callObjectRef.current.leave();
-        await callObjectRef.current.destroy();
-        callObjectRef.current = null;
-        console.log("✅ Disconnected successfully");
-      } catch (error) {
-        console.error("⚠️ Error during disconnect:", error);
-        callObjectRef.current = null;
-      }
+        callObjectRef.current.leave();
+        callObjectRef.current.destroy();
+      } catch (e) {}
+      callObjectRef.current = null;
     }
+    joiningRef.current = false;
+    fetchViewerToken();
   };
 
   // Loading state
-  if (!sdkLoaded) {
+  if (isLoading) {
     return (
       <div className="w-full h-full bg-gradient-to-br from-gray-900 to-black flex items-center justify-center">
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white mx-auto mb-4"></div>
-          <p className="text-white text-lg">Loading stream player...</p>
+          <p className="text-white text-lg">Connecting to stream...</p>
         </div>
       </div>
     );
   }
 
-  // Error state
-  if (error) {
+  // Show is not defined yet
+  if (!show) {
     return (
-      <div className="w-full h-full bg-gradient-to-br from-gray-900 to-black flex items-center justify-center p-4">
-        <Alert className="max-w-md bg-red-500/20 border-red-500">
-          <AlertCircle className="h-5 w-5 text-red-500" />
-          <AlertDescription className="text-white">
-            {error}
-          </AlertDescription>
-        </Alert>
+      <div className="w-full h-full bg-gradient-to-br from-gray-900 to-black flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white mx-auto mb-4"></div>
+          <p className="text-white text-lg">Loading...</p>
+        </div>
       </div>
     );
   }
 
-  // FIXED: Waiting for stream - FULL-SCREEN PREVIEW VIDEO
-  // AUTHORITATIVE: stream_status === "live" is the only rule for live
-  if (!show || !showIsLive) {
-    // Minimal log to avoid spam
-    
-    // CRITICAL: If show is undefined, show loading state instead of "Waiting for Stream"
-    if (!show) {
-      return (
-        <div className="w-full h-full bg-gradient-to-br from-gray-900 to-black flex items-center justify-center">
-          <div className="text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white mx-auto mb-4"></div>
-            <p className="text-white text-lg">Loading...</p>
-          </div>
-        </div>
-      );
-    }
-
+  // Waiting for stream (show not live or special waiting error)
+  if (!showIsLive || joinError === "waiting") {
     return (
       <div className="w-full h-full bg-gradient-to-br from-purple-900 via-blue-900 to-gray-900 flex items-center justify-center">
-        {/* CRITICAL FIX: Full-screen video preview OR thumbnail OR gradient fallback */}
+        {/* Background: video preview or thumbnail */}
         <div className="absolute inset-0">
           {show.video_preview_url ? (
-            // PRIORITY 1: Full-screen video preview
             <video
               src={show.video_preview_url}
               className="w-full h-full object-cover"
@@ -422,63 +464,108 @@ export default function WebRTCViewer({ show, onViewerCountChange }) {
               loop
               muted
               playsInline
-              onLoadedData={() => console.log("✅ PREVIEW VIDEO LOADED:", show.video_preview_url)}
-              onError={(e) => console.error("❌ PREVIEW VIDEO ERROR:", e, "URL:", show.video_preview_url)}
             />
           ) : show.thumbnail_url ? (
-            // PRIORITY 2: Show thumbnail image
             <img
               src={show.thumbnail_url}
               alt={show.title}
               className="w-full h-full object-cover"
-              onLoad={() => console.log("✅ THUMBNAIL LOADED:", show.thumbnail_url)}
-              onError={() => console.error("❌ THUMBNAIL ERROR:", show.thumbnail_url)}
             />
           ) : (
-            // PRIORITY 3: Gradient background fallback
             <div className="w-full h-full bg-gradient-to-br from-purple-900 via-blue-900 to-gray-900"></div>
           )}
           
-          {/* Dark gradient overlay for text readability */}
+          {/* Dark gradient overlay */}
           <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent"></div>
         </div>
 
-        {/* Overlay text content */}
+        {/* Overlay text */}
         <div className="relative z-10 text-center">
           <Clock className="w-16 h-16 text-white/60 mx-auto mb-4 animate-pulse" />
           <h3 className="text-2xl font-bold text-white mb-2">Waiting for Stream</h3>
           <p className="text-white/80">The host will start streaming shortly...</p>
+          {joinError === "waiting" && (
+            <button
+              onClick={retryFetch}
+              className="mt-4 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-colors"
+            >
+              Check Again
+            </button>
+          )}
         </div>
       </div>
     );
   }
 
-  // Stream container
+  // Error state (non-waiting errors)
+  if (joinError && joinError !== "waiting") {
+    return (
+      <div className="w-full h-full bg-gradient-to-br from-gray-900 to-black flex items-center justify-center p-4">
+        <div className="text-center">
+          <Alert className="max-w-md bg-red-500/20 border-red-500">
+            <AlertCircle className="h-5 w-5 text-red-500" />
+            <AlertDescription className="text-white">
+              {joinError}
+            </AlertDescription>
+          </Alert>
+          <button
+            onClick={retryFetch}
+            className="mt-4 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-colors"
+          >
+            Try Again
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Joining state
+  if (connectionStatus === 'joining' || (viewerRoomUrl && viewerToken && !isJoined)) {
+    return (
+      <div className="w-full h-full bg-gradient-to-br from-gray-900 to-black flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-purple-500 mx-auto mb-4"></div>
+          <p className="text-white text-lg">Joining stream...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // BROADCAST MODE: Headless viewer - renders remote video/audio directly
   return (
     <div 
       ref={containerRef}
-      className="w-full h-full bg-black"
+      className="w-full h-full bg-black relative"
     >
-      {connectionStatus === 'connecting' && (
-        <div className="absolute inset-0 bg-gradient-to-br from-gray-900 to-black flex items-center justify-center z-10">
+      {/* Remote Video - Full screen */}
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted={false}
+        className="absolute inset-0 w-full h-full object-cover bg-black"
+        style={{ zIndex: 10 }}
+      />
+      
+      {/* Remote Audio (hidden element for audio playback) */}
+      <audio
+        ref={audioRef}
+        autoPlay
+        playsInline
+        style={{ display: 'none' }}
+      />
+      
+      {/* No video placeholder */}
+      {!hasRemoteVideo && isJoined && (
+        <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-gray-900 to-black z-5">
           <div className="text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-purple-500 mx-auto mb-4"></div>
-            <p className="text-white text-lg">Connecting to stream...</p>
-            <p className="text-white/60 text-sm mt-2">
-              {reconnectAttemptsRef.current > 0 && `Retry attempt ${reconnectAttemptsRef.current}`}
-            </p>
+            <Radio className="w-16 h-16 text-white/40 mx-auto mb-4 animate-pulse" />
+            <p className="text-white/60">Waiting for host video...</p>
           </div>
         </div>
       )}
-
-      {connectionStatus === 'connected' && (
-        <div className="absolute top-4 right-4 z-20">
-          <div className="bg-red-500/90 backdrop-blur-sm px-3 py-1 rounded-full flex items-center gap-2">
-            <div className="w-2 h-2 bg-white rounded-full animate-pulse"></div>
-            <span className="text-white text-sm font-medium">LIVE</span>
-          </div>
-        </div>
-      )}
+      
+      {/* LIVE indicator REMOVED - LiveShow header already shows LIVE badge based on DB status */}
     </div>
   );
 }

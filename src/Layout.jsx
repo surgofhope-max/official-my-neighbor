@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { supabase } from "@/lib/supabase/supabaseClient";
+import { useQueryClient } from "@tanstack/react-query";
 import { useSupabaseAuth } from "@/lib/auth/SupabaseAuthProvider";
 import { getUnreadNotificationCount } from "@/api/notifications";
 import { getUnreadMessageCount } from "@/api/messages";
@@ -15,6 +16,20 @@ import { canAccessRoute, getUnauthorizedRedirect, isSuperAdmin, requireSellerAsy
 // ═══════════════════════════════════════════════════════════════════════════
 const IDENTITY_CACHE_KEY = "lm_identity_cache";
 const IDENTITY_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FORENSIC LOGGING HELPER (gated behind localStorage flag)
+// Enable with: localStorage.setItem("LM_FORENSIC", "1")
+// ═══════════════════════════════════════════════════════════════════════════
+const LM_FORENSIC = () =>
+  typeof window !== "undefined" && window.localStorage?.getItem("LM_FORENSIC") === "1";
+
+// Log forensic mode status on first load (only once per page load)
+if (typeof window !== "undefined") {
+  try {
+    if (LM_FORENSIC()) console.warn("[LM_FORENSIC] ENABLED (localStorage LM_FORENSIC=1)");
+  } catch {}
+}
 
 /**
  * Identity cache structure for session-scoped caching
@@ -87,14 +102,19 @@ import ImpersonationBanner from "./components/admin/ImpersonationBanner";
 export default function Layout({ children, currentPageName }) {
   const location = useLocation();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   
   // Use SupabaseAuthProvider as single source of truth for user state
   const { user, isLoadingAuth } = useSupabaseAuth();
   
   const [seller, setSeller] = useState(null);
+  // Buyer profile for route guard prerequisites
+  const [buyerProfile, setBuyerProfile] = useState(null);
   // Option B: Track approved seller status from DB truth
   const [isVerifiedApprovedSeller, setIsVerifiedApprovedSeller] = useState(false);
   const [dbUserRole, setDbUserRole] = useState(null);
+  // AUDIT: Full DB user row for forensic comparison with auth user
+  const [dbUserRow, setDbUserRow] = useState(null);
   const [unreadCount, setUnreadCount] = useState(0);
   const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
   
@@ -180,8 +200,59 @@ export default function Layout({ children, currentPageName }) {
     loadUnreadNotificationCount(user);
   }, [user]);
 
-  // Pages where header should be shown
-  const pagesWithHeader = ['Marketplace', 'SellerDashboard', 'BuyerProfile', 'AdminDashboard'];
+  // ═══════════════════════════════════════════════════════════════════════════
+  // BUYER PROFILE SYNC: Re-fetch buyer_profiles when BuyerProfile page saves
+  // This ensures route guards see the updated buyer profile immediately
+  // ═══════════════════════════════════════════════════════════════════════════
+  useEffect(() => {
+    const handleBuyerProfileUpdated = async (event) => {
+      const userId = event.detail?.userId || user?.id;
+      if (!userId) return;
+      
+      console.log("[Layout] buyerProfileUpdated event received, re-fetching buyer_profiles");
+      
+      const { data: buyerRow, error: buyerError } = await supabase
+        .from("buyer_profiles")
+        .select("*")
+        .eq("user_id", userId)
+        .maybeSingle();
+      
+      if (!buyerError && buyerRow) {
+        console.log("[Layout] buyerProfile re-fetched:", { full_name: buyerRow.full_name, phone: buyerRow.phone, email: buyerRow.email });
+        setBuyerProfile(buyerRow);
+      } else {
+        console.warn("[Layout] buyerProfile re-fetch failed:", buyerError);
+      }
+    };
+    
+    window.addEventListener("buyerProfileUpdated", handleBuyerProfileUpdated);
+    return () => window.removeEventListener("buyerProfileUpdated", handleBuyerProfileUpdated);
+  }, [user?.id]);
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SELLER STATUS SYNC: Refresh identity when seller approval is detected
+  // This ensures nav updates immediately after BuyerProfile detects approval
+  // ═══════════════════════════════════════════════════════════════════════════
+  useEffect(() => {
+    const handleSellerStatusUpdated = async (event) => {
+      const eventUserId = event.detail?.userId;
+      // Ignore if no authenticated user
+      if (!user?.id) return;
+      // Only act if event is for current user (or userId not specified)
+      if (eventUserId && eventUserId !== user.id) return;
+      
+      console.log("[Layout] sellerStatusUpdated received, refreshing identity");
+      
+      // Use existing forceRefreshIdentity to clear cache and reload from DB
+      await forceRefreshIdentity();
+    };
+    
+    window.addEventListener("sellerStatusUpdated", handleSellerStatusUpdated);
+    return () => window.removeEventListener("sellerStatusUpdated", handleSellerStatusUpdated);
+  }, [user?.id, forceRefreshIdentity]);
+
+  // Pages where header should be shown (lowercase to match normalized route keys)
+  const pagesWithHeader = ['marketplace', 'sellerdashboard', 'buyerprofile', 'admindashboard'];
   const shouldShowHeader = pagesWithHeader.includes(currentPageName);
 
   // Check if admin is impersonating
@@ -233,6 +304,7 @@ export default function Layout({ children, currentPageName }) {
             if (cache.sellerRow) {
               setSeller(cache.sellerRow);
             }
+            setBuyerProfile(cache.buyerProfile || null);
             // Restore account status from cache, but update ref too
             const cachedStatus = cache.accountStatus || "active";
             authoritativeAccountStatusRef.current = cachedStatus;
@@ -256,8 +328,10 @@ export default function Layout({ children, currentPageName }) {
     } else {
       // Logged out - clear everything including cache
       setSeller(null);
+      setBuyerProfile(null);
       setIsVerifiedApprovedSeller(false);
       setDbUserRole(null);
+      setDbUserRow(null);
       setAccountStatus("active");
       setUnreadCount(0);
       setUnreadNotificationCount(0);
@@ -378,6 +452,127 @@ export default function Layout({ children, currentPageName }) {
       supabase.removeChannel(channel);
     };
   }, [user?.id, handleAccountStatusChange]);
+
+  // Realtime subscription for viewer_bans (chat mute enforcement)
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const viewerBansChannel = supabase
+      .channel('viewer_bans_realtime')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'viewer_bans',
+          filter: `viewer_id=eq.${user.id}`
+        },
+        async (payload) => {
+          console.log('[Layout] Realtime: viewer_bans INSERT', payload);
+          console.log("[VB REALTIME]", {
+            eventType: payload?.eventType,
+            table: payload?.table,
+            schema: payload?.schema,
+            new: payload?.new,
+            old: payload?.old,
+          });
+          
+          // Dump active viewer-ban-check queries BEFORE invalidation
+          const matchesBefore = queryClient
+            .getQueryCache()
+            .findAll({ predicate: q => q.queryKey?.[0] === "viewer-ban-check" })
+            .map(q => ({
+              key: q.queryKey,
+              stateStatus: q.state.status,
+              fetchStatus: q.state.fetchStatus,
+              observers: q.getObserversCount?.() ?? "n/a",
+            }));
+          console.log("[VB CACHE][BEFORE INVALIDATE]", matchesBefore);
+          
+          queryClient.invalidateQueries({
+            predicate: q => q.queryKey?.[0] === 'viewer-ban-check'
+          });
+          
+          console.log("[VB CACHE][AFTER INVALIDATE]", {
+            invalidated: true,
+            userId: user?.id ?? null,
+            path: window.location.pathname,
+          });
+          
+          // Force refetch to prove if this fixes immediate update
+          console.log("[VB REALTIME][AFTER INVALIDATE] forcing refetchQueries for viewer-ban-check");
+          await queryClient.refetchQueries({ predicate: q => q.queryKey?.[0] === 'viewer-ban-check' });
+          console.log("[VB REALTIME][AFTER REFETCH] done");
+          
+          queryClient.invalidateQueries({ queryKey: ['viewer-bans'] });
+          queryClient.invalidateQueries({
+            predicate: q => q.queryKey?.[0] === 'seller-banned-viewers-count'
+          });
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'DELETE',
+          schema: 'public',
+          table: 'viewer_bans',
+          filter: `viewer_id=eq.${user.id}`
+        },
+        async (payload) => {
+          console.log('[Layout] Realtime: viewer_bans DELETE', payload);
+          console.log("[VB REALTIME]", {
+            eventType: payload?.eventType,
+            table: payload?.table,
+            schema: payload?.schema,
+            new: payload?.new,
+            old: payload?.old,
+          });
+          
+          // Dump active viewer-ban-check queries BEFORE invalidation
+          const matchesBefore = queryClient
+            .getQueryCache()
+            .findAll({ predicate: q => q.queryKey?.[0] === "viewer-ban-check" })
+            .map(q => ({
+              key: q.queryKey,
+              stateStatus: q.state.status,
+              fetchStatus: q.state.fetchStatus,
+              observers: q.getObserversCount?.() ?? "n/a",
+            }));
+          console.log("[VB CACHE][BEFORE INVALIDATE]", matchesBefore);
+          
+          queryClient.invalidateQueries({
+            predicate: q => q.queryKey?.[0] === 'viewer-ban-check'
+          });
+          
+          console.log("[VB CACHE][AFTER INVALIDATE]", {
+            invalidated: true,
+            userId: user?.id ?? null,
+            path: window.location.pathname,
+          });
+          
+          // Force refetch to prove if this fixes immediate update
+          console.log("[VB REALTIME][AFTER INVALIDATE] forcing refetchQueries for viewer-ban-check");
+          await queryClient.refetchQueries({ predicate: q => q.queryKey?.[0] === 'viewer-ban-check' });
+          console.log("[VB REALTIME][AFTER REFETCH] done");
+          
+          queryClient.invalidateQueries({ queryKey: ['viewer-bans'] });
+          queryClient.invalidateQueries({
+            predicate: q => q.queryKey?.[0] === 'seller-banned-viewers-count'
+          });
+        }
+      )
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          console.log('[Layout] Realtime subscription active for viewer_bans');
+        } else if (status === 'CHANNEL_ERROR') {
+          console.warn('[Layout] Realtime subscription error for viewer_bans');
+        }
+      });
+
+    return () => {
+      supabase.removeChannel(viewerBansChannel);
+    };
+  }, [user?.id, queryClient, location.pathname]);
   
   // OPTION 2: Polling fallback (every 5 seconds) - ensures enforcement even if realtime fails
   useEffect(() => {
@@ -435,17 +630,151 @@ export default function Layout({ children, currentPageName }) {
     }
 
     // Allow HostConsole to handle its own access checks
-    if (currentPageName === "HostConsole") return;
+    if (currentPageName === "hostconsole") return;
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // HARD AUDIT: Log when buyerProfile is null/undefined while user is authenticated
+    // This is the key failure mode causing sellerdashboard redirect
+    // ═══════════════════════════════════════════════════════════════════════════
+    if (user?.id && !buyerProfile) {
+      console.groupCollapsed("[BUYERPROFILE NULL WHILE AUTHED]");
+      console.log("DIAGNOSTIC:", {
+        currentPageName,
+        pathname: location.pathname,
+        authHydrated,
+        authUserId: user?.id,
+        email: user?.email,
+        reason: buyerProfile === null ? "EXPLICITLY_NULL" : buyerProfile === undefined ? "UNDEFINED" : "FALSY",
+        buyerProfileState: buyerProfile,
+        sellerState: seller,
+        dbUserRowExists: !!dbUserRow
+      });
+      console.groupEnd();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // AUDIT: AUTH VS DB USER SNAPSHOT — Compare what gates SEE vs DB TRUTH
+    // ═══════════════════════════════════════════════════════════════════════════
+    console.groupCollapsed("[AUTH VS DB USER SNAPSHOT]");
+    console.log("authUser (from useSupabaseAuth):", {
+      id: user?.id,
+      email: user?.email,
+      role: user?.role,
+      buyer_safety_agreed: user?.buyer_safety_agreed,
+      seller_safety_agreed: user?.seller_safety_agreed,
+      seller_onboarding_completed: user?.seller_onboarding_completed,
+      user_metadata: user?.user_metadata
+    });
+    console.log("dbUserRow (from public.users query):", dbUserRow);
+    console.log("DB SELLER FLAGS PRESENT?", {
+      seller_safety_agreed: dbUserRow?.seller_safety_agreed,
+      seller_onboarding_completed: dbUserRow?.seller_onboarding_completed,
+      seller_safety_agreed_at: dbUserRow?.seller_safety_agreed_at
+    });
+    console.log("buyerProfile (raw):", buyerProfile);
+    console.log("seller (raw):", seller);
+    console.groupEnd();
 
     // Check if current route is accessible
-    const hasAccess = canAccessRoute(currentPageName, user, seller);
+    const hasAccess = canAccessRoute(currentPageName, user, seller, buyerProfile);
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // GATING SNAPSHOT: Full diagnostic for routing decisions
+    // ═══════════════════════════════════════════════════════════════════════════
+    const buyerComplete = !!(buyerProfile?.full_name && buyerProfile?.phone && buyerProfile?.email);
+    const buyerSafetyDirect = user?.buyer_safety_agreed === true;
+    const buyerSafetyMeta = user?.user_metadata?.buyer_safety_agreed === true;
+    const buyerSafety = buyerSafetyDirect || buyerSafetyMeta;
+    const redirectTo = !hasAccess ? getUnauthorizedRedirect(currentPageName, user, buyerProfile) : null;
+    
+    console.groupCollapsed("[GATING SNAPSHOT]");
+    console.log("Route:", { pathname: location.pathname, currentPageName });
+    console.log("Auth:", { userId: user?.id, email: user?.email, authHydrated });
+    console.log("BuyerProfile (raw):", buyerProfile);
+    console.log("BuyerProfile check:", { 
+      buyerComplete, 
+      missingFields: !buyerProfile ? "NO_PROFILE" : [
+        !buyerProfile.full_name && "full_name",
+        !buyerProfile.phone && "phone", 
+        !buyerProfile.email && "email"
+      ].filter(Boolean)
+    });
+    console.log("BuyerSafety:", { buyerSafety, source: buyerSafetyDirect ? "users.buyer_safety_agreed" : buyerSafetyMeta ? "user_metadata" : "NONE" });
+    console.log("Seller:", { 
+      sellerId: seller?.id, 
+      status: seller?.status,
+      userRole: user?.role,
+      userMetaRole: user?.user_metadata?.role 
+    });
+    console.log("Guard result:", { hasAccess, redirectTo });
+    console.groupEnd();
 
     if (!hasAccess) {
-      // Silently redirect to appropriate page
-      const redirectTo = getUnauthorizedRedirect(currentPageName, user);
-      navigate(createPageUrl(redirectTo), { replace: true });
+      // MARKETPLACE REDIRECT FORENSIC LOG: Capture exact state when redirecting to Marketplace
+      if (redirectTo && redirectTo.toLowerCase() === "marketplace") {
+        console.warn("[MARKETPLACE REDIRECT FORENSIC]", {
+          pathname: window.location.pathname,
+          currentPageName,
+          redirectTo,
+          buyerProfileExists: !!buyerProfile,
+          buyerProfileComplete: buyerComplete,
+          buyerSafetyAgreed: buyerSafety,
+          buyerSafetySource: buyerSafetyDirect ? "users.buyer_safety_agreed" : buyerSafetyMeta ? "user_metadata" : "NONE",
+          sellerExists: !!seller,
+          sellerStatus: seller?.status,
+          userRole: user?.role,
+          userMetaRole: user?.user_metadata?.role,
+          hasAccess,
+          authHydrated
+        });
+      }
+      console.warn("[GATE REDIRECT]", { from: currentPageName, to: redirectTo, reason: "canAccessRoute returned false" });
+      
+      // FORENSIC SNAPSHOT (gated)
+      if (LM_FORENSIC()) {
+        try {
+          const authUser = user || null;
+          console.groupCollapsed("[GATE FORENSIC SNAPSHOT][LAYOUT]");
+          console.log({
+            ts: new Date().toISOString(),
+            pathname: window.location.pathname,
+            search: window.location.search,
+            currentPageName,
+            redirectTo,
+            hasAccess,
+            authHydrated,
+            // AUTH (JWT / session)
+            auth_user_id: authUser?.id,
+            auth_email: authUser?.email,
+            auth_role: authUser?.role,
+            auth_user_metadata: authUser?.user_metadata || null,
+            // DB USER (public.users)
+            db_user_obj: dbUserRow || null,
+            // BUYER PROFILE (buyer_profiles)
+            buyerProfile_obj: buyerProfile || null,
+            buyerProfile_exists: !!buyerProfile,
+            buyerProfile_user_id: buyerProfile?.user_id,
+            buyerProfile_email: buyerProfile?.email,
+            buyerProfile_phone: buyerProfile?.phone,
+            buyerProfile_full_name: buyerProfile?.full_name,
+            // SELLER (sellers)
+            seller_obj: seller || null,
+            seller_exists: !!seller,
+            seller_user_id: seller?.user_id,
+            seller_status: seller?.status,
+          });
+          console.groupEnd();
+        } catch (e) {
+          console.warn("[GATE FORENSIC SNAPSHOT][LAYOUT] logging failed", e);
+        }
+      }
+      
+      // Handle redirects that may include query strings (e.g., "BuyerProfile?forceEdit=1")
+      const [route, query] = redirectTo.split("?");
+      const redirectUrl = createPageUrl(route) + (query ? "?" + query : "");
+      navigate(redirectUrl, { replace: true });
     }
-  }, [isLoadingAuth, authHydrated, currentPageName, user, seller, navigate]);
+  }, [isLoadingAuth, authHydrated, currentPageName, user, seller, buyerProfile, navigate, location.pathname]);
 
   useEffect(() => {
     window.scrollTo(0, 0);
@@ -488,6 +817,7 @@ export default function Layout({ children, currentPageName }) {
         } else {
           setSeller(null);
         }
+        setBuyerProfile(cache.buyerProfile || null);
         
         identityLoadedRef.current = true;
         markAuthHydrated("from cache");
@@ -536,10 +866,11 @@ export default function Layout({ children, currentPageName }) {
       // This prevents cascading failures
       // ═══════════════════════════════════════════════════════════════════════════
       
-      // STEP 1: Fetch public.users role and account_status
+      // STEP 1: Fetch public.users role, account_status, and seller onboarding flags
+      // NOTE: seller flags included for AUDIT VISIBILITY (gate logic uses auth user, not this)
       const { data: userRow, error: userError } = await supabase
         .from("users")
-        .select("id, role, email, account_status")
+        .select("id, role, email, account_status, buyer_safety_agreed, seller_safety_agreed, seller_onboarding_completed, seller_safety_agreed_at")
         .eq("id", currentUser.id)
         .maybeSingle();
 
@@ -557,6 +888,7 @@ export default function Layout({ children, currentPageName }) {
             if (fallbackCache.sellerRow) {
               setSeller(fallbackCache.sellerRow);
             }
+            setBuyerProfile(fallbackCache.buyerProfile || null);
             identityLoadedRef.current = true;
             markAuthHydrated("degraded cache fallback");
             return;
@@ -574,6 +906,8 @@ export default function Layout({ children, currentPageName }) {
 
       const dbRole = userRow?.role || null;
       setDbUserRole(dbRole);
+      // AUDIT: Store full DB user row for forensic comparison
+      setDbUserRow(userRow);
       
       // Set account status (default to 'active' if not present)
       // IMPORTANT: Always use DB value as authoritative source
@@ -584,7 +918,56 @@ export default function Layout({ children, currentPageName }) {
       authoritativeAccountStatusRef.current = status;
       setAccountStatus(status);
 
-      // STEP 2: If users succeeded, fetch sellers
+      // STEP 2: Fetch buyer_profiles (required for seller route guards)
+      const { data: buyerRow, error: buyerError } = await supabase
+        .from("buyer_profiles")
+        .select("*")
+        .eq("user_id", currentUser.id)
+        .maybeSingle();
+
+      // ═══════════════════════════════════════════════════════════════════════════
+      // HARD AUDIT: Log EVERY buyer_profiles fetch result
+      // ═══════════════════════════════════════════════════════════════════════════
+      console.groupCollapsed("[BUYERPROFILE FETCH RESULT]");
+      console.log("QUERY:", { 
+        table: "buyer_profiles", 
+        filter: `user_id = ${currentUser.id}`,
+        method: ".maybeSingle()"
+      });
+      console.log("RESPONSE:", { 
+        data: buyerRow, 
+        error: buyerError,
+        dataIsNull: buyerRow === null,
+        dataIsUndefined: buyerRow === undefined,
+        errorCode: buyerError?.code,
+        errorMessage: buyerError?.message
+      });
+      if (buyerError) {
+        if (buyerError.code === "PGRST116") {
+          console.warn("[BUYERPROFILE FETCH] NO ROW FOUND (PGRST116) — user has no buyer_profiles entry");
+        } else if (buyerError.code === "42501" || buyerError.message?.includes("permission")) {
+          console.error("[BUYERPROFILE FETCH] RLS/DENY — user blocked by RLS policy:", buyerError);
+        } else {
+          console.error("[BUYERPROFILE FETCH] UNKNOWN ERROR:", buyerError);
+        }
+      } else if (!buyerRow) {
+        console.warn("[BUYERPROFILE FETCH] NO ROW FOUND (null data, no error) — .maybeSingle() returned nothing");
+      } else {
+        console.log("[BUYERPROFILE FETCH] SUCCESS — row found:", { 
+          full_name: buyerRow.full_name, 
+          phone: buyerRow.phone, 
+          email: buyerRow.email 
+        });
+      }
+      console.groupEnd();
+
+      if (!buyerError && buyerRow) {
+        setBuyerProfile(buyerRow);
+      } else {
+        setBuyerProfile(null);
+      }
+
+      // STEP 3: If users succeeded, fetch sellers
       const { data: sellerRow, error: sellerError } = await supabase
         .from("sellers")
         .select("*")
@@ -631,7 +1014,7 @@ export default function Layout({ children, currentPageName }) {
       }
 
       // ═══════════════════════════════════════════════════════════════════════════
-      // STEP 3: Cache successful identity load
+      // STEP 4: Cache successful identity load
       // ═══════════════════════════════════════════════════════════════════════════
       writeIdentityCache({
         userId: currentUser.id,
@@ -641,6 +1024,7 @@ export default function Layout({ children, currentPageName }) {
         sellerId: sellerRow?.id || null,
         sellerRow: sellerRow || null,
         isApprovedSeller: isApproved,
+        buyerProfile: buyerRow || null,
       });
 
       identityLoadedRef.current = true;

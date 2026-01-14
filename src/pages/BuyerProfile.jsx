@@ -40,7 +40,7 @@ import {
   AlertCircle,
   RefreshCw
 } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 // Note: Batches not needed for buyer analytics (orders are authoritative)
 
@@ -73,10 +73,20 @@ import CommunityCard from "../components/marketplace/CommunityCard";
 export default function BuyerProfile() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const [searchParams] = useSearchParams();
+  const forceEdit = searchParams.get("forceEdit") === "1";
+  
   const [user, setUser] = useState(null);
   const [seller, setSeller] = useState(null); // New state for seller profile
   const [buyerProfile, setBuyerProfile] = useState(null);
   const [showEditor, setShowEditor] = useState(false);
+  
+  // Force edit mode when ?forceEdit=1 is in URL
+  useEffect(() => {
+    if (forceEdit) {
+      setShowEditor(true);
+    }
+  }, [forceEdit]);
   const [uploadingImage, setUploadingImage] = useState(false);
   const [showApprovalCongrats, setShowApprovalCongrats] = useState(false); // New state for approval congrats modal
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -151,7 +161,7 @@ export default function BuyerProfile() {
       // ═══════════════════════════════════════════════════════════════════════════
       const { data: canonicalUserRow, error: canonicalError } = await supabase
         .from("users")
-        .select("display_name, role")
+        .select("display_name, role, seller_onboarding_completed, seller_safety_agreed")
         .eq("id", currentUser.id)
         .maybeSingle();
 
@@ -186,13 +196,25 @@ export default function BuyerProfile() {
       if (sellerProfile) {
         setSeller(sellerProfile);
         
-        // Show congratulations modal ONLY if they just got approved (first time seeing it)
-        // But DO NOT force redirect - let them dismiss and stay on buyer profile if they want
-        if (sellerProfile.status === "approved") {
+        // Show congratulations modal ONLY when seller is TRULY READY (not just approved):
+        // - sellers.status === "approved"
+        // - public.users.seller_onboarding_completed === true
+        // - public.users.seller_safety_agreed === true
+        // This prevents premature celebration before onboarding is finished.
+        const isSellerTrulyReady = 
+          sellerProfile.status === "approved" &&
+          canonicalUserRow?.seller_onboarding_completed === true &&
+          canonicalUserRow?.seller_safety_agreed === true;
+        
+        if (isSellerTrulyReady) {
           const hasSeenApproval = localStorage.getItem(`seller_approved_${sellerProfile.id}`);
           if (!hasSeenApproval) {
             setShowApprovalCongrats(true);
             localStorage.setItem(`seller_approved_${sellerProfile.id}`, 'true');
+            // Notify Layout to refresh identity so nav updates immediately
+            window.dispatchEvent(new CustomEvent("sellerStatusUpdated", { 
+              detail: { userId: currentUser?.id, sellerId: sellerProfile?.id, status: "approved" } 
+            }));
             // NO auto-redirect - user can choose to go to seller dashboard or stay
           }
         }
@@ -345,8 +367,17 @@ export default function BuyerProfile() {
       return result;
     },
     onSuccess: (newProfile) => {
+      console.log("[BUYERPROFILE SAVE OK]", { 
+        user_id: user?.id, 
+        saved_full_name: newProfile?.full_name,
+        saved_phone: newProfile?.phone,
+        saved_email: newProfile?.email,
+        operation: "CREATE"
+      });
       setBuyerProfile(newProfile);
       setShowEditor(false);
+      // Notify Layout to re-fetch buyer profile for route guards
+      window.dispatchEvent(new CustomEvent("buyerProfileUpdated", { detail: { userId: user?.id } }));
     },
   });
 
@@ -404,8 +435,17 @@ export default function BuyerProfile() {
       return result;
     },
     onSuccess: (updatedProfile) => {
+      console.log("[BUYERPROFILE SAVE OK]", { 
+        user_id: user?.id, 
+        saved_full_name: updatedProfile?.full_name,
+        saved_phone: updatedProfile?.phone,
+        saved_email: updatedProfile?.email,
+        operation: "UPDATE"
+      });
       setBuyerProfile(updatedProfile);
       setShowEditor(false);
+      // Notify Layout to re-fetch buyer profile for route guards
+      window.dispatchEvent(new CustomEvent("buyerProfileUpdated", { detail: { userId: user?.id } }));
     },
   });
 
@@ -1009,17 +1049,15 @@ export default function BuyerProfile() {
                       Cancel
                     </Button>
                   </div>
-                  
-                  <div className="pt-4 border-t border-gray-200">
-                    <Button
-                      type="button"
-                      variant="destructive"
-                      className="w-full bg-red-600 hover:bg-red-700"
-                      onClick={() => setShowDeleteConfirm(true)}
-                    >
-                      Delete Account
-                    </Button>
-                  </div>
+
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className="text-red-600 hover:text-red-700 hover:bg-red-50 text-sm px-3 py-1 h-auto mt-2 self-start"
+                    onClick={() => setShowDeleteConfirm(true)}
+                  >
+                    Delete Account
+                  </Button>
                 </div>
               </form>
             </CardContent>
@@ -1166,7 +1204,7 @@ export default function BuyerProfile() {
                   initialFollowStatus={true}
                   onClick={() => {
                     setShowFollowingDialog(false);
-                    navigate(createPageUrl(`SellerStorefront?sellerId=${seller.id}`));
+                    navigate(createPageUrl("SellerStorefront") + `?sellerId=${seller.id}`);
                   }}
                 />
               ))}
@@ -1202,7 +1240,7 @@ export default function BuyerProfile() {
                   seller={null}
                   onClick={() => {
                     setShowBookmarksDialog(false);
-                    navigate(createPageUrl(`LiveShow?showId=${show.id}`));
+                    navigate(createPageUrl("LiveShow") + `?showId=${show.id}`);
                   }}
                   isUpcoming={show.status !== "live"}
                 />
@@ -1241,7 +1279,7 @@ export default function BuyerProfile() {
                   community={community}
                   onClick={() => {
                     setShowCommunitiesDialog(false);
-                    navigate(createPageUrl(`CommunityPage?community=${community.name}`));
+                    navigate(createPageUrl("CommunityPage") + `?community=${community.name}`);
                   }}
                 />
               ))}
@@ -1292,6 +1330,10 @@ export default function BuyerProfile() {
               className="w-full bg-gradient-to-r from-purple-600 to-blue-500"
               onClick={() => {
                 setShowApprovalCongrats(false);
+                // Refresh identity before navigating (ensures nav updates even if already seen)
+                window.dispatchEvent(new CustomEvent("sellerStatusUpdated", { 
+                  detail: { userId: user?.id, sellerId: seller?.id, status: "approved" } 
+                }));
                 navigate(createPageUrl("SellerDashboard"));
               }}
             >

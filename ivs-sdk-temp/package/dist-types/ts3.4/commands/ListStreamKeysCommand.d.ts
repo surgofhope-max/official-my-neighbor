@@ -1,0 +1,50 @@
+import { Command as $Command } from "@smithy/smithy-client";
+import { MetadataBearer as __MetadataBearer } from "@smithy/types";
+import {
+  IvsClientResolvedConfig,
+  ServiceInputTypes,
+  ServiceOutputTypes,
+} from "../IvsClient";
+import {
+  ListStreamKeysRequest,
+  ListStreamKeysResponse,
+} from "../models/models_0";
+export { __MetadataBearer };
+export { $Command };
+export interface ListStreamKeysCommandInput extends ListStreamKeysRequest {}
+export interface ListStreamKeysCommandOutput
+  extends ListStreamKeysResponse,
+    __MetadataBearer {}
+declare const ListStreamKeysCommand_base: {
+  new (
+    input: ListStreamKeysCommandInput
+  ): import("@smithy/smithy-client").CommandImpl<
+    ListStreamKeysCommandInput,
+    ListStreamKeysCommandOutput,
+    IvsClientResolvedConfig,
+    ServiceInputTypes,
+    ServiceOutputTypes
+  >;
+  new (
+    input: ListStreamKeysCommandInput
+  ): import("@smithy/smithy-client").CommandImpl<
+    ListStreamKeysCommandInput,
+    ListStreamKeysCommandOutput,
+    IvsClientResolvedConfig,
+    ServiceInputTypes,
+    ServiceOutputTypes
+  >;
+  getEndpointParameterInstructions(): import("@smithy/middleware-endpoint").EndpointParameterInstructions;
+};
+export declare class ListStreamKeysCommand extends ListStreamKeysCommand_base {
+  protected static __types: {
+    api: {
+      input: ListStreamKeysRequest;
+      output: ListStreamKeysResponse;
+    };
+    sdk: {
+      input: ListStreamKeysCommandInput;
+      output: ListStreamKeysCommandOutput;
+    };
+  };
+}

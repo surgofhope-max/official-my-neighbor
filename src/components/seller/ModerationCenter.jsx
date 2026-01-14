@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabaseApi as base44 } from "@/api/supabaseClient";
+import { supabase } from "@/lib/supabase/supabaseClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -37,7 +37,18 @@ export default function ModerationCenter({ sellerId }) {
         throw new Error("Seller ID is required to fetch bans");
       }
 
-      const bans = await base44.entities.ViewerBan.filter({ seller_id: sellerId }, '-created_date');
+      const { data, error } = await supabase
+        .from("viewer_bans")
+        .select("id, seller_id, viewer_id, ban_type, reason, created_at")
+        .eq("seller_id", sellerId)
+        .order("created_at", { ascending: false });
+
+      if (error) {
+        console.error("❌ Failed to load viewer bans:", error);
+        throw error;
+      }
+
+      const bans = data || [];
       
       console.log("✅ BANS LOADED FROM DATABASE");
       console.log("   Total Count:", bans.length);
@@ -48,9 +59,8 @@ export default function ModerationCenter({ sellerId }) {
           console.log(`   Ban ${idx + 1}:`, {
             id: ban.id,
             viewer_id: ban.viewer_id,
-            viewer_name: ban.viewer_name,
             ban_type: ban.ban_type,
-            created_date: ban.created_date
+            created_at: ban.created_at
           });
         });
       } else {
@@ -68,14 +78,24 @@ export default function ModerationCenter({ sellerId }) {
   const unbanMutation = useMutation({
     mutationFn: async (banId) => {
       console.log("🔓 UNBANNING viewer, deleting ban ID:", banId);
-      const result = await base44.entities.ViewerBan.delete(banId);
-      console.log("✅ UNBAN SUCCESS:", result);
-      return result;
+      
+      const { error } = await supabase
+        .from("viewer_bans")
+        .delete()
+        .eq("id", banId);
+
+      if (error) {
+        console.error("❌ Supabase unban failed:", error);
+        throw error;
+      }
+
+      console.log("✅ UNBAN SUCCESS");
+      return true;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['viewer-bans'] });
+      queryClient.invalidateQueries({ queryKey: ['viewer-bans', sellerId] });
       queryClient.invalidateQueries({ queryKey: ['viewer-ban-check'] });
-      queryClient.invalidateQueries({ queryKey: ['seller-banned-buyers-count'] });
+      queryClient.invalidateQueries({ queryKey: ['seller-banned-viewers-count'] });
       setUnbanningViewer(null);
       alert("✅ User unbanned successfully!");
     },
@@ -86,7 +106,6 @@ export default function ModerationCenter({ sellerId }) {
   });
 
   const filteredBans = viewerBans.filter(ban =>
-    ban.viewer_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
     ban.viewer_id?.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
@@ -241,12 +260,12 @@ export default function ModerationCenter({ sellerId }) {
                         <div className="flex items-center gap-3 flex-1 min-w-0">
                           <Avatar className="w-10 h-10 flex-shrink-0">
                             <AvatarFallback className="bg-gray-200 text-gray-700">
-                              {ban.viewer_name?.[0]?.toUpperCase() || '?'}
+                              {ban.viewer_id?.[0]?.toUpperCase() || '?'}
                             </AvatarFallback>
                           </Avatar>
                           <div className="flex-1 min-w-0">
-                            <p className="font-semibold text-gray-900 text-sm truncate">{ban.viewer_name}</p>
-                            <p className="text-xs text-gray-500 truncate">ID: {ban.viewer_id}</p>
+                            <p className="font-semibold text-gray-900 text-sm truncate">{ban.viewer_id}</p>
+                            <p className="text-xs text-gray-500 truncate">Viewer ID</p>
                           </div>
                         </div>
                         <Badge className={`${getBanColor(ban.ban_type)} border flex items-center gap-1 text-xs flex-shrink-0`}>
@@ -266,7 +285,7 @@ export default function ModerationCenter({ sellerId }) {
 
                       <div className="flex items-center justify-between pt-2 border-t">
                         <p className="text-xs text-gray-500">
-                          {format(new Date(ban.created_date), 'MMM d, yyyy')}
+                          {format(new Date(ban.created_at), 'MMM d, yyyy')}
                         </p>
                         <Button
                           size="sm"
@@ -302,12 +321,12 @@ export default function ModerationCenter({ sellerId }) {
                           <div className="flex items-center gap-3">
                             <Avatar className="w-10 h-10">
                               <AvatarFallback className="bg-gray-200 text-gray-700">
-                                {ban.viewer_name?.[0]?.toUpperCase() || '?'}
+                                {ban.viewer_id?.[0]?.toUpperCase() || '?'}
                               </AvatarFallback>
                             </Avatar>
                             <div>
-                              <p className="font-semibold text-gray-900 text-sm">{ban.viewer_name}</p>
-                              <p className="text-xs text-gray-500">ID: {ban.viewer_id}</p>
+                              <p className="font-semibold text-gray-900 text-sm">{ban.viewer_id}</p>
+                              <p className="text-xs text-gray-500">Viewer ID</p>
                             </div>
                           </div>
                         </td>
@@ -324,7 +343,7 @@ export default function ModerationCenter({ sellerId }) {
                         </td>
                         <td className="py-3 px-4">
                           <p className="text-sm text-gray-700">
-                            {format(new Date(ban.created_date), 'MMM d, yyyy')}
+                            {format(new Date(ban.created_at), 'MMM d, yyyy')}
                           </p>
                         </td>
                         <td className="py-3 px-4 text-right">
@@ -351,9 +370,9 @@ export default function ModerationCenter({ sellerId }) {
       <AlertDialog open={!!unbanningViewer} onOpenChange={() => setUnbanningViewer(null)}>
         <AlertDialogContent className="max-w-[90vw] sm:max-w-md">
           <AlertDialogHeader>
-            <AlertDialogTitle className="text-base sm:text-lg">Unban Viewer?</AlertDialogTitle>
+            <AlertDialogTitle className="text-base sm:text-lg">Unmute Viewer?</AlertDialogTitle>
             <AlertDialogDescription className="text-xs sm:text-sm">
-              Are you sure you want to unban <strong>{unbanningViewer?.viewer_name}</strong>? 
+              Are you sure you want to unmute viewer <strong>{unbanningViewer?.viewer_id}</strong>? 
               They will be able to {
                 unbanningViewer?.ban_type === 'chat' ? 'chat in your shows again' :
                 unbanningViewer?.ban_type === 'view' ? 'watch your shows again' :
@@ -367,7 +386,7 @@ export default function ModerationCenter({ sellerId }) {
               onClick={() => unbanningViewer && unbanMutation.mutate(unbanningViewer.id)}
               className="bg-green-600 hover:bg-green-700 w-full sm:w-auto"
             >
-              {unbanMutation.isPending ? "Unbanning..." : "Unban"}
+              {unbanMutation.isPending ? "Unmuting..." : "Unmute"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

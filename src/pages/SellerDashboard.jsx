@@ -205,8 +205,16 @@ export default function SellerDashboard() {
 
   const { data: bannedViewers = [] } = useQuery({
     queryKey: ['seller-banned-viewers-count', seller?.id],
-    queryFn: () => seller ? base44.entities.ViewerBan.filter({ seller_id: seller.id }) : [],
-    enabled: !!seller && seller.status === "approved"
+    queryFn: async () => {
+      if (!seller?.id) return [];
+      const { data, error } = await supabase
+        .from('viewer_bans')
+        .select('id')
+        .eq('seller_id', seller.id);
+      if (error) throw error;
+      return data || [];
+    },
+    enabled: !!seller?.id && seller.status === "approved"
   });
 
   const isImpersonating = !!sessionStorage.getItem('admin_impersonate_seller_id');
@@ -395,8 +403,18 @@ export default function SellerDashboard() {
       const { data: updatedSeller, error } = await supabase
         .from("sellers")
         .update({
+          business_name: data.business_name,
+          contact_phone: data.contact_phone,
+          contact_email: data.contact_email,
+          pickup_address: data.pickup_address,
+          pickup_city: data.pickup_city,
+          pickup_state: data.pickup_state,
+          pickup_zip: data.pickup_zip,
+          pickup_notes: data.pickup_notes,
+          bio: data.bio,
           profile_image_url: data.profile_image_url ?? null,
           background_image_url: data.background_image_url ?? null,
+          show_pickup_address: Boolean(data.show_pickup_address),
         })
         .eq("id", id)
         .select()
@@ -921,7 +939,7 @@ export default function SellerDashboard() {
               variant="outline"
               size="sm"
               className="border-purple-500 text-purple-600 hover:bg-purple-50 h-auto py-2 px-2 flex flex-col items-center gap-1"
-              onClick={() => navigate(createPageUrl(`SellerStorefront?sellerId=${seller.id}`))}
+              onClick={() => navigate(createPageUrl("SellerStorefront") + `?sellerId=${seller.id}`)}
             >
               <User className="w-4 h-4" />
               <span className="text-[10px] leading-tight text-center">View My Profile</span>
@@ -1429,16 +1447,14 @@ export default function SellerDashboard() {
                     </Button>
                   </div>
 
-                  <div className="pt-4 border-t border-gray-200">
-                    <Button
-                      type="button"
-                      variant="destructive"
-                      className="w-full bg-red-600 hover:bg-red-700"
-                      onClick={() => setShowDeleteConfirm(true)}
-                    >
-                      Delete Account
-                    </Button>
-                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className="text-red-600 hover:text-red-700 hover:bg-red-50 text-sm px-3 py-1 h-auto mt-2 self-start"
+                    onClick={() => setShowDeleteConfirm(true)}
+                  >
+                    Delete Account
+                  </Button>
                 </div>
               </form>
             </CardContent>
@@ -1500,7 +1516,7 @@ export default function SellerDashboard() {
                   initialFollowStatus={true}
                   onClick={() => {
                     setShowFollowingDialog(false);
-                    navigate(createPageUrl(`SellerStorefront?sellerId=${followedSeller.id}`));
+                    navigate(createPageUrl("SellerStorefront") + `?sellerId=${followedSeller.id}`);
                   }}
                 />
               ))}
@@ -1542,7 +1558,7 @@ export default function SellerDashboard() {
                   seller={null}
                   onClick={() => {
                     setShowBookmarksDialog(false);
-                    navigate(createPageUrl(`LiveShow?showId=${show.id}`));
+                    navigate(createPageUrl("LiveShow") + `?showId=${show.id}`);
                   }}
                   isUpcoming={show.status !== "live"}
                 />
@@ -1584,7 +1600,7 @@ export default function SellerDashboard() {
                   community={community}
                   onClick={() => {
                     setShowCommunitiesDialog(false);
-                    navigate(createPageUrl(`CommunityPage?community=${community.name}`));
+                    navigate(createPageUrl("CommunityPage") + `?community=${community.name}`);
                   }}
                 />
               ))}

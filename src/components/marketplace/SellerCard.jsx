@@ -35,10 +35,9 @@ export default function SellerCard({ seller, onClick, initialFollowStatus }) {
 
   return (
     <Card
-      className="group cursor-pointer border-0 overflow-hidden transition-all duration-300 focus-within:ring-2 focus-within:ring-purple-500 focus-within:ring-offset-2"
+      className="group cursor-pointer border-0 overflow-hidden transition-all duration-300 focus-within:ring-2 focus-within:ring-purple-500 focus-within:ring-offset-2 aspect-[4/5] max-w-[180px] sm:max-w-none"
       style={{
-        boxShadow: '0px 6px 16px rgba(0, 0, 0, 0.2)',
-        aspectRatio: '1 / 1.1'
+        boxShadow: '0px 6px 16px rgba(0, 0, 0, 0.2)'
       }}
       onMouseEnter={(e) => {
         e.currentTarget.style.boxShadow = '0px 8px 20px rgba(0, 0, 0, 0.3)';
@@ -131,7 +130,7 @@ export default function SellerCard({ seller, onClick, initialFollowStatus }) {
         {/* Bio */}
         {seller.bio && (
           <p className="text-xs text-gray-600 line-clamp-2 mb-2 leading-tight">
-            {seller.bio}
+            {seller.bio.length > 50 ? seller.bio.substring(0, 50) + "…" : seller.bio}
           </p>
         )}
 

@@ -173,7 +173,7 @@ export default function UnifiedSearchBar({ placeholder = "Search shows, sellers,
     switch (type) {
       case 'community':
         // STEP C6-E.2: Always navigate to canonical CommunityPage
-        navigate(createPageUrl(`CommunityPage?community=${data.name}`));
+        navigate(createPageUrl("CommunityPage") + `?community=${data.name}`);
         break;
       case 'seller':
         navigate(createPageUrl("SellerStorefront") + `?sellerId=${data.id}`);

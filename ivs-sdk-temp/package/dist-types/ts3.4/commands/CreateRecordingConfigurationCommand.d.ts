@@ -1,0 +1,51 @@
+import { Command as $Command } from "@smithy/smithy-client";
+import { MetadataBearer as __MetadataBearer } from "@smithy/types";
+import {
+  IvsClientResolvedConfig,
+  ServiceInputTypes,
+  ServiceOutputTypes,
+} from "../IvsClient";
+import {
+  CreateRecordingConfigurationRequest,
+  CreateRecordingConfigurationResponse,
+} from "../models/models_0";
+export { __MetadataBearer };
+export { $Command };
+export interface CreateRecordingConfigurationCommandInput
+  extends CreateRecordingConfigurationRequest {}
+export interface CreateRecordingConfigurationCommandOutput
+  extends CreateRecordingConfigurationResponse,
+    __MetadataBearer {}
+declare const CreateRecordingConfigurationCommand_base: {
+  new (
+    input: CreateRecordingConfigurationCommandInput
+  ): import("@smithy/smithy-client").CommandImpl<
+    CreateRecordingConfigurationCommandInput,
+    CreateRecordingConfigurationCommandOutput,
+    IvsClientResolvedConfig,
+    ServiceInputTypes,
+    ServiceOutputTypes
+  >;
+  new (
+    input: CreateRecordingConfigurationCommandInput
+  ): import("@smithy/smithy-client").CommandImpl<
+    CreateRecordingConfigurationCommandInput,
+    CreateRecordingConfigurationCommandOutput,
+    IvsClientResolvedConfig,
+    ServiceInputTypes,
+    ServiceOutputTypes
+  >;
+  getEndpointParameterInstructions(): import("@smithy/middleware-endpoint").EndpointParameterInstructions;
+};
+export declare class CreateRecordingConfigurationCommand extends CreateRecordingConfigurationCommand_base {
+  protected static __types: {
+    api: {
+      input: CreateRecordingConfigurationRequest;
+      output: CreateRecordingConfigurationResponse;
+    };
+    sdk: {
+      input: CreateRecordingConfigurationCommandInput;
+      output: CreateRecordingConfigurationCommandOutput;
+    };
+  };
+}

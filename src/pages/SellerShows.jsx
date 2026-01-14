@@ -330,68 +330,20 @@ export default function SellerShows() {
     createProductMutation.mutate(productData);
   };
 
-  const goLive = async (show) => {
-    // Unique run ID for tracing this exact invocation
-    const runId = `goLive:${show?.id}:${Date.now()}`;
+  const goLive = (show) => {
+    // NO DB UPDATE HERE - HostConsole.startDailyBroadcast() handles all state transitions
+    // after Daily room is successfully created (streaming_provider, status, stream_status, started_at)
     
-    if (DEBUG_GO_LIVE) console.log("[RUN] start", { runId, showId: show?.id, status: show?.status, stream_status: show?.stream_status });
-    
-    try {
-      // DEFENSIVE GUARD: Only update if show is NOT already live
-      if (show.status !== 'live') {
-        // Build payload - stream_status="starting" means host is preparing to broadcast
-        // Only set started_at if not already set (avoid overwriting)
-        const payload = {
-          status: "live",
-          stream_status: "starting",
-          ...(show.started_at ? {} : { started_at: new Date().toISOString() })
-        };
-        
-        if (DEBUG_GO_LIVE) console.log("[RUN] before update", { runId, payload });
-        
-        // Execute Supabase update and capture full response
-        const res = await supabase
-          .from("shows")
-          .update(payload)
-          .eq("id", show.id)
-          .select()
-          .maybeSingle();
-        
-        if (DEBUG_GO_LIVE) console.log("[RUN] after update", { runId, data: res.data, error: res.error, status: res.status, statusText: res.statusText });
-        
-        // HARD GUARD: If update failed, do NOT navigate
-        if (res.error || !res.data) {
-          console.error("[RUN] update failed", runId, res.error);
-          console.error(`[goLive FAILED] ${runId} - ${res.error?.message || "No data returned"}`);
-          return;
-        }
-        
-        // SUCCESS VISIBILITY: Log with returned values
-        if (DEBUG_GO_LIVE) console.info(`[goLive OK] ${runId} - status=${res.data.status}, stream_status=${res.data.stream_status}, started_at=${res.data.started_at}`);
-        
-      } else {
-        if (DEBUG_GO_LIVE) console.log("[RUN] skipping update - show already live", { runId, status: show.status });
-      }
+    if (DEBUG_GO_LIVE) console.log("[goLive] Navigating to HostConsole", { showId: show?.id });
 
-      // Invalidate queries
-      queryClient.invalidateQueries({ queryKey: ['seller-shows', seller.id] });
-      queryClient.invalidateQueries({ queryKey: ['all-shows'] });
-      queryClient.invalidateQueries({ queryKey: ['marketplace-live-shows'] });
-      if (DEBUG_GO_LIVE) console.log("[RUN] after invalidate", { runId });
+    // Invalidate queries (optional - HostConsole will invalidate after room creation)
+    queryClient.invalidateQueries({ queryKey: ['seller-shows', seller.id] });
+    queryClient.invalidateQueries({ queryKey: ['all-shows'] });
+    queryClient.invalidateQueries({ queryKey: ['marketplace-live-shows'] });
 
-      // Build navigation URL
-      const hostConsoleUrl = createPageUrl("HostConsole") + `?showId=${show.id}`;
-      if (DEBUG_GO_LIVE) console.log("[RUN] before navigate", { runId, hostConsoleUrl });
-
-      // Navigate to HostConsole
-      navigate(hostConsoleUrl, { replace: true });
-      
-      if (DEBUG_GO_LIVE) console.log("[RUN] end", { runId });
-    } catch (e) {
-      console.error("[RUN] exception", runId, e);
-      console.error(`[goLive EXCEPTION] ${runId} - ${String(e?.message || e)}`);
-      return;
-    }
+    // Navigate to HostConsole - room creation + status update happens there
+    const hostConsoleUrl = createPageUrl("HostConsole") + `?showId=${show.id}`;
+    navigate(hostConsoleUrl, { replace: true });
   };
 
   const handleHostConsoleClick = (show) => {
@@ -656,7 +608,7 @@ export default function SellerShows() {
                           onClick={() => goLive(show)}
                         >
                           <Radio className="w-4 h-4 mr-2" />
-                          Go Live
+                          Create Show
                         </Button>
                         <Button
                           variant="outline"

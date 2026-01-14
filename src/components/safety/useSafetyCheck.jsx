@@ -33,7 +33,7 @@ export function useBuyerSafetyCheck(currentPage = "Marketplace") {
 
         if (currentUser.user_metadata?.buyer_safety_agreed !== true) {
           // Redirect to safety agreement with return URL
-          navigate(createPageUrl(`BuyerSafetyAgreement?redirect=${currentPage}`), { replace: true });
+          navigate(createPageUrl("BuyerSafetyAgreement") + `?redirect=${currentPage}`, { replace: true });
           return;
         }
 
@@ -120,7 +120,7 @@ export async function checkBuyerSafetyBeforeAction(navigate, currentPage = "Mark
     const user = data.user;
     
     if (user.user_metadata?.buyer_safety_agreed !== true) {
-      navigate(createPageUrl(`BuyerSafetyAgreement?redirect=${currentPage}`));
+      navigate(createPageUrl("BuyerSafetyAgreement") + `?redirect=${currentPage}`);
       return false;
     }
     

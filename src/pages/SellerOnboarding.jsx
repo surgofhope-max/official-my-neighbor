@@ -3,6 +3,7 @@ import { supabase } from "@/lib/supabase/supabaseClient";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { isSuperAdmin } from "@/lib/auth/routeGuards";
+import { getSellerOnboardingCompleted, getSellerSafetyAgreed } from "@/lib/auth/onboardingState";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -112,6 +113,7 @@ export default function SellerOnboarding() {
   });
 
   useEffect(() => {
+    console.log("[SELLERONBOARDING MOUNTED]");
     loadUser();
   }, []);
 
@@ -160,19 +162,19 @@ export default function SellerOnboarding() {
       }
 
       // ═══════════════════════════════════════════════════════════════════════════
-      // REDIRECT LOGIC: Only runs when query SUCCEEDED and returned valid data
+      // REDIRECT LOGIC: Uses dual-source helpers (DB OR auth.user_metadata)
+      // This prevents race conditions where metadata is updated before DB
       // ═══════════════════════════════════════════════════════════════════════════
       
-      // ONLY block if canonical seller_onboarding_completed === true
-      if (canonicalUser?.seller_onboarding_completed === true) {
+      // Block re-entry if onboarding already complete (checks DB OR metadata)
+      if (getSellerOnboardingCompleted(currentUser)) {
         console.log("[SellerOnboarding] Onboarding already complete — redirecting to BuyerProfile");
         navigate(createPageUrl("BuyerProfile"), { replace: true });
         return;
       }
 
       // If safety agreement not done, redirect to safety agreement first
-      // Only redirect if we have a DEFINITIVE false/null, not undefined from error
-      if (canonicalUser && canonicalUser.seller_safety_agreed !== true) {
+      if (currentUser && !getSellerSafetyAgreed(currentUser)) {
         console.log("[SellerOnboarding] Safety agreement not complete — redirecting to SellerSafetyAgreement");
         navigate(createPageUrl("SellerSafetyAgreement"), { replace: true });
         return;

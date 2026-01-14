@@ -16,6 +16,13 @@
  * - Seller Payment: isSellerPaymentReady (Stripe required)
  */
 
+// ═══════════════════════════════════════════════════════════════════════════
+// FORENSIC LOGGING HELPER (gated behind localStorage flag)
+// Enable with: localStorage.setItem("LM_FORENSIC", "1")
+// ═══════════════════════════════════════════════════════════════════════════
+const LM_FORENSIC = () =>
+  typeof window !== "undefined" && window.localStorage?.getItem("LM_FORENSIC") === "1";
+
 import type { User } from "@supabase/supabase-js";
 import {
   isApprovedSellerByUserId,
@@ -24,6 +31,7 @@ import {
 } from "./isApprovedSeller";
 import {
   isBuyerAccessReady,
+  isBuyerProfileComplete,
   isSellerAccessReady,
   isSellerPaymentReady,
   type UserOnboardingState,
@@ -34,6 +42,7 @@ import {
 // Re-export onboarding helpers for convenience
 export {
   isBuyerAccessReady,
+  isBuyerProfileComplete,
   isSellerAccessReady,
   isSellerPaymentReady,
 } from "./onboardingState";
@@ -225,14 +234,17 @@ export function isAdmin(user: User | null | undefined): boolean {
  *
  * Uses canonical onboarding state machine.
  * Stripe is NOT required for seller dashboard access.
+ * PREREQUISITE: Buyer profile must be complete.
  *
  * @param user - The current user object (with onboarding flags)
  * @param seller - The seller profile (or null)
+ * @param buyerProfile - The buyer profile (or null) - REQUIRED for seller access
  * @returns true if seller can access dashboard
  */
 export function requireSellerAccess(
   user: (User & UserOnboardingState) | null | undefined,
-  seller: Seller | null | undefined
+  seller: Seller | null | undefined,
+  buyerProfile?: BuyerProfile | null | undefined
 ): boolean {
   // Not authenticated
   if (!requireAuth(user)) {
@@ -249,8 +261,8 @@ export function requireSellerAccess(
     return true;
   }
 
-  // Use canonical onboarding state machine
-  return isSellerAccessReady(user as UserOnboardingState, seller as SellerProfile);
+  // Use canonical onboarding state machine (includes buyer prerequisite)
+  return isSellerAccessReady(user as UserOnboardingState, seller as SellerProfile, buyerProfile);
 }
 
 /**
@@ -260,11 +272,13 @@ export function requireSellerAccess(
  *
  * @param user - The current user object (with onboarding flags)
  * @param seller - The seller profile (or null)
+ * @param buyerProfile - The buyer profile (or null)
  * @returns true if seller can process payments
  */
 export function requireSellerPayment(
   user: (User & UserOnboardingState) | null | undefined,
-  seller: Seller | null | undefined
+  seller: Seller | null | undefined,
+  buyerProfile?: BuyerProfile | null | undefined
 ): boolean {
   // Not authenticated
   if (!requireAuth(user)) {
@@ -282,7 +296,7 @@ export function requireSellerPayment(
   }
 
   // Use canonical onboarding state machine
-  return isSellerPaymentReady(user as UserOnboardingState, seller as SellerProfile);
+  return isSellerPaymentReady(user as UserOnboardingState, seller as SellerProfile, buyerProfile);
 }
 
 /**
@@ -344,16 +358,17 @@ export function canAccessRoute(
   }
 
   // Public routes - always accessible (Viewer tier)
+  // Route names are lowercase to match normalized route keys in pages.config.js
   const publicRoutes = [
-    "Marketplace",
-    "Communities",
-    "CommunityPage",
-    "SellerStorefront",
-    "LiveShow",
-    "LiveShows",
-    "NearMe",
-    "Login",
-    "Sellers",
+    "marketplace",
+    "communities",
+    "communitypage",
+    "sellerstorefront",
+    "liveshow",
+    "liveshows",
+    "nearme",
+    "login",
+    "sellers",
   ];
 
   if (publicRoutes.includes(routeName)) {
@@ -362,20 +377,27 @@ export function canAccessRoute(
 
   // Auth-required routes (buyer level, but no onboarding check)
   const authRoutes = [
-    "BuyerProfile",
-    "BuyerOrders",
-    "Messages",
-    "Notifications",
+    "buyerprofile",
+    "buyerorders",
+    "messages",
+    "notifications",
   ];
 
   if (authRoutes.includes(routeName)) {
     return requireAuth(user);
   }
 
+  // Buyer safety agreement route - requires auth + complete buyer profile (but NOT buyerSafetyAgreed)
+  // This allows users to access the page to AGREE to safety terms
+  if (routeName === "buyersafetyagreement") {
+    if (!requireAuth(user)) return false;
+    return isBuyerProfileComplete(buyerProfile);
+  }
+
   // Buyer checkout routes - require isBuyerAccessReady
   const buyerCheckoutRoutes = [
-    "Checkout",
-    "Cart",
+    "checkout",
+    "cart",
   ];
 
   if (buyerCheckoutRoutes.includes(routeName)) {
@@ -384,54 +406,81 @@ export function canAccessRoute(
 
   // Seller dashboard routes - require isSellerAccessReady (NO Stripe required)
   const sellerDashboardRoutes = [
-    "SellerDashboard",
-    "SellerProducts",
-    "SellerOrders",
-    "SellerShows",
-    "HostConsole",
-    "SellerAnalytics",
-    "SellerSettings",
+    "sellerdashboard",
+    "sellerproducts",
+    "sellerorders",
+    "sellershows",
+    "hostconsole",
+    "selleranalytics",
+    "sellersettings",
   ];
 
   if (sellerDashboardRoutes.includes(routeName)) {
-    return requireSellerAccess(user, seller);
+    const hasAccess = requireSellerAccess(user, seller, buyerProfile);
+    if (!hasAccess && LM_FORENSIC()) {
+      console.groupCollapsed("[GATE FORENSIC SNAPSHOT][canAccessRoute]");
+      console.log({
+        ts: new Date().toISOString(),
+        routeName,
+        user_id: (user as any)?.id,
+        user_email: (user as any)?.email,
+        user_role: (user as any)?.role,
+        user_meta_role: (user as any)?.user_metadata?.role,
+        buyer_safety_db: (user as any)?.buyer_safety_agreed,
+        buyer_safety_meta: (user as any)?.user_metadata?.buyer_safety_agreed,
+        seller_safety_db: (user as any)?.seller_safety_agreed,
+        seller_safety_meta: (user as any)?.user_metadata?.seller_safety_agreed,
+        seller_onboarding_db: (user as any)?.seller_onboarding_completed,
+        seller_onboarding_meta: (user as any)?.user_metadata?.seller_onboarding_completed,
+        buyerProfile_exists: !!buyerProfile,
+        buyerProfile_user_id: (buyerProfile as any)?.user_id,
+        seller_exists: !!seller,
+        seller_status: (seller as any)?.status,
+      });
+      console.groupEnd();
+    }
+    return hasAccess;
   }
 
   // Seller payment routes - require isSellerPaymentReady (Stripe required)
   const sellerPaymentRoutes = [
-    "SellerPayouts",
-    "SellerStripeConnect",
+    "sellerpayouts",
+    "sellerstripeconnect",
   ];
 
   if (sellerPaymentRoutes.includes(routeName)) {
-    return requireSellerPayment(user, seller);
+    return requireSellerPayment(user, seller, buyerProfile);
   }
 
-  // Admin routes - require admin role (unchanged)
+  // Admin routes - require admin role
   const adminRoutes = [
-    "AdminDashboard",
-    "AdminSellers",
-    "AdminAnalytics",
-    "AdminGIVITracker",
-    "AdminSellerData",
-    "ManageUsers",
-    "GIVIDiagnostics",
-    "ShowVideoDebug",
-    "AdminReports",
+    "admindashboard",
+    "adminsellers",
+    "adminanalytics",
+    "admingivitracker",
+    "adminsellerdata",
+    "manageusers",
+    "gividiagnostics",
+    "showvideodebug",
+    "adminreports",
   ];
 
   if (adminRoutes.includes(routeName)) {
     return requireAdmin(user);
   }
 
-  // Onboarding routes - require auth only
-  const onboardingRoutes = [
-    "SellerOnboarding",
-    "SellerSafetyAgreement",
+  // Seller onboarding routes - require auth + buyer profile complete
+  // NOTE: Buyer safety is NOT required for seller onboarding (only for checkout/cart)
+  const sellerOnboardingRoutes = [
+    "selleronboarding",
+    "sellersafetyagreement",
   ];
 
-  if (onboardingRoutes.includes(routeName)) {
-    return requireAuth(user);
+  if (sellerOnboardingRoutes.includes(routeName)) {
+    if (!requireAuth(user)) return false;
+    // PREREQUISITE: Buyer profile must be complete before seller onboarding
+    if (!isBuyerProfileComplete(buyerProfile)) return false;
+    return true;
   }
 
   // Default: allow access (unknown routes may be public)
@@ -443,18 +492,126 @@ export function canAccessRoute(
  *
  * @param routeName - The route that was denied
  * @param user - The current user object (or null)
+ * @param buyerProfile - The buyer profile (or null)
  * @returns The route name to redirect to
  */
 export function getUnauthorizedRedirect(
   routeName: string,
-  user: User | null | undefined
+  user: User | null | undefined,
+  buyerProfile?: BuyerProfile | null | undefined
 ): string {
   // Not logged in - redirect to Marketplace (not Login, per requirements)
   if (!requireAuth(user)) {
+    if (LM_FORENSIC()) {
+      console.warn("[GATE FORENSIC][getUnauthorizedRedirect]", {
+        ts: new Date().toISOString(),
+        routeName,
+        returning: "Marketplace",
+        user_id: (user as any)?.id,
+        user_email: (user as any)?.email,
+        user_role: (user as any)?.role,
+        user_meta_role: (user as any)?.user_metadata?.role,
+        buyer_safety_db: (user as any)?.buyer_safety_agreed,
+        buyer_safety_meta: (user as any)?.user_metadata?.buyer_safety_agreed,
+        buyerProfile_exists: !!buyerProfile,
+        buyerProfile_user_id: (buyerProfile as any)?.user_id,
+      });
+    }
     return "Marketplace";
   }
 
-  // Logged in but not authorized - redirect to appropriate page
+  // BuyerSafetyAgreement: if buyer profile is incomplete, redirect to BuyerProfile with forceEdit
+  if (routeName === "buyersafetyagreement") {
+    if (!isBuyerProfileComplete(buyerProfile)) {
+      if (LM_FORENSIC()) {
+        console.warn("[GATE FORENSIC][getUnauthorizedRedirect]", {
+          ts: new Date().toISOString(),
+          routeName,
+          returning: "BuyerProfile?forceEdit=1",
+          reason: "buyer_profile_incomplete_for_safety_agreement",
+          user_id: (user as any)?.id,
+          user_email: (user as any)?.email,
+          buyerProfile_exists: !!buyerProfile,
+        });
+      }
+      return "BuyerProfile?forceEdit=1";
+    }
+  }
+
+  // Seller routes: if buyer profile is incomplete, redirect to BuyerProfile
+  // NOTE: Buyer safety is NOT required for seller routes (only for checkout/cart)
+  const sellerRoutes = [
+    "sellerdashboard",
+    "sellerproducts",
+    "sellerorders",
+    "sellershows",
+    "hostconsole",
+    "selleranalytics",
+    "sellersettings",
+    "sellerpayouts",
+    "sellerstripeconnect",
+    "selleronboarding",
+    "sellersafetyagreement",
+  ];
+
+  if (sellerRoutes.includes(routeName)) {
+    // Missing or incomplete buyer profile -> complete buyer profile first
+    if (!isBuyerProfileComplete(buyerProfile)) {
+      if (LM_FORENSIC()) {
+        console.warn("[GATE FORENSIC][getUnauthorizedRedirect]", {
+          ts: new Date().toISOString(),
+          routeName,
+          returning: "BuyerProfile",
+          user_id: (user as any)?.id,
+          user_email: (user as any)?.email,
+          user_role: (user as any)?.role,
+          user_meta_role: (user as any)?.user_metadata?.role,
+          buyerProfile_exists: !!buyerProfile,
+          buyerProfile_user_id: (buyerProfile as any)?.user_id,
+        });
+      }
+      return "BuyerProfile";
+    }
+    // Seller routes do NOT require buyer safety - fall through to Marketplace
+  }
+
+  // Buyer checkout routes: require buyer safety agreement
+  const buyerCheckoutRoutes = ["checkout", "cart"];
+  if (buyerCheckoutRoutes.includes(routeName)) {
+    const buyerSafetyAgreed = (user as any)?.buyer_safety_agreed === true || (user as any)?.user_metadata?.buyer_safety_agreed === true;
+    if (!buyerSafetyAgreed) {
+      console.warn("[GATE REDIRECT][BUYER SAFETY MISSING]", { from: routeName, to: "buyersafetyagreement" });
+      if (LM_FORENSIC()) {
+        console.warn("[GATE FORENSIC][getUnauthorizedRedirect]", {
+          ts: new Date().toISOString(),
+          routeName,
+          returning: "buyersafetyagreement",
+          user_id: (user as any)?.id,
+          user_email: (user as any)?.email,
+          buyer_safety_db: (user as any)?.buyer_safety_agreed,
+          buyer_safety_meta: (user as any)?.user_metadata?.buyer_safety_agreed,
+        });
+      }
+      return "buyersafetyagreement";
+    }
+  }
+
+  // Logged in but not authorized - redirect to Marketplace
+  if (LM_FORENSIC()) {
+    console.warn("[GATE FORENSIC][getUnauthorizedRedirect]", {
+      ts: new Date().toISOString(),
+      routeName,
+      returning: "Marketplace",
+      user_id: (user as any)?.id,
+      user_email: (user as any)?.email,
+      user_role: (user as any)?.role,
+      user_meta_role: (user as any)?.user_metadata?.role,
+      buyer_safety_db: (user as any)?.buyer_safety_agreed,
+      buyer_safety_meta: (user as any)?.user_metadata?.buyer_safety_agreed,
+      buyerProfile_exists: !!buyerProfile,
+      buyerProfile_user_id: (buyerProfile as any)?.user_id,
+    });
+  }
   return "Marketplace";
 }
 

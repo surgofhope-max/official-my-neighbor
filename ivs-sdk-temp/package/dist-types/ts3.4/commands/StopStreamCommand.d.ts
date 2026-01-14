@@ -1,0 +1,47 @@
+import { Command as $Command } from "@smithy/smithy-client";
+import { MetadataBearer as __MetadataBearer } from "@smithy/types";
+import {
+  IvsClientResolvedConfig,
+  ServiceInputTypes,
+  ServiceOutputTypes,
+} from "../IvsClient";
+import { StopStreamRequest, StopStreamResponse } from "../models/models_0";
+export { __MetadataBearer };
+export { $Command };
+export interface StopStreamCommandInput extends StopStreamRequest {}
+export interface StopStreamCommandOutput
+  extends StopStreamResponse,
+    __MetadataBearer {}
+declare const StopStreamCommand_base: {
+  new (
+    input: StopStreamCommandInput
+  ): import("@smithy/smithy-client").CommandImpl<
+    StopStreamCommandInput,
+    StopStreamCommandOutput,
+    IvsClientResolvedConfig,
+    ServiceInputTypes,
+    ServiceOutputTypes
+  >;
+  new (
+    input: StopStreamCommandInput
+  ): import("@smithy/smithy-client").CommandImpl<
+    StopStreamCommandInput,
+    StopStreamCommandOutput,
+    IvsClientResolvedConfig,
+    ServiceInputTypes,
+    ServiceOutputTypes
+  >;
+  getEndpointParameterInstructions(): import("@smithy/middleware-endpoint").EndpointParameterInstructions;
+};
+export declare class StopStreamCommand extends StopStreamCommand_base {
+  protected static __types: {
+    api: {
+      input: StopStreamRequest;
+      output: {};
+    };
+    sdk: {
+      input: StopStreamCommandInput;
+      output: StopStreamCommandOutput;
+    };
+  };
+}

@@ -301,7 +301,7 @@ export default function Communities() {
                           <CommunityCard
                             key={community.id}
                             community={community}
-                            onClick={() => navigate(createPageUrl(`CommunityPage?community=${community.name}`))}
+                            onClick={() => navigate(createPageUrl("CommunityPage") + `?community=${community.name}`)}
                             followerCount={followerCounts[community.id] || 0}
                             liveShowCount={liveShowCounts[community.id] || 0}
                           />
@@ -346,7 +346,7 @@ export default function Communities() {
                           <CommunityCard
                             key={community.id}
                             community={community}
-                            onClick={() => navigate(createPageUrl(`CommunityPage?community=${community.name}`))}
+                            onClick={() => navigate(createPageUrl("CommunityPage") + `?community=${community.name}`)}
                             followerCount={followerCounts[community.id] || 0}
                             liveShowCount={liveShowCounts[community.id] || 0}
                           />
@@ -389,7 +389,7 @@ export default function Communities() {
                             <CommunityCard
                               key={community.id}
                               community={community}
-                              onClick={() => navigate(createPageUrl(`CommunityPage?community=${community.name}`))}
+                              onClick={() => navigate(createPageUrl("CommunityPage") + `?community=${community.name}`)}
                               followerCount={followerCounts[community.id] || 0}
                               liveShowCount={liveShowCounts[community.id] || 0}
                             />
@@ -431,7 +431,7 @@ export default function Communities() {
                           <CommunityCard
                             key={community.id}
                             community={community}
-                            onClick={() => navigate(createPageUrl(`CommunityPage?community=${community.name}`))}
+                            onClick={() => navigate(createPageUrl("CommunityPage") + `?community=${community.name}`)}
                             followerCount={followerCounts[community.id] || 0}
                             liveShowCount={liveShowCounts[community.id] || 0}
                           />

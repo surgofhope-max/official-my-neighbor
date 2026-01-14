@@ -453,7 +453,7 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
               <Button
                 onClick={() => {
                   handleClose();
-                  navigate(createPageUrl(`BuyerSafetyAgreement?redirect=LiveShow`));
+                  navigate(createPageUrl("BuyerSafetyAgreement") + `?redirect=LiveShow`);
                 }}
                 className="w-full bg-gradient-to-r from-purple-600 to-blue-600"
               >

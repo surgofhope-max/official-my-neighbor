@@ -288,7 +288,7 @@ export default function Sellers() {
               <SellerCard
                 key={seller.id}
                 seller={seller}
-                onClick={() => navigate(createPageUrl(`SellerStorefront?sellerId=${seller.id}`))}
+                onClick={() => navigate(createPageUrl("SellerStorefront") + `?sellerId=${seller.id}`)}
               />
             ))}
           </div>

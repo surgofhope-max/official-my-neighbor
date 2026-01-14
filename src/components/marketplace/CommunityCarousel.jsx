@@ -98,7 +98,7 @@ export default function CommunityCarousel({ selectedCommunity, onSelectCommunity
       }
     } else {
       // Navigate to the canonical CommunityPage
-      navigate(createPageUrl(`CommunityPage?community=${communityName}`));
+      navigate(createPageUrl("CommunityPage") + `?community=${communityName}`);
     }
   };
 

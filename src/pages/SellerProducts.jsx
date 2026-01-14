@@ -62,6 +62,7 @@ export default function SellerProducts() {
   // Data state (replacing React Query for reads)
   const [shows, setShows] = useState([]);
   const [allProducts, setAllProducts] = useState([]);
+  const [showProductsData, setShowProductsData] = useState([]); // show_products join table
 
   // Load seller data when auth user changes
   useEffect(() => {
@@ -187,15 +188,48 @@ export default function SellerProducts() {
     if (!seller?.id) return;
 
     try {
-      const [showsData, productsData] = await Promise.all([
+      // Fetch show_products with joined product data for this seller
+      const fetchShowProducts = async () => {
+        const { data, error } = await supabase
+          .from("show_products")
+          .select(`
+            *,
+            product:products (
+              id,
+              title,
+              description,
+              price,
+              original_price,
+              quantity,
+              quantity_sold,
+              image_urls,
+              category,
+              status,
+              givi_type
+            )
+          `)
+          .eq("seller_id", seller.id)
+          .order("box_number", { ascending: true });
+        
+        if (error) {
+          console.warn("Failed to fetch show_products:", error.message);
+          return [];
+        }
+        return data ?? [];
+      };
+
+      const [showsData, productsData, showProductsResult] = await Promise.all([
         getShowsBySellerId(seller.id),
         getProductsBySellerId(seller.id),
+        fetchShowProducts(),
       ]);
       setShows(showsData);
       setAllProducts(productsData);
+      setShowProductsData(showProductsResult);
     } catch (error) {
       setShows([]);
       setAllProducts([]);
+      setShowProductsData([]);
     }
   };
 
@@ -281,17 +315,24 @@ export default function SellerProducts() {
     setSearchTerm("");
   };
 
-  // Calculate stats per show (regular products only)
+  // Calculate stats per show using show_products join table (regular products only)
   const showsWithStats = shows.map(show => {
-    const showProducts = regularProducts.filter(p => p.show_id === show.id);
-    const totalValue = showProducts.reduce((sum, p) => sum + ((p.price || 0) * (p.quantity || 0)), 0);
+    // Filter show_products for this show, excluding GIVEY items
+    const showProductLinks = showProductsData.filter(sp => 
+      sp.show_id === show.id && !sp.is_givi && sp.product
+    );
+    
+    // Extract joined product data
+    const linkedProducts = showProductLinks.map(sp => sp.product).filter(Boolean);
+    
+    const totalValue = linkedProducts.reduce((sum, p) => sum + ((p.price || 0) * (p.quantity || 0)), 0);
     
     return {
       ...show,
-      productCount: showProducts.length,
+      productCount: linkedProducts.length,
       totalValue,
-      availableCount: showProducts.filter(p => p.status === 'available').length,
-      soldCount: showProducts.filter(p => p.status === 'sold').length
+      availableCount: linkedProducts.filter(p => p.status === 'available' || p.status === 'active').length,
+      soldCount: linkedProducts.filter(p => p.status === 'sold' || p.status === 'sold_out').length
     };
   });
 
@@ -304,9 +345,11 @@ export default function SellerProducts() {
     show.status === 'ended' || show.status === 'cancelled'
   );
 
-  // Get products for selected show
+  // Get products for selected show using show_products join table
   const productsForShow = selectedShow 
-    ? regularProducts.filter(p => p.show_id === selectedShow.id)
+    ? showProductsData
+        .filter(sp => sp.show_id === selectedShow.id && !sp.is_givi && sp.product)
+        .map(sp => ({ ...sp.product, show_product_id: sp.id }))
     : [];
 
   if (!seller) {
@@ -433,7 +476,9 @@ export default function SellerProducts() {
                         <div className="flex items-center justify-between text-sm">
                           <span className="text-gray-600">Date:</span>
                           <span className="font-medium">
-                            {format(new Date(show.scheduled_start), "MMM d, yyyy")}
+                            {show.scheduled_start_time
+                              ? format(new Date(show.scheduled_start_time), "MMM d, yyyy")
+                              : "—"}
                           </span>
                         </div>
                         <div className="grid grid-cols-3 gap-2 pt-3 border-t">
@@ -515,7 +560,9 @@ export default function SellerProducts() {
                           <div className="flex items-center justify-between text-sm">
                             <span className="text-gray-600">Date:</span>
                             <span className="font-medium">
-                              {format(new Date(show.scheduled_start), "MMM d, yyyy")}
+                              {show.scheduled_start_time
+                                ? format(new Date(show.scheduled_start_time), "MMM d, yyyy")
+                                : "—"}
                             </span>
                           </div>
                           <div className="grid grid-cols-3 gap-2 pt-3 border-t">
@@ -596,7 +643,7 @@ export default function SellerProducts() {
               <CardContent className="p-6">
                 <p className="text-gray-600 text-sm">Available</p>
                 <p className="text-2xl font-bold text-green-600">
-                  {productsForShow.filter(p => p.status === 'available').length}
+                  {productsForShow.filter(p => p.status === 'active').length}
                 </p>
               </CardContent>
             </Card>
@@ -604,7 +651,7 @@ export default function SellerProducts() {
               <CardContent className="p-6">
                 <p className="text-gray-600 text-sm">Sold</p>
                 <p className="text-2xl font-bold text-gray-600">
-                  {productsForShow.filter(p => p.status === 'sold').length}
+                  {productsForShow.filter(p => p.status === 'sold_out').length}
                 </p>
               </CardContent>
             </Card>
@@ -639,7 +686,7 @@ export default function SellerProducts() {
                       {product.is_live_item && (
                         <Badge className="bg-purple-600 text-white">Live</Badge>
                       )}
-                      {product.status === 'sold' && (
+                      {product.status === 'sold_out' && (
                         <Badge className="bg-gray-600 text-white">Sold</Badge>
                       )}
                     </div>
@@ -760,7 +807,7 @@ export default function SellerProducts() {
               <CardContent className="p-6">
                 <p className="text-gray-600 text-sm">Available</p>
                 <p className="text-2xl font-bold text-orange-600">
-                  {giveyProducts.filter(p => p.status === 'available').length}
+                  {giveyProducts.filter(p => p.status === 'active').length}
                 </p>
               </CardContent>
             </Card>
@@ -768,7 +815,7 @@ export default function SellerProducts() {
               <CardContent className="p-6">
                 <p className="text-gray-600 text-sm">Completed</p>
                 <p className="text-2xl font-bold text-gray-600">
-                  {giveyProducts.filter(p => p.status === 'sold').length}
+                  {giveyProducts.filter(p => p.status === 'sold_out').length}
                 </p>
               </CardContent>
             </Card>

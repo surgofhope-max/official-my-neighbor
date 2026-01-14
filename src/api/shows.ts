@@ -304,7 +304,27 @@ export async function createShow(input: {
   thumbnail_url?: string | null;
 }) {
   try {
-    const insertPayload = {
+    // Fetch seller's IVS profile (non-blocking)
+    let ivs_channel_arn: string | null = null;
+    let ivs_playback_url: string | null = null;
+
+    try {
+      const { data: sellerProfile } = await supabase
+        .from("seller_streaming_profiles")
+        .select("ivs_channel_arn, ivs_playback_url")
+        .eq("seller_id", input.seller_id)
+        .maybeSingle();
+
+      if (sellerProfile?.ivs_channel_arn) {
+        ivs_channel_arn = sellerProfile.ivs_channel_arn;
+        ivs_playback_url = sellerProfile.ivs_playback_url ?? null;
+        console.log("🎬 createShow: Attaching seller IVS channel:", ivs_channel_arn);
+      }
+    } catch (profileErr) {
+      console.warn("createShow: Failed to fetch seller IVS profile (non-blocking):", profileErr);
+    }
+
+    const insertPayload: Record<string, unknown> = {
       seller_id: input.seller_id,
       title: input.title,
       description: input.description ?? null,
@@ -312,14 +332,22 @@ export async function createShow(input: {
       scheduled_start_time: input.scheduled_start ?? null,
       status: "scheduled",
       stream_status: "starting",
+      streaming_provider: null,  // Daily-first MVP: null allows HostConsole to set provider on Go Live
       community_id: input.community_id ?? null,  // STEP C4: Persist community_id
       thumbnail_url: input.thumbnail_url ?? null,  // PHASE S1: Persist thumbnail
     };
+
+    // Attach IVS channel if seller has one provisioned
+    if (ivs_channel_arn) {
+      insertPayload.ivs_channel_arn = ivs_channel_arn;
+      insertPayload.ivs_playback_url = ivs_playback_url;
+    }
     
     console.log("🧪 createShow INSERT PAYLOAD:", insertPayload);
     console.log("🧪 seller_id being inserted:", input.seller_id);
     console.log("🧪 community_id being inserted:", input.community_id ?? null);
     console.log("🧪 thumbnail_url being inserted:", input.thumbnail_url ?? null);
+    console.log("🧪 ivs_channel_arn being inserted:", ivs_channel_arn ?? "(none)");
     
     const { data, error } = await supabase
       .from("shows")

@@ -91,7 +91,7 @@ export default function LiveShows() {
                 <Card
                   key={show.id}
                   className="group cursor-pointer border-2 border-red-500 shadow-xl hover:shadow-2xl transition-all duration-300"
-                  onClick={() => navigate(createPageUrl(`LiveShow?showId=${show.id}`))}
+                  onClick={() => navigate(createPageUrl("LiveShow") + `?showId=${show.id}`)}
                 >
                   <div className="relative h-56 bg-gradient-to-br from-red-500 to-purple-600 overflow-hidden">
                     {show.thumbnail_url ? (

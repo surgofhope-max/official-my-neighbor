@@ -1,0 +1,51 @@
+import { Command as $Command } from "@smithy/smithy-client";
+import { MetadataBearer as __MetadataBearer } from "@smithy/types";
+import {
+  IvsClientResolvedConfig,
+  ServiceInputTypes,
+  ServiceOutputTypes,
+} from "../IvsClient";
+import {
+  ListStreamSessionsRequest,
+  ListStreamSessionsResponse,
+} from "../models/models_0";
+export { __MetadataBearer };
+export { $Command };
+export interface ListStreamSessionsCommandInput
+  extends ListStreamSessionsRequest {}
+export interface ListStreamSessionsCommandOutput
+  extends ListStreamSessionsResponse,
+    __MetadataBearer {}
+declare const ListStreamSessionsCommand_base: {
+  new (
+    input: ListStreamSessionsCommandInput
+  ): import("@smithy/smithy-client").CommandImpl<
+    ListStreamSessionsCommandInput,
+    ListStreamSessionsCommandOutput,
+    IvsClientResolvedConfig,
+    ServiceInputTypes,
+    ServiceOutputTypes
+  >;
+  new (
+    input: ListStreamSessionsCommandInput
+  ): import("@smithy/smithy-client").CommandImpl<
+    ListStreamSessionsCommandInput,
+    ListStreamSessionsCommandOutput,
+    IvsClientResolvedConfig,
+    ServiceInputTypes,
+    ServiceOutputTypes
+  >;
+  getEndpointParameterInstructions(): import("@smithy/middleware-endpoint").EndpointParameterInstructions;
+};
+export declare class ListStreamSessionsCommand extends ListStreamSessionsCommand_base {
+  protected static __types: {
+    api: {
+      input: ListStreamSessionsRequest;
+      output: ListStreamSessionsResponse;
+    };
+    sdk: {
+      input: ListStreamSessionsCommandInput;
+      output: ListStreamSessionsCommandOutput;
+    };
+  };
+}

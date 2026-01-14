@@ -372,8 +372,7 @@ export default function Marketplace() {
                   return (
                     <div 
                       key={blockIndex} 
-                      className="snap-start flex-shrink-0 px-4" 
-                      style={{ width: '100vw' }}
+                      className="snap-start flex-shrink-0 px-4 w-screen sm:w-full"
                     >
                       <div className="grid grid-cols-2 gap-3">
                         {blockShows.map((show) => (
@@ -381,7 +380,7 @@ export default function Marketplace() {
                             key={show.id}
                             show={show}
                             seller={sellersMap[show.seller_id]}
-                            onClick={() => navigate(createPageUrl(`LiveShow?showId=${show.id}`))}
+                            onClick={() => navigate(createPageUrl("LiveShow") + `?showId=${show.id}`)}
                           />
                         ))}
                       </div>
@@ -412,8 +411,7 @@ export default function Marketplace() {
                   return (
                     <div 
                       key={blockIndex} 
-                      className="snap-start flex-shrink-0 px-4" 
-                      style={{ width: '100vw' }}
+                      className="snap-start flex-shrink-0 px-4 w-screen sm:w-full"
                     >
                       <div className="grid grid-cols-2 gap-3">
                         {blockShows.map((show) => (
@@ -421,7 +419,7 @@ export default function Marketplace() {
                             key={show.id}
                             show={show}
                             seller={sellersMap[show.seller_id]}
-                            onClick={() => navigate(createPageUrl(`LiveShow?showId=${show.id}`))}
+                            onClick={() => navigate(createPageUrl("LiveShow") + `?showId=${show.id}`)}
                           />
                         ))}
                       </div>
@@ -452,8 +450,7 @@ export default function Marketplace() {
                   return (
                     <div 
                       key={blockIndex} 
-                      className="snap-start flex-shrink-0 px-4" 
-                      style={{ width: '100vw' }}
+                      className="snap-start flex-shrink-0 px-4 w-screen sm:w-full"
                     >
                       <div className="grid grid-cols-2 gap-3">
                         {blockShows.map((show) => (
@@ -461,7 +458,7 @@ export default function Marketplace() {
                             key={show.id}
                             show={show}
                             seller={sellersMap[show.seller_id]}
-                            onClick={() => {}}
+                            onClick={() => navigate(createPageUrl("LiveShow") + `?showId=${show.id}`)}
                             isUpcoming
                           />
                         ))}
@@ -489,8 +486,7 @@ export default function Marketplace() {
                   return (
                     <div 
                       key={blockIndex} 
-                      className="snap-start flex-shrink-0 px-4" 
-                      style={{ width: '100vw' }}
+                      className="snap-start flex-shrink-0 px-4 w-screen sm:w-full"
                     >
                       <div className="grid grid-cols-2 gap-3">
                         {blockSellers.map((seller) => (
@@ -498,7 +494,7 @@ export default function Marketplace() {
                             key={seller.id}
                             seller={seller}
                             initialFollowStatus={followedSellers.includes(seller.id)}
-                            onClick={() => navigate(createPageUrl(`SellerStorefront?sellerId=${seller.id}`))}
+                            onClick={() => navigate(createPageUrl("SellerStorefront") + `?sellerId=${seller.id}`)}
                           />
                         ))}
                       </div>

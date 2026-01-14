@@ -167,7 +167,7 @@ export default function Notifications() {
       case "message":
         // Navigate to Messages (placeholder - not wired yet)
         if (notification.metadata?.conversation_id) {
-          navigate(createPageUrl(`Messages?conversationId=${notification.metadata.conversation_id}`));
+          navigate(createPageUrl("Messages") + `?conversationId=${notification.metadata.conversation_id}`);
         } else {
           navigate(createPageUrl("Messages"));
         }

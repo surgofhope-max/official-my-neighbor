@@ -1,19 +1,20 @@
 import { useQuery } from "@tanstack/react-query";
-import { supabaseApi as base44 } from "@/api/supabaseClient";
+import { supabase } from "@/lib/supabase/supabaseClient";
 
 export function useViewerBanCheck(sellerId, viewerId) {
   const { data: ban, isLoading } = useQuery({
     queryKey: ['viewer-ban-check', sellerId, viewerId],
     queryFn: async () => {
       if (!sellerId || !viewerId) return null;
-      const bans = await base44.entities.ViewerBan.filter({
-        seller_id: sellerId,
-        viewer_id: viewerId
-      });
-      return bans.length > 0 ? bans[0] : null;
+      const { data } = await supabase
+        .from('viewer_bans')
+        .select('id, ban_type')
+        .eq('seller_id', sellerId)
+        .eq('viewer_id', viewerId)
+        .maybeSingle();
+      return data;
     },
-    enabled: !!sellerId && !!viewerId,
-    staleTime: 10000
+    enabled: !!sellerId && !!viewerId
   });
 
   return {

@@ -1,0 +1,51 @@
+import { Command as $Command } from "@smithy/smithy-client";
+import { MetadataBearer as __MetadataBearer } from "@smithy/types";
+import {
+  IvsClientResolvedConfig,
+  ServiceInputTypes,
+  ServiceOutputTypes,
+} from "../IvsClient";
+import {
+  BatchGetStreamKeyRequest,
+  BatchGetStreamKeyResponse,
+} from "../models/models_0";
+export { __MetadataBearer };
+export { $Command };
+export interface BatchGetStreamKeyCommandInput
+  extends BatchGetStreamKeyRequest {}
+export interface BatchGetStreamKeyCommandOutput
+  extends BatchGetStreamKeyResponse,
+    __MetadataBearer {}
+declare const BatchGetStreamKeyCommand_base: {
+  new (
+    input: BatchGetStreamKeyCommandInput
+  ): import("@smithy/smithy-client").CommandImpl<
+    BatchGetStreamKeyCommandInput,
+    BatchGetStreamKeyCommandOutput,
+    IvsClientResolvedConfig,
+    ServiceInputTypes,
+    ServiceOutputTypes
+  >;
+  new (
+    input: BatchGetStreamKeyCommandInput
+  ): import("@smithy/smithy-client").CommandImpl<
+    BatchGetStreamKeyCommandInput,
+    BatchGetStreamKeyCommandOutput,
+    IvsClientResolvedConfig,
+    ServiceInputTypes,
+    ServiceOutputTypes
+  >;
+  getEndpointParameterInstructions(): import("@smithy/middleware-endpoint").EndpointParameterInstructions;
+};
+export declare class BatchGetStreamKeyCommand extends BatchGetStreamKeyCommand_base {
+  protected static __types: {
+    api: {
+      input: BatchGetStreamKeyRequest;
+      output: BatchGetStreamKeyResponse;
+    };
+    sdk: {
+      input: BatchGetStreamKeyCommandInput;
+      output: BatchGetStreamKeyCommandOutput;
+    };
+  };
+}

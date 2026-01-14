@@ -164,7 +164,7 @@ export default function Messages() {
       const existing = conversations.find(c => c.seller_id === urlSellerId);
       if (existing) {
         setSelectedConversation(existing);
-        window.history.replaceState({}, '', createPageUrl(`Messages?conversationId=${existing.id}`));
+        window.history.replaceState({}, '', createPageUrl("Messages") + `?conversationId=${existing.id}`);
       }
     }
   }, [urlConversationId, urlSellerId, conversations, user, userType]);
@@ -307,7 +307,7 @@ export default function Messages() {
 
   const handleSelectConversation = (conversation) => {
     setSelectedConversation(conversation);
-    window.history.replaceState({}, '', createPageUrl(`Messages?conversationId=${conversation.id}`));
+    window.history.replaceState({}, '', createPageUrl("Messages") + `?conversationId=${conversation.id}`);
   };
 
   const handleBack = () => {

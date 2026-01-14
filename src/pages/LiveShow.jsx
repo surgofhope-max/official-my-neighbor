@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { supabase } from "@/lib/supabase/supabaseClient";
 import { useQuery } from "@tanstack/react-query";
 import { getProductById } from "@/api/products";
@@ -9,6 +9,7 @@ import { getSellerById } from "@/api/sellers";
 import { getBuyerProfileByUserId } from "@/api/buyers";
 import { getEffectiveUserContext } from "@/lib/auth/effectiveUser";
 import { isAdmin } from "@/lib/auth/routeGuards";
+import { useSupabaseAuth } from "@/lib/auth/SupabaseAuthProvider";
 import { isShowLive } from "@/api/streamSync";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -49,13 +50,26 @@ import GIVIViewerOverlay from "../components/givi/GIVIViewerOverlay";
 import PickupInstructionsBubble from "../components/streaming/PickupInstructionsBubble";
 import SellerProfileModal from "../components/liveshow/SellerProfileModal";
 import GIVIWinnerBanner from "../components/givi/GIVIWinnerBanner";
+import FollowButton from "../components/marketplace/FollowButton";
 
 export default function LiveShow() {
   const navigate = useNavigate();
   const urlParams = new URLSearchParams(window.location.search);
   const showId = urlParams.get('showId') || urlParams.get('showid');
   
-  const [user, setUser] = useState(null);
+  // Use canonical auth from SupabaseAuthProvider (single source of truth)
+  const { user, isLoadingAuth } = useSupabaseAuth();
+  console.log("[AUTH DEBUG][LiveShow] isLoadingAuth:", isLoadingAuth, "user:", user);
+
+  // Wait for auth to hydrate before rendering to prevent user=null flash
+  if (isLoadingAuth) {
+    return (
+      <div className="w-full h-full flex items-center justify-center text-white/70 text-sm">
+        Loading…
+      </div>
+    );
+  }
+  
   const [buyerProfile, setBuyerProfile] = useState(null);
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [showCheckout, setShowCheckout] = useState(false);
@@ -90,10 +104,16 @@ export default function LiveShow() {
   const [ivsPlayerState, setIvsPlayerState] = useState(null);
   const [ivsError, setIvsError] = useState(null);
 
-  // Determine which player to use:
-  // - If show has ivs_channel_arn and ivs_playback_url → use IVS Player
-  // - Otherwise → use WebRTC (Daily.co) viewer
-  const useIvsPlayer = Boolean(show?.ivs_channel_arn && show?.ivs_playback_url);
+  // Viewport detection to prevent dual WebRTCViewer mount
+  const [isDesktop, setIsDesktop] = useState(() => 
+    typeof window !== 'undefined' && window.matchMedia('(min-width: 640px)').matches
+  );
+
+  // Determine which player to use based on streaming_provider field:
+  // - "ivs" with ivs_playback_url → IVSPlayer (OBS/external encoder)
+  // - "daily" → WebRTCViewer (tokenized per-show rooms)
+  // - fallback → WebRTCViewer (waiting state if not configured)
+  const useIvsPlayer = show?.streaming_provider === "ivs" && Boolean(show?.ivs_playback_url);
 
   // Determine which chat system to use:
   // SupabaseLiveChat renders when show is starting or live (lifecycle-based)
@@ -125,43 +145,52 @@ export default function LiveShow() {
     };
   }, [showId]);
 
+  // Viewport listener for single WebRTCViewer mount
   useEffect(() => {
-    loadUser();
+    const mediaQuery = window.matchMedia('(min-width: 640px)');
+    const handleChange = (e) => setIsDesktop(e.matches);
+    
+    // Set initial value
+    setIsDesktop(mediaQuery.matches);
+    
+    // Listen for changes
+    mediaQuery.addEventListener('change', handleChange);
+    return () => mediaQuery.removeEventListener('change', handleChange);
   }, []);
+
+  // Load buyer profile when canonical user becomes available
+  useEffect(() => {
+    console.log("[AUTH DEBUG][LiveShow] buyerProfile effect fired. user?.id:", user?.id);
+    const loadBuyerProfile = async () => {
+      if (!user) {
+        setBuyerProfile(null);
+        setIsAdminUser(false);
+        return;
+      }
+
+      setIsAdminUser(isAdmin(user));
+
+      // Get effective user context for impersonation support
+      const { effectiveUserId } = getEffectiveUserContext(user);
+
+      // Load buyer profile using Supabase API
+      try {
+        const profile = await getBuyerProfileByUserId(effectiveUserId);
+        setBuyerProfile(profile);
+      } catch (error) {
+        console.warn("[LiveShow] Failed to load buyer profile:", error);
+        setBuyerProfile(null);
+      }
+    };
+
+    loadBuyerProfile();
+  }, [user?.id]);
 
   useEffect(() => {
     if (expandedProduct) {
       setCurrentImageIndex(0);
     }
   }, [expandedProduct?.id]);
-
-  const loadUser = async () => {
-    try {
-      const { data, error } = await supabase.auth.getUser();
-      const currentUser = data?.user ?? null;
-      
-      if (error || !currentUser) {
-        setUser(null);
-        setBuyerProfile(null);
-        setIsAdminUser(false);
-        return;
-      }
-
-      setUser(currentUser);
-      setIsAdminUser(isAdmin(currentUser));
-
-      // Get effective user context for impersonation support
-      const { effectiveUserId } = getEffectiveUserContext(currentUser);
-
-      // Load buyer profile using Supabase API
-      const profile = await getBuyerProfileByUserId(effectiveUserId);
-      setBuyerProfile(profile);
-    } catch (error) {
-      setUser(null);
-      setBuyerProfile(null);
-      setIsAdminUser(false);
-    }
-  };
 
   // IVS Player event handlers
   const handleIvsStateChange = (state) => {
@@ -267,14 +296,15 @@ export default function LiveShow() {
     queryKey: ['viewer-ban-check', show?.seller_id, user?.id],
     queryFn: async () => {
       if (!show?.seller_id || !user?.id) return null;
-      const bans = await base44.entities.ViewerBan.filter({
-        seller_id: show.seller_id,
-        viewer_id: user.id
-      });
-      return bans.length > 0 ? bans[0] : null;
+      const { data } = await supabase
+        .from('viewer_bans')
+        .select('id, ban_type, reason')
+        .eq('seller_id', show.seller_id)
+        .eq('viewer_id', user.id)
+        .maybeSingle();
+      return data;
     },
-    enabled: !!show?.seller_id && !!user,
-    staleTime: 5000
+    enabled: !!show?.seller_id && !!user?.id
   });
 
   // Load products using show_products table (via adapter for compatibility)
@@ -472,14 +502,14 @@ export default function LiveShow() {
     setShowCheckout(true);
   };
 
-  const handleViewerCountChange = (count) => {
+  const handleViewerCountChange = useCallback((count) => {
     setShow((prev) => {
       if (prev) {
         return { ...prev, viewer_count: count };
       }
       return prev;
     });
-  };
+  }, []);
 
   const scrollCarousel = (direction) => {
     if (carouselRef.current) {
@@ -616,7 +646,8 @@ export default function LiveShow() {
   }
   
   // Scheduled show - preview-only UI (no video player, no product rail, no buying)
-  if (show.status === "scheduled" && !isShowActuallyLive) {
+  // Only show preview when there is NO stream_status yet; once "starting" or "live", render full stage UI
+  if (show.status === "scheduled" && !show.stream_status) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-blue-900 p-4">
         <GiviTracker type="show" id={showId} />
@@ -791,6 +822,7 @@ export default function LiveShow() {
       <div className="sm:hidden">
         <div className="fixed inset-0 z-0">
           {/* Conditional video player: IVS for AWS IVS streams, WebRTC for Daily.co */}
+          {/* CRITICAL: Only mount WebRTCViewer when viewport is mobile to prevent duplicate Daily instances */}
           {useIvsPlayer ? (
             <IVSPlayer
               show={show}
@@ -799,13 +831,36 @@ export default function LiveShow() {
               autoplay={true}
               muted={false}
             />
-          ) : (
+          ) : !isDesktop ? (
             <WebRTCViewer
               show={show}
               onViewerCountChange={handleViewerCountChange}
             />
-          )}
+          ) : null}
         </div>
+
+        {/* Share + Follow Overlay - Buyer Only */}
+        {!isShowOwner && seller && (
+          <div className="fixed top-16 right-3 z-40 flex flex-col gap-3">
+            <FollowButton
+              seller={seller}
+              variant="ghost"
+              size="icon"
+              className="text-white hover:bg-white/20 rounded-full h-10 w-10 p-0 bg-black/40 backdrop-blur-sm [&_svg]:w-5 [&_svg]:h-5"
+            />
+            <ShareButton
+              type="show"
+              id={showId}
+              title={show?.title}
+              description={show?.description}
+              imageUrl={show?.thumbnail_url}
+              variant="ghost"
+              size="icon"
+              showLabel={false}
+              className="text-white hover:bg-white/20 rounded-full h-10 w-10 p-0 bg-black/40 backdrop-blur-sm"
+            />
+          </div>
+        )}
 
         {/* Header */}
         <div className="fixed top-0 left-0 right-0 z-50 bg-gradient-to-b from-black/80 via-black/40 to-transparent p-3">
@@ -852,12 +907,24 @@ export default function LiveShow() {
         </div>
 
         {/* Chat Messages Overlay */}
+        {(() => { console.log("[AUTH DEBUG][LiveShow] rendering mobile chat with user:", user); return null; })()}
+        {(() => {
+          console.log("[CHAT PROPS DEBUG][LiveShow][MOBILE]", {
+            showId,
+            sellerId: show?.seller_id,
+            isShowOwner,
+            userId: user?.id ?? null,
+            userRole: user?.role ?? null,
+          });
+          return null;
+        })()}
         {showChatOverlay && (
           useSupabaseChat ? (
             <SupabaseLiveChat
               showId={showId}
               sellerId={show?.seller_id}
               isSeller={isShowOwner}
+              user={user}
               isOverlay={true}
               onClose={() => setShowChatOverlay(false)}
               onMessageSeller={() => {
@@ -1236,8 +1303,9 @@ export default function LiveShow() {
         </div>
 
         {/* CENTER COLUMN - Live Video */}
-        <div className="relative bg-black flex items-center justify-center">
+        <div className="relative bg-black h-full">
           {/* Conditional video player: IVS for AWS IVS streams, WebRTC for Daily.co */}
+          {/* CRITICAL: Only mount WebRTCViewer when viewport is desktop to prevent duplicate Daily instances */}
           {useIvsPlayer ? (
             <IVSPlayer
               show={show}
@@ -1246,12 +1314,12 @@ export default function LiveShow() {
               autoplay={true}
               muted={false}
             />
-          ) : (
+          ) : isDesktop ? (
             <WebRTCViewer
               show={show}
               onViewerCountChange={handleViewerCountChange}
             />
-          )}
+          ) : null}
           
           {/* Header overlay on video */}
           <div className="absolute top-0 left-0 right-0 z-50 bg-gradient-to-b from-black/80 via-black/40 to-transparent p-4">
@@ -1289,6 +1357,29 @@ export default function LiveShow() {
               </div>
             </div>
           </div>
+
+          {/* Share + Follow Overlay - Buyer Only */}
+          {!isShowOwner && seller && (
+            <div className="absolute top-20 right-4 z-40 flex flex-col gap-3">
+              <FollowButton
+                seller={seller}
+                variant="ghost"
+                size="icon"
+                className="text-white hover:bg-white/20 rounded-full h-10 w-10 p-0 bg-black/40 backdrop-blur-sm [&_svg]:w-5 [&_svg]:h-5"
+              />
+              <ShareButton
+                type="show"
+                id={showId}
+                title={show?.title}
+                description={show?.description}
+                imageUrl={show?.thumbnail_url}
+                variant="ghost"
+                size="icon"
+                showLabel={false}
+                className="text-white hover:bg-white/20 rounded-full h-10 w-10 p-0 bg-black/40 backdrop-blur-sm"
+              />
+            </div>
+          )}
         </div>
 
         {/* RIGHT COLUMN - Chat & Metrics */}
@@ -1310,11 +1401,23 @@ export default function LiveShow() {
 
           {/* Chat Component - Full Height */}
           <div className="flex-1 flex flex-col min-h-0">
+            {(() => { console.log("[AUTH DEBUG][LiveShow] rendering desktop chat with user:", user); return null; })()}
+            {(() => {
+              console.log("[CHAT PROPS DEBUG][LiveShow][DESKTOP]", {
+                showId,
+                sellerId: show?.seller_id,
+                isShowOwner,
+                userId: user?.id ?? null,
+                userRole: user?.role ?? null,
+              });
+              return null;
+            })()}
             {useSupabaseChat ? (
               <SupabaseLiveChat
                 showId={showId}
                 sellerId={show?.seller_id}
                 isSeller={isShowOwner}
+                user={user}
                 isOverlay={false}
                 onMessageSeller={() => {
                   navigate(createPageUrl("Messages") + `?sellerId=${show?.seller_id}`);

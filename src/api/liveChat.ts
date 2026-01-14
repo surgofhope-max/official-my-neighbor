@@ -69,6 +69,9 @@ export async function getLiveShowMessages(
     afterId?: string;
   } = {}
 ): Promise<GetMessagesResult> {
+  console.log("[CHAT DEBUG] getLiveShowMessages - auth user:", await supabase.auth.getUser());
+  console.log("[CHAT DEBUG] getLiveShowMessages - showId:", showId);
+
   if (!showId) {
     return { messages: [], error: null };
   }
@@ -98,6 +101,7 @@ export async function getLiveShowMessages(
     }
 
     const { data, error } = await query;
+    console.log("[CHAT DEBUG] getLiveShowMessages - query result:", { data, error });
 
     if (error) {
       // RLS error when show is not live - expected, return empty
@@ -145,6 +149,9 @@ export async function sendLiveShowMessage(
   message: string,
   senderRole: "seller" | "viewer"
 ): Promise<SendMessageResult> {
+  console.log("[CHAT DEBUG] sendLiveShowMessage - auth user:", await supabase.auth.getUser());
+  console.log("[CHAT DEBUG] sendLiveShowMessage - showId:", showId, "senderRole:", senderRole);
+
   // Validate input
   const trimmedMessage = message.trim();
   
@@ -179,6 +186,7 @@ export async function sendLiveShowMessage(
       })
       .select()
       .single();
+    console.log("[CHAT DEBUG] sendLiveShowMessage - insert result:", { data, error });
 
     if (error) {
       // RLS error when show is not live

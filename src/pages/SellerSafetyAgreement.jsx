@@ -3,6 +3,7 @@ import { supabase } from "@/lib/supabase/supabaseClient";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { isSuperAdmin } from "@/lib/auth/routeGuards";
+import { getSellerOnboardingCompleted, getSellerSafetyAgreed } from "@/lib/auth/onboardingState";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -88,19 +89,19 @@ export default function SellerSafetyAgreement() {
       }
 
       // ═══════════════════════════════════════════════════════════════════════════
-      // REDIRECT LOGIC: Only runs when query SUCCEEDED and returned valid data
+      // REDIRECT LOGIC: Uses dual-source helpers (DB OR auth.user_metadata)
+      // This prevents race conditions where metadata is updated before DB
       // ═══════════════════════════════════════════════════════════════════════════
       
-      // ONLY block if BOTH canonical flags are true (fully completed)
-      if (canonicalUser?.seller_safety_agreed === true && canonicalUser?.seller_onboarding_completed === true) {
+      // Block re-entry if BOTH flags are true (fully completed)
+      if (getSellerSafetyAgreed(currentUser) && getSellerOnboardingCompleted(currentUser)) {
         console.log("[SellerSafetyAgreement] Onboarding fully complete — redirecting to BuyerProfile");
         navigate(createPageUrl("BuyerProfile"), { replace: true });
         return;
       }
 
       // If safety already agreed but onboarding not complete, skip to onboarding
-      // Only redirect if we have DEFINITIVE data, not undefined from error
-      if (canonicalUser && canonicalUser.seller_safety_agreed === true && canonicalUser.seller_onboarding_completed !== true) {
+      if (getSellerSafetyAgreed(currentUser) && !getSellerOnboardingCompleted(currentUser)) {
         console.log("[SellerSafetyAgreement] Safety agreed, onboarding incomplete — redirecting to SellerOnboarding");
         navigate(createPageUrl("SellerOnboarding"), { replace: true });
         return;
