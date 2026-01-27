@@ -22,7 +22,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Users, Package, Video, AlertCircle, DollarSign, TrendingUp, CheckCircle, XCircle, Ban, Download, FileJson, FileSpreadsheet, Database, Edit, Plus, Upload, X as CloseIcon, Trash2, Grid, Image as ImageIcon, BarChart3, ChevronRight, Minimize2, Activity, Gift, Mail, ArrowLeft } from "lucide-react";
+import { Users, Package, Video, AlertCircle, DollarSign, TrendingUp, CheckCircle, XCircle, Ban, Download, FileJson, FileSpreadsheet, Database, Edit, Plus, Upload, X as CloseIcon, Trash2, Grid, Image as ImageIcon, BarChart3, ChevronRight, Minimize2, Activity, Gift, Mail, ArrowLeft, LogOut } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 
@@ -137,12 +137,21 @@ export default function AdminDashboard() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("products")
-        .select("*");
+        .select(`
+          *,
+          show:shows (
+            id,
+            status
+          )
+        `)
+        .not("show.status", "in", '("ended","cancelled","completed")')
+        .order("created_at", { ascending: false });
       if (error) {
         console.warn("[AdminDashboard] Failed to load products:", error.message);
         return [];
       }
-      return data || [];
+      // Strip joined show object before returning (preserve product shape)
+      return (data || []).map(({ show, ...product }) => product);
     }
   });
 
@@ -682,6 +691,17 @@ export default function AdminDashboard() {
             >
               <AlertCircle className="w-4 h-4 mr-2" />
               View Reports
+            </Button>
+            <Button
+              variant="outline"
+              onClick={async () => {
+                await supabase.auth.signOut();
+                navigate(createPageUrl("Marketplace"), { replace: true });
+              }}
+              className="border-gray-400 text-gray-600 hover:bg-red-50 hover:text-red-600 hover:border-red-400"
+            >
+              <LogOut className="w-4 h-4 mr-2" />
+              Logout
             </Button>
           </div>
         </div>

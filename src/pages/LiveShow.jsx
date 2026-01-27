@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { getProductById } from "@/api/products";
 import { getShowProductsByShowId } from "@/api/showProducts";
 import { adaptShowProductsForBuyer } from "@/lib/adapters/buyerShowProductsAdapter";
-import { getShowById } from "@/api/shows";
+import { getShowByIdWithStats } from "@/api/shows";
 import { getSellerById } from "@/api/sellers";
 import { getBuyerProfileByUserId } from "@/api/buyers";
 import { getEffectiveUserContext } from "@/lib/auth/effectiveUser";
@@ -51,6 +51,7 @@ import PickupInstructionsBubble from "../components/streaming/PickupInstructions
 import SellerProfileModal from "../components/liveshow/SellerProfileModal";
 import GIVIWinnerBanner from "../components/givi/GIVIWinnerBanner";
 import FollowButton from "../components/marketplace/FollowButton";
+import { FEATURES } from "@/config/features";
 
 export default function LiveShow() {
   const navigate = useNavigate();
@@ -84,6 +85,12 @@ export default function LiveShow() {
   const [__auditSalesCount, set__auditSalesCount] = useState(null);
   const carouselRef = useRef(null);
   const lastSalesCountRef = useRef(null); // null = not initialized yet
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SDK VIEWER COUNT REF: Stores latest viewer_count from Daily SDK
+  // Used as merge guard to prevent polling from overwriting live SDK value
+  // ═══════════════════════════════════════════════════════════════════════════
+  const sdkViewerCountRef = useRef(null);
 
   // Product state (replacing React Query)
   const [allShowProducts, setAllShowProducts] = useState([]);
@@ -208,7 +215,7 @@ export default function LiveShow() {
     if (!showId) return;
 
     try {
-      const showData = await getShowById(showId);
+      const showData = await getShowByIdWithStats(showId);
       if (!showData) {
         setShowError({ message: "Show not found", status: 404 });
         setShowLoading(false);
@@ -222,7 +229,28 @@ export default function LiveShow() {
         updated_at: showData?.updated_at
       });
 
-      setShow({ ...showData });
+      // ═══════════════════════════════════════════════════════════════════════
+      // MERGE GUARD: Preserve SDK viewer_count when server returns stale 0
+      // - If SDK has set a non-null count AND server returns 0, keep SDK value
+      // - Otherwise use server value (allows server authority when webhooks work)
+      // ═══════════════════════════════════════════════════════════════════════
+      setShow((prev) => {
+        const serverCount = showData?.viewer_count ?? 0;
+        const sdkCount = sdkViewerCountRef.current;
+        const shouldPreserveSdk = (sdkCount != null) && (serverCount === 0);
+        const mergedViewerCount = shouldPreserveSdk ? sdkCount : serverCount;
+
+        const prevMax = prev?.max_viewers ?? 0;
+        const serverMax = showData?.max_viewers ?? 0;
+        const mergedMax = Math.max(prevMax, serverMax, mergedViewerCount);
+
+        return {
+          ...(prev ?? {}),
+          ...showData,
+          viewer_count: mergedViewerCount,
+          max_viewers: mergedMax,
+        };
+      });
       set__auditSalesCount(showData?.sales_count ?? null);
       setShowError(null);
       setShowLoading(false);
@@ -502,13 +530,13 @@ export default function LiveShow() {
     setShowCheckout(true);
   };
 
+  // Daily SDK viewer count callback (UI-only, no DB writes)
+  // Also stores in ref for merge guard protection against polling overwrite
   const handleViewerCountChange = useCallback((count) => {
-    setShow((prev) => {
-      if (prev) {
-        return { ...prev, viewer_count: count };
-      }
-      return prev;
-    });
+    // Store in ref for merge guard (protects against polling overwrite)
+    sdkViewerCountRef.current = Number.isFinite(count) ? count : sdkViewerCountRef.current;
+    // Update state for UI display
+    setShow((prev) => (prev ? { ...prev, viewer_count: count } : prev));
   }, []);
 
   const scrollCarousel = (direction) => {
@@ -785,12 +813,14 @@ export default function LiveShow() {
     }}>
       <GiviTracker type="show" id={showId} />
 
-      {/* GIVI Winner Banner */}
-      <GIVIWinnerBanner 
-        show={showWinnerBanner}
-        winnerName={activeGIVI?.winner_names?.[0]}
-        onDismiss={() => setShowWinnerBanner(false)}
-      />
+      {/* GIVI Winner Banner - Gated by feature flag */}
+      {FEATURES.givi && (
+        <GIVIWinnerBanner 
+          show={showWinnerBanner}
+          winnerName={activeGIVI?.winner_names?.[0]}
+          onDismiss={() => setShowWinnerBanner(false)}
+        />
+      )}
 
       {/* Global Purchase Confirmation Banner */}
       {showPurchaseBanner && (
@@ -811,7 +841,8 @@ export default function LiveShow() {
 
       {/* CRITICAL: GIVI Overlay - Rendered BEFORE stream elements with high z-index */}
       {/* Must appear even when "Waiting for Stream" is shown */}
-      {show && seller && (
+      {/* Gated by feature flag */}
+      {FEATURES.givi && show && seller && (
         <GIVIViewerOverlay show={show} seller={seller} />
       )}
 

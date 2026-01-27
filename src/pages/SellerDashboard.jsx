@@ -3,9 +3,12 @@ import { supabaseApi as base44 } from "@/api/supabaseClient";
 import { supabase } from "@/lib/supabase/supabaseClient";
 import { getFollowersBySellerId } from "@/api/followers";
 import { getFollowingByUserId } from "@/api/following";
+import { getBookmarkedShowsByUserId } from "@/api/bookmarkedShows";
+import { getFollowedCommunitiesByUserId } from "@/api/followedCommunities";
 import { getOrdersBySeller } from "@/api/sellerOrders";
 import { getProductsBySellerId } from "@/api/products";
 import { getShowsBySellerId } from "@/api/shows";
+import { createStripeAccount } from "@/api/stripeConnect";
 import { useSupabaseAuth } from "@/lib/auth/SupabaseAuthProvider";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { isSuperAdmin, requireSellerAsync, isAdmin } from "@/lib/auth/routeGuards";
@@ -90,6 +93,13 @@ export default function SellerDashboard() {
   
   // First-run activation banner dismiss state (in-session only)
   const [activationBannerDismissed, setActivationBannerDismissed] = useState(false);
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // BUSINESS NAME LOCK: Prevent edits after seller is approved
+  // Canonical source: seller.status from public.sellers
+  // ═══════════════════════════════════════════════════════════════════════════
+  const businessNameLocked = seller?.status === "approved";
+  
   const [formData, setFormData] = useState({
     business_name: "",
     contact_phone: "",
@@ -179,28 +189,20 @@ export default function SellerDashboard() {
     queryKey: ['seller-bookmarked-shows', user?.id],
     queryFn: async () => {
       if (!user?.id) return [];
-      const bookmarks = await base44.entities.BookmarkedShow.filter({ buyer_id: user.id });
-      if (bookmarks.length === 0) return [];
-      const showIds = bookmarks.map(b => b.show_id);
-      const shows = await base44.entities.Show.list();
-      const matchingShows = shows.filter(s => showIds.includes(s.id));
-      return matchingShows;
+      const rows = await getBookmarkedShowsByUserId(user.id);
+      return rows.map(r => r.shows).filter(Boolean);
     },
-    enabled: !!user && !!seller && seller.status === "approved"
+    enabled: !!user
   });
 
   const { data: followedCommunities = [] } = useQuery({
     queryKey: ['seller-followed-communities', user?.id],
     queryFn: async () => {
       if (!user?.id) return [];
-      const follows = await base44.entities.FollowedCommunity.filter({ user_id: user.id });
-      if (follows.length === 0) return [];
-      const communityIds = follows.map(f => f.community_id);
-      const communities = await base44.entities.Community.list();
-      const matchingCommunities = communities.filter(c => communityIds.includes(c.id));
-      return matchingCommunities;
+      const rows = await getFollowedCommunitiesByUserId(user.id);
+      return rows.map(r => r.communities).filter(Boolean);
     },
-    enabled: !!user && !!seller && seller.status === "approved"
+    enabled: !!user
   });
 
   const { data: bannedViewers = [] } = useQuery({
@@ -510,15 +512,27 @@ export default function SellerDashboard() {
     }
   };
 
-  const handleConnectStripe = () => {
-    // Check if admin is impersonating
-    const isImpersonating = sessionStorage.getItem('admin_impersonate_seller_id');
+  const handleConnectStripe = async () => {
+    const isImpersonating = sessionStorage.getItem("admin_impersonate_seller_id");
     if (isImpersonating) {
       alert("🔒 STRIPE BLOCKED: For security reasons, Stripe financial information cannot be accessed during admin impersonation.");
       return;
     }
-    
-    alert("Stripe Connect flow: To enable this, deploy the backend functions from the 'backend-functions' folder. See README for deployment instructions.");
+
+    try {
+      const result = await createStripeAccount();
+      console.log("Stripe account result:", result);
+
+      if (result?.onboarding_url) {
+        window.location.href = result.onboarding_url;
+        return;
+      }
+
+      alert("Stripe account created but no onboarding link was returned. Check logs.");
+    } catch (err) {
+      console.error("Stripe connect error:", err);
+      alert("Failed to connect Stripe. Check logs.");
+    }
   };
 
   const handleDeleteAccount = async () => {
@@ -544,15 +558,11 @@ export default function SellerDashboard() {
         await base44.entities.FollowedSeller.delete(follow.id);
       }
 
-      const allBookmarks = await base44.entities.BookmarkedShow.filter({ buyer_id: user.id });
-      for (const bookmark of allBookmarks) {
-        await base44.entities.BookmarkedShow.delete(bookmark.id);
-      }
+      // Delete bookmarked shows via Supabase
+      await supabase.from("bookmarked_shows").delete().eq("user_id", user.id);
 
-      const allCommFollows = await base44.entities.FollowedCommunity.filter({ user_id: user.id });
-      for (const follow of allCommFollows) {
-        await base44.entities.FollowedCommunity.delete(follow.id);
-      }
+      // Delete followed communities via Supabase
+      await supabase.from("followed_communities").delete().eq("user_id", user.id);
 
       if (seller) {
         const sellerProducts = await base44.entities.Product.filter({ seller_id: seller.id });
@@ -742,13 +752,20 @@ export default function SellerDashboard() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label>Business Name *</Label>
+                  <Label>Business Name *{businessNameLocked && <Badge className="ml-2 bg-gray-100 text-gray-600">Locked</Badge>}</Label>
                   <Input
                     value={formData.business_name}
                     onChange={(e) => setFormData({ ...formData, business_name: e.target.value })}
-                    placeholder="Your Business Name"
+                    placeholder={businessNameLocked ? "" : "Your Business Name"}
                     required
+                    disabled={businessNameLocked}
+                    className={businessNameLocked ? "bg-gray-100 cursor-not-allowed" : ""}
                   />
+                  {businessNameLocked && (
+                    <p className="text-xs text-amber-600">
+                      Business name is locked after approval. Contact support to change it.
+                    </p>
+                  )}
                 </div>
 
                 <div className="space-y-4">
@@ -916,6 +933,20 @@ export default function SellerDashboard() {
       icon: Ban,
       color: "from-red-500 to-pink-500",
       onClick: () => setShowBannedBuyersDialog(true)
+    },
+    {
+      title: "Communities",
+      value: followedCommunities.length,
+      icon: Layers,
+      color: "from-indigo-500 to-purple-500",
+      onClick: () => setShowCommunitiesDialog(true)
+    },
+    {
+      title: "Bookmarked Shows",
+      value: bookmarkedShows.length,
+      icon: Bookmark,
+      color: "from-yellow-500 to-orange-500",
+      onClick: () => setShowBookmarksDialog(true)
     }
   ];
 
@@ -1313,12 +1344,20 @@ export default function SellerDashboard() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label>Business Name *</Label>
+                  <Label>Business Name *{businessNameLocked && <Badge className="ml-2 bg-gray-100 text-gray-600">Locked</Badge>}</Label>
                   <Input
                     value={formData.business_name}
                     onChange={(e) => setFormData({ ...formData, business_name: e.target.value })}
+                    placeholder={businessNameLocked ? "" : "Your Business Name"}
                     required
+                    disabled={businessNameLocked}
+                    className={businessNameLocked ? "bg-gray-100 cursor-not-allowed" : ""}
                   />
+                  {businessNameLocked && (
+                    <p className="text-xs text-amber-600">
+                      Business name is locked after approval. Contact support to change it.
+                    </p>
+                  )}
                 </div>
 
                 <div className="space-y-4">
@@ -1330,11 +1369,13 @@ export default function SellerDashboard() {
                       onChange={(e) => setFormData({ ...formData, contact_email: e.target.value })}
                       placeholder="seller@example.com"
                     />
-                    <VisibilityToggle
-                      label="Show on Profile/Seller Card"
-                      checked={formData.show_contact_email}
-                      onChange={(checked) => setFormData({ ...formData, show_contact_email: checked })}
-                    />
+                    {false && (
+                      <VisibilityToggle
+                        label="Show on Profile/Seller Card"
+                        checked={formData.show_contact_email}
+                        onChange={(checked) => setFormData({ ...formData, show_contact_email: checked })}
+                      />
+                    )}
                   </div>
 
                   <div className="space-y-2">
@@ -1345,11 +1386,13 @@ export default function SellerDashboard() {
                       onChange={(e) => setFormData({ ...formData, contact_phone: e.target.value })}
                       placeholder="(555) 123-4567"
                     />
-                    <VisibilityToggle
-                      label="Show on Profile/Seller Card"
-                      checked={formData.show_contact_phone}
-                      onChange={(checked) => setFormData({ ...formData, show_contact_phone: checked })}
-                    />
+                    {false && (
+                      <VisibilityToggle
+                        label="Show on Profile/Seller Card"
+                        checked={formData.show_contact_phone}
+                        onChange={(checked) => setFormData({ ...formData, show_contact_phone: checked })}
+                      />
+                    )}
                   </div>
                 </div>
 
@@ -1360,11 +1403,13 @@ export default function SellerDashboard() {
                     onChange={(e) => setFormData({ ...formData, pickup_address: e.target.value })}
                     placeholder="123 Main Street"
                   />
-                  <VisibilityToggle
-                    label="Show on Profile/Seller Card"
-                    checked={formData.show_pickup_address}
-                    onChange={(checked) => setFormData({ ...formData, show_pickup_address: checked })}
+                  {false && (
+                    <VisibilityToggle
+                      label="Show on Profile/Seller Card"
+                      checked={formData.show_pickup_address}
+                      onChange={(checked) => setFormData({ ...formData, show_pickup_address: checked })}
                     />
+                  )}
                 </div>
 
                 <div className="grid sm:grid-cols-3 gap-4">
@@ -1447,14 +1492,16 @@ export default function SellerDashboard() {
                     </Button>
                   </div>
 
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    className="text-red-600 hover:text-red-700 hover:bg-red-50 text-sm px-3 py-1 h-auto mt-2 self-start"
-                    onClick={() => setShowDeleteConfirm(true)}
-                  >
-                    Delete Account
-                  </Button>
+                  {false && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="text-red-600 hover:text-red-700 hover:bg-red-50 text-sm px-3 py-1 h-auto mt-2 self-start"
+                      onClick={() => setShowDeleteConfirm(true)}
+                    >
+                      Delete Account
+                    </Button>
+                  )}
                 </div>
               </form>
             </CardContent>

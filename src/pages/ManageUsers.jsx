@@ -347,12 +347,21 @@ export default function ManageUsers() {
         await supabase.from("sellers").delete().eq("id", seller.id);
       }
 
-      // 3. Delete orders (as buyer)
-      await supabase.from("orders").delete().eq("buyer_id", userId);
+      // 3. Cancel orders (as buyer) - safe transition instead of hard delete
+      // This triggers restore_inventory_on_order_cancel to restore inventory
+      await supabase
+        .from("orders")
+        .update({ status: "cancelled" })
+        .eq("buyer_id", userId)
+        .not("status", "in", '("cancelled","refunded","completed","picked_up")');
 
-      // 4. Delete orders (as seller)
+      // 4. Cancel orders (as seller) - safe transition instead of hard delete
       if (seller) {
-        await supabase.from("orders").delete().eq("seller_id", seller.id);
+        await supabase
+          .from("orders")
+          .update({ status: "cancelled" })
+          .eq("seller_id", seller.id)
+          .not("status", "in", '("cancelled","refunded","completed","picked_up")');
       }
 
       // 5. Delete batches

@@ -62,7 +62,7 @@ export async function getProductsByShowId(
 }
 
 /**
- * Get all products for a specific seller.
+ * Get all products for a specific seller (show-aware).
  *
  * @param sellerId - The seller ID to filter by
  * @returns Array of products for the seller, sorted by created_at DESC
@@ -71,27 +71,34 @@ export async function getProductsByShowId(
  * - Never throws
  * - Returns [] for null sellerId
  * - Returns [] on any error
+ * - Excludes products from ended/cancelled/completed shows
  */
 export async function getProductsBySellerId(
   sellerId: string | null
 ): Promise<Product[]> {
-  if (!sellerId) {
-    return [];
-  }
+  if (!sellerId) return [];
 
   try {
     const { data, error } = await supabase
       .from("products")
-      .select("*")
+      .select(`
+        *,
+        show:shows (
+          id,
+          status
+        )
+      `)
       .eq("seller_id", sellerId)
+      .not("show.status", "in", '("ended","cancelled","completed")')
       .order("created_at", { ascending: false });
 
     if (error) {
-      console.warn("Failed to fetch products by seller ID:", error.message);
+      console.error("[getProductsBySellerId] error:", error.message);
       return [];
     }
 
-    return (data as Product[]) ?? [];
+    // Strip joined show object before returning (preserve Product shape)
+    return (data || []).map(({ show, ...product }) => product as Product);
   } catch (err) {
     console.warn("Unexpected error fetching products by seller:", err);
     return [];

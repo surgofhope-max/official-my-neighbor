@@ -90,7 +90,8 @@ import {
   Receipt,
   User,
   Store,
-  MessageCircle
+  MessageCircle,
+  Mail
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -1462,14 +1463,14 @@ export default function Layout({ children, currentPageName }) {
                           </p>
                         </div>
                       </button>
-                      <button
-                        onClick={handleLogout}
-                        className="hidden sm:flex items-center gap-2 hover:bg-red-50 text-gray-600 hover:text-red-600 rounded-lg px-3 py-2 transition-colors cursor-pointer"
-                        title="Logout"
+                      <a
+                        href="mailto:contact.myneighbor@gmail.com"
+                        className="hidden sm:flex items-center gap-2 hover:bg-blue-50 text-gray-600 hover:text-blue-600 rounded-lg px-3 py-2 transition-colors cursor-pointer"
+                        title="Contact"
                       >
-                        <LogOut className="w-5 h-5" />
-                        <span className="hidden lg:inline text-sm font-medium">Logout</span>
-                      </button>
+                        <Mail className="w-5 h-5" />
+                        <span className="hidden lg:inline text-sm font-medium">Contact</span>
+                      </a>
                     </div>
                   ) : (
                     <Button

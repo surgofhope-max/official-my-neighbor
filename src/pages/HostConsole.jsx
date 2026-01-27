@@ -4,7 +4,7 @@ import { supabase } from "@/lib/supabase/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { isSuperAdmin, requireSellerAsync, isAdmin } from "@/lib/auth/routeGuards";
 import { checkAccountActiveAsync } from "@/lib/auth/accountGuards";
-import { getShowById } from "@/api/shows";
+import { getShowByIdWithStats } from "@/api/shows";
 import { isShowLive } from "@/api/streamSync";
 import { createProduct, updateProduct } from "@/api/products";
 import { getShowProductsByShowId, createShowProduct, updateShowProductByIds, clearFeaturedForShow, deleteShowProductByIds } from "@/api/showProducts";
@@ -54,6 +54,7 @@ import ProductForm from "../components/products/ProductForm";
 import GIVIHostPanel from "../components/givi/GIVIHostPanel";
 import GIVIWinnerBanner from "../components/givi/GIVIWinnerBanner";
 import BottomDrawer from "../components/host/BottomDrawer";
+import { FEATURES } from "@/config/features";
 import PickupVerification from "../components/fulfillment/PickupVerification";
 import BatchFulfillmentList from "../components/fulfillment/BatchFulfillmentList";
 import DailyBroadcaster from "@/components/streaming/DailyBroadcaster";
@@ -96,6 +97,13 @@ export default function HostConsole() {
   const [isDesktop, setIsDesktop] = useState(() =>
     window.matchMedia("(min-width: 640px)").matches
   );
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // MVP PHASE-1: Seller viewer count sourced from Daily SDK (UI-only)
+  // This provides real-time updates without waiting for server polling.
+  // Falls back to show.viewer_count when SDK count is not available.
+  // ═══════════════════════════════════════════════════════════════════════════
+  const [liveViewerCount, setLiveViewerCount] = useState(null);
   
   // Ref to prevent NO_SHOWID guard from re-triggering after initial mount
   const noShowIdGuardRan = useRef(false);
@@ -245,7 +253,7 @@ export default function HostConsole() {
   const { data: show, isLoading: showLoading, error: showError } = useQuery({
     queryKey: ['show', showId],
     queryFn: async () => {
-      const fetchedShow = await getShowById(showId);
+      const fetchedShow = await getShowByIdWithStats(showId);
       
       if (!fetchedShow) {
         throw new Error("Show not found");
@@ -387,7 +395,8 @@ export default function HostConsole() {
       const { data, error } = await supabase
         .from('orders')
         .select('id,show_id,price,delivery_fee,created_at,product_id,buyer_id,buyer:buyer_id(display_name),product:product_id(image_urls,title)')
-        .eq('show_id', showId);
+        .eq('show_id', showId)
+        .in('status', ['paid', 'fulfilled', 'completed', 'ready']);
 
       if (error) throw error;
       return data || [];
@@ -1062,8 +1071,10 @@ export default function HostConsole() {
     );
   });
 
+  // MVP PHASE-1: Seller viewer count sourced from Daily SDK (UI-only)
+  // Prefers live SDK count, falls back to server-polled value
   const stats = {
-    viewers: show.viewer_count || 0,
+    viewers: liveViewerCount ?? show.viewer_count ?? 0,
     sales: orders.length,
     revenue: orders.reduce((sum, o) => sum + (o.price || 0), 0)
   };
@@ -1073,12 +1084,14 @@ export default function HostConsole() {
       overscrollBehavior: 'none',
       touchAction: 'pan-y'
     }}>
-      {/* GIVI Winner Banner */}
-      <GIVIWinnerBanner 
-        show={showWinnerBanner}
-        winnerName={activeGIVI?.winner_names?.[0]}
-        onDismiss={() => setShowWinnerBanner(false)}
-      />
+      {/* GIVI Winner Banner - Gated by feature flag */}
+      {FEATURES.givi && (
+        <GIVIWinnerBanner 
+          show={showWinnerBanner}
+          winnerName={activeGIVI?.winner_names?.[0]}
+          onDismiss={() => setShowWinnerBanner(false)}
+        />
+      )}
 
       {/* Global Purchase Confirmation Banner */}
       {showPurchaseBanner && (
@@ -1119,15 +1132,17 @@ export default function HostConsole() {
                   </div>
                 </Button>
 
-                <Button
-                  onClick={() => {
-                    setShowGiviDrawer(true);
-                    setGiviDrawerMode(activeGIVI ? "console" : "form");
-                  }}
-                  className="bg-gradient-to-r from-purple-600 to-blue-600 px-3 py-3 h-auto text-sm min-w-[70px] backdrop-blur-md font-bold"
-                >
-                  <span>GIVI</span>
-                </Button>
+                {FEATURES.givi && (
+                  <Button
+                    onClick={() => {
+                      setShowGiviDrawer(true);
+                      setGiviDrawerMode(activeGIVI ? "console" : "form");
+                    }}
+                    className="bg-gradient-to-r from-purple-600 to-blue-600 px-3 py-3 h-auto text-sm min-w-[70px] backdrop-blur-md font-bold"
+                  >
+                    <span>GIVI</span>
+                  </Button>
+                )}
                 
                 <Button
                   onClick={() => setShowFeatureProductDrawer(true)}
@@ -1226,8 +1241,8 @@ export default function HostConsole() {
 
 
 
-        {/* GIVI Drawer - MOBILE ONLY */}
-        {currentSeller && showGiviDrawer && typeof window !== 'undefined' && window.innerWidth < 640 && (
+        {/* GIVI Drawer - MOBILE ONLY - Gated by feature flag */}
+        {FEATURES.givi && currentSeller && showGiviDrawer && typeof window !== 'undefined' && window.innerWidth < 640 && (
           <BottomDrawer
             isOpen={showGiviDrawer}
             onClose={() => {
@@ -1261,8 +1276,8 @@ export default function HostConsole() {
           </BottomDrawer>
         )}
 
-        {/* GIVI Dialog - DESKTOP ONLY */}
-        {currentSeller && showGiviDrawer && typeof window !== 'undefined' && window.innerWidth >= 640 && (
+        {/* GIVI Dialog - DESKTOP ONLY - Gated by feature flag */}
+        {FEATURES.givi && currentSeller && showGiviDrawer && typeof window !== 'undefined' && window.innerWidth >= 640 && (
           <Dialog open={true} onOpenChange={(open) => {
             if (!open) {
               setShowGiviDrawer(false);
@@ -1314,7 +1329,11 @@ export default function HostConsole() {
           {/* Video Background - Daily SDK Broadcaster or Placeholder */}
           {/* CRITICAL: Only mount DailyBroadcaster when viewport is mobile to prevent duplicate Daily instances */}
           {!isDesktop && dailyRoomUrl && dailyToken ? (
-            <DailyBroadcaster roomUrl={dailyRoomUrl} token={dailyToken} />
+            <DailyBroadcaster 
+              roomUrl={dailyRoomUrl} 
+              token={dailyToken} 
+              onViewerCountChange={setLiveViewerCount}
+            />
           ) : (
             <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-gray-900 to-gray-800">
               {show.thumbnail_url && (
@@ -1423,17 +1442,19 @@ export default function HostConsole() {
               <MessageCircle className="w-5 h-5" />
             </Button>
 
-            {/* GIVI Button (Icon Only) */}
-            <Button
-              onClick={() => {
-                setShowGiviDrawer(true);
-                setGiviDrawerMode("console");
-              }}
-              size="icon"
-              className="bg-gradient-to-r from-purple-600 to-blue-600 h-10 w-10 rounded-full shadow-lg border border-white/20"
-            >
-              <Sparkles className="w-5 h-5 text-white" />
-            </Button>
+            {/* GIVI Button (Icon Only) - Gated by feature flag */}
+            {FEATURES.givi && (
+              <Button
+                onClick={() => {
+                  setShowGiviDrawer(true);
+                  setGiviDrawerMode("console");
+                }}
+                size="icon"
+                className="bg-gradient-to-r from-purple-600 to-blue-600 h-10 w-10 rounded-full shadow-lg border border-white/20"
+              >
+                <Sparkles className="w-5 h-5 text-white" />
+              </Button>
+            )}
 
             {/* Products Button (Icon Only) - Toggles Product Mode */}
             <Button
@@ -1546,16 +1567,18 @@ export default function HostConsole() {
                 {endShowMutation.isPending ? 'Ending Show...' : 'End Show'}
               </Button>
               
-              <Button
-                onClick={() => {
-                  setShowGiviDrawer(true);
-                  setGiviDrawerMode("console");
-                }}
-                className="w-full bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white font-bold py-3"
-              >
-                <Sparkles className="w-4 h-4 mr-2" />
-                GIVI
-              </Button>
+              {FEATURES.givi && (
+                <Button
+                  onClick={() => {
+                    setShowGiviDrawer(true);
+                    setGiviDrawerMode("console");
+                  }}
+                  className="w-full bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white font-bold py-3"
+                >
+                  <Sparkles className="w-4 h-4 mr-2" />
+                  GIVI
+                </Button>
+              )}
               
               <Button
                 onClick={() => setShowProductDialog(true)}
@@ -1573,13 +1596,16 @@ export default function HostConsole() {
                 Recent Orders
               </Button>
               
-              <Button
-                onClick={() => setShowFulfillmentDialog(true)}
-                className="w-full bg-orange-600 hover:bg-orange-700 text-white font-bold py-3"
-              >
-                <ClipboardCheck className="w-4 h-4 mr-2" />
-                Pickup Verification
-              </Button>
+              {/* HIDDEN: Pickup Verification moved to SellerOrders - UI guard only, logic preserved */}
+              {false && (
+                <Button
+                  onClick={() => setShowFulfillmentDialog(true)}
+                  className="w-full bg-orange-600 hover:bg-orange-700 text-white font-bold py-3"
+                >
+                  <ClipboardCheck className="w-4 h-4 mr-2" />
+                  Pickup Verification
+                </Button>
+              )}
             </div>
 
             {/* Search Bar */}
@@ -1735,7 +1761,11 @@ export default function HostConsole() {
             {/* Daily SDK Broadcaster OR Placeholder */}
             {/* CRITICAL: Only mount DailyBroadcaster when viewport is desktop to prevent duplicate Daily instances */}
             {isDesktop && dailyRoomUrl && dailyToken ? (
-              <DailyBroadcaster roomUrl={dailyRoomUrl} token={dailyToken} />
+              <DailyBroadcaster 
+                roomUrl={dailyRoomUrl} 
+                token={dailyToken} 
+                onViewerCountChange={setLiveViewerCount}
+              />
             ) : (
               <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-gray-900 to-gray-800">
                 {show.thumbnail_url && (
@@ -1776,9 +1806,10 @@ export default function HostConsole() {
                 </div>
 
                 <div className="flex items-center gap-2">
+                  {/* MVP PHASE-1: Seller viewer count from Daily SDK (UI-only) */}
                   <Badge className="bg-black/60 backdrop-blur-sm text-white border-white/30">
                     <Users className="w-4 h-4 mr-1" />
-                    {show.viewer_count || 0}
+                    {liveViewerCount ?? show.viewer_count ?? 0}
                   </Badge>
                   {isShowLive(show) && (
                     <Badge className="bg-red-500 text-white border-0 animate-pulse">

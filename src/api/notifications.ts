@@ -5,13 +5,13 @@
  * Supports order lifecycle notifications (order_update, review_request).
  * Uses effectiveUserId for proper data scoping (supports admin impersonation).
  *
- * VALID ORDER REGIME:
- * Notifications tied to invalid orders (self-purchase, cancelled) are excluded
- * from feeds and counts. This is enforced by filtering against the orders DAL.
+ * ORDER VALIDATION REGIME:
+ * Notifications are validated by checking if the referenced order EXISTS,
+ * not by checking order status. This allows refund notifications to appear
+ * in feeds even when order status is "refunded" or "cancelled".
  */
 
 import { supabase } from "@/lib/supabase/supabaseClient";
-import { getOrderById } from "@/api/orders";
 
 /**
  * Supported notification types (Base44 parity + pickup flow).
@@ -73,18 +73,51 @@ function isDegradedError(error: unknown): boolean {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// VALID ORDER FILTER (READ-SIDE ENFORCEMENT)
+// NOTIFICATION ORDER VALIDATION (DECOUPLED FROM ACTIVE ORDERS FILTER)
 // ═══════════════════════════════════════════════════════════════════════════════
-// Notifications tied to invalid orders (self-purchase, cancelled) are excluded.
-// This inherits the valid-order predicate already enforced in orders.ts.
+// Notifications are validated by checking if the referenced order EXISTS,
+// NOT by checking if the order is in an "active" status.
+// This allows refund notifications (order status = "refunded") to appear in feeds.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
- * Filter notifications to exclude those tied to invalid orders.
+ * Check if an order exists for notification validation purposes.
+ * 
+ * IMPORTANT: This function intentionally does NOT apply status filters.
+ * It only checks if the order row exists in the database.
+ * This decouples notification visibility from the Active Orders filter
+ * (applyValidOrderStatusFilter), allowing notifications for refunded orders
+ * to appear in the buyer's feed.
+ * 
+ * @param orderId - The order ID to check
+ * @returns true if order exists, false otherwise
+ */
+async function orderExistsForNotification(orderId: string): Promise<boolean> {
+  if (!orderId) return false;
+
+  const { data, error } = await supabase
+    .from("orders")
+    .select("id")
+    .eq("id", orderId)
+    .maybeSingle();
+
+  if (error) {
+    console.warn("[Notifications] order existence check failed:", error.message);
+    return false;
+  }
+
+  return !!data;
+}
+
+/**
+ * Filter notifications to exclude those tied to non-existent orders.
  *
- * - If notification.metadata.order_id exists, validate the order via orders DAL
- * - If getOrderById returns null (excluded by valid-order predicate), exclude notification
+ * - If notification.metadata.order_id exists, check if order exists (any status)
+ * - If order does not exist, exclude notification
  * - Notifications without order_id are always included
+ * 
+ * NOTE: This does NOT filter by order status. Refunded/cancelled order
+ * notifications are intentionally allowed through to the feed.
  */
 async function filterNotificationsByValidOrders(
   notifications: Notification[]
@@ -100,12 +133,12 @@ async function filterNotificationsByValidOrders(
       continue;
     }
     
-    // Has order_id — validate via orders DAL (inherits valid-order predicate)
-    const order = await getOrderById(orderId);
-    if (order) {
+    // Has order_id — check if order exists (status-agnostic)
+    const exists = await orderExistsForNotification(orderId);
+    if (exists) {
       filtered.push(notification);
     }
-    // If order is null (invalid/excluded), skip this notification
+    // If order does not exist, skip this notification
   }
   
   return filtered;

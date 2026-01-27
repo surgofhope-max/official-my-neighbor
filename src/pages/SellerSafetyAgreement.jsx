@@ -41,6 +41,7 @@ export default function SellerSafetyAgreement() {
   // ═══════════════════════════════════════════════════════════════════════════
   const [canonicalUserLoadFailed, setCanonicalUserLoadFailed] = useState(false);
   const [loadError, setLoadError] = useState(null);
+  const [showSellerTermsModal, setShowSellerTermsModal] = useState(false);
 
   useEffect(() => {
     loadUser();
@@ -401,6 +402,13 @@ export default function SellerSafetyAgreement() {
                   <p className="text-sm text-gray-600 mb-3">
                     By becoming a seller, you agree to our Seller Terms of Service, Payment Processing Agreement, and Platform Fee Structure. Violations may result in suspension, fund holds, or permanent removal.
                   </p>
+                  <button
+                    type="button"
+                    onClick={() => setShowSellerTermsModal(true)}
+                    className="text-sm text-blue-600 hover:underline mb-3"
+                  >
+                    Read more →
+                  </button>
                   <div className="flex items-center gap-2">
                     <Checkbox
                       id="termsAgreement"
@@ -448,6 +456,89 @@ export default function SellerSafetyAgreement() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Seller Terms Modal */}
+      {showSellerTermsModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-white max-w-3xl w-full max-h-[85vh] overflow-y-auto rounded-lg shadow-lg p-6 relative mx-4">
+            <button
+              type="button"
+              onClick={() => setShowSellerTermsModal(false)}
+              className="absolute top-4 right-4 text-gray-500 hover:text-gray-700"
+            >
+              ✕
+            </button>
+
+            <h2 className="text-2xl font-bold mb-4">
+              Seller Terms & Conditions
+            </h2>
+
+            <div className="space-y-4 text-sm text-gray-700 leading-relaxed">
+
+              <p>
+                By participating as a seller on MyNeighbor Live Stream Shopping Marketplace,
+                you acknowledge that selling on the platform is a privilege and is subject
+                to compliance with these terms.
+              </p>
+
+              <h3 className="font-semibold">Platform Role</h3>
+              <p>
+                MyNeighbor provides marketplace technology only. All transactions are
+                between buyers and sellers. The platform does not provide shipping services,
+                labels, or delivery guarantees.
+              </p>
+
+              <h3 className="font-semibold">Local Delivery & Pickup</h3>
+              <p>
+                All sales are local. Sellers are responsible for coordinating pickup or
+                delivery directly with buyers and completing delivery within five (5)
+                calendar days.
+              </p>
+
+              <h3 className="font-semibold">Seller Responsibilities</h3>
+              <p>
+                Sellers are fully responsible for item accuracy, legality, taxes, delivery,
+                buyer verification, and compliance with all applicable Arizona state,
+                county, and local laws.
+              </p>
+
+              <h3 className="font-semibold">Buyer Responsibilities</h3>
+              <p>
+                Buyers are responsible for inspecting items at pickup or delivery and
+                verifying condition at the time of exchange.
+              </p>
+
+              <h3 className="font-semibold">Platform Fees</h3>
+              <p>
+                Sellers agree to pay the platform fee. The current platform fee is eleven
+                percent (11%). Sellers acknowledge that fees may increase or decrease as
+                the platform evolves, and continued use constitutes acceptance of the
+                current fee structure.
+              </p>
+
+              <h3 className="font-semibold">Prohibited & Illegal Items</h3>
+              <p>
+                Sellers must comply with all Arizona laws and regulations. Sellers assume
+                full liability for prohibited, restricted, or illegal items.
+              </p>
+
+              <h3 className="font-semibold">Advertising-Only Use</h3>
+              <p>
+                Using the platform solely for advertising without genuine sales activity
+                is not permitted and may result in suspension or penalties.
+              </p>
+
+              <h3 className="font-semibold">Enforcement & Changes</h3>
+              <p>
+                Violations may result in suspension or removal. These terms are subject
+                to change, and the platform reserves the right to enforce policies to
+                protect the marketplace community.
+              </p>
+
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

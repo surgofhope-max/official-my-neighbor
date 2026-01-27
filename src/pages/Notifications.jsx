@@ -74,9 +74,8 @@ export default function Notifications() {
 
     try {
       const data = await getNotificationsForUser(effectiveUserId);
-      // Option A: default feed hides read notifications (projection only)
-      const unreadOnly = data.filter((n) => !n.read);
-      setNotifications(unreadOnly);
+      // Show only unread notifications from the collapsed list
+      setNotifications(data.filter(n => !n.read));
     } catch (error) {
       console.warn("Error loading notifications:", error);
     } finally {

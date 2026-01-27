@@ -14,8 +14,24 @@ import { createPageUrl } from "@/utils";
 import LiveShowCard from "../components/marketplace/LiveShowCard";
 import SellerCard from "../components/marketplace/SellerCard";
 import CommunityCard from "../components/marketplace/CommunityCard";
-import { getLiveShows, getScheduledShows } from "@/api/shows";
+import { getLiveShowsWithStats, getScheduledShows } from "@/api/shows";
 import { getFollowingByUserId } from "@/api/following";
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EARLY MARKET MODE: When enabled, shows ALL sellers regardless of ZIP filtering.
+// Set VITE_EARLY_MARKET_MODE=true in .env to enable.
+// This is a temporary override for markets with sparse ZIP coverage.
+// ═══════════════════════════════════════════════════════════════════════════
+const EARLY_MARKET_MODE = import.meta.env.VITE_EARLY_MARKET_MODE === "true";
+
+// EARLY MARKET AUDIT LOG (TEMPORARY - remove after verification)
+console.log(
+  "[EARLY_MARKET_AUDIT]",
+  "VITE_EARLY_MARKET_MODE =",
+  import.meta.env.VITE_EARLY_MARKET_MODE,
+  "EARLY_MARKET_MODE =",
+  EARLY_MARKET_MODE
+);
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PHASE-2: ZIP Adjacency Contract (static seed data)
@@ -90,6 +106,11 @@ export default function NearMe() {
   const [userZip, setUserZip] = useState(null);
   const [zipError, setZipError] = useState(null);
   
+  // GEO AUDIT: Trace userZip state changes
+  useEffect(() => {
+    console.log("[GEO AUDIT] userZip state updated:", userZip);
+  }, [userZip]);
+  
   // Phase-2: Persisted locality tier state
   const [selectedTier, setSelectedTier] = useState(() => {
     return localStorage.getItem("nearme:selectedTier") || DEFAULT_TIER;
@@ -144,6 +165,8 @@ export default function NearMe() {
         { headers: { 'User-Agent': 'LiveMarket/1.0' } }
       );
       const data = await res.json();
+      console.log("[GEO AUDIT] reverse geocode raw response:", data);
+      console.log("[GEO AUDIT] resolved ZIP:", data?.address?.postcode);
       return data?.address?.postcode || null;
     } catch {
       return null;
@@ -157,7 +180,7 @@ export default function NearMe() {
   const { data: liveShows = [] } = useQuery({
     queryKey: ['nearme-live-shows'],
     queryFn: async () => {
-      const shows = await getLiveShows();
+      const shows = await getLiveShowsWithStats();
       // Sort by viewer_count descending (matching legacy behavior)
       return [...shows].sort((a, b) => (b.viewer_count || 0) - (a.viewer_count || 0));
     },
@@ -310,11 +333,18 @@ export default function NearMe() {
     navigator.geolocation.getCurrentPosition(
       (position) => {
         const { latitude, longitude } = position.coords;
+        
+        // GEO AUDIT: Log raw geolocation data
+        console.log("[GEO AUDIT] latitude:", latitude);
+        console.log("[GEO AUDIT] longitude:", longitude);
+        console.log("[GEO AUDIT] accuracy_m:", position.coords.accuracy);
+        
         setUserLocation({ latitude, longitude });
         setLoadingLocation(false);
         
         // Phase-1: Resolve ZIP from GPS coordinates
         resolveZipFromCoords(latitude, longitude).then((zip) => {
+          console.log("[GEO AUDIT] setting userZip to:", zip);
           if (zip) {
             setUserZip(zip);
             setZipError(null);
@@ -364,17 +394,41 @@ export default function NearMe() {
   // PHASE-2: Derive allowed ZIPs from adjacency contract (SINGLE SOURCE OF TRUTH)
   // Falls back to exact ZIP match if user's ZIP not in adjacency map
   // ═══════════════════════════════════════════════════════════════════════════
+  
+  // Check if adjacency data exists for user's ZIP + selected tier
+  const hasAdjacency = useMemo(() => {
+    if (!userZip) return false;
+    return !!ZIP_ADJACENCY?.[userZip]?.[selectedTier];
+  }, [userZip, selectedTier]);
+
   const allowedZips = useMemo(() => {
     if (!userZip) return [];
     return ZIP_ADJACENCY[userZip]?.[selectedTier] || [userZip];
   }, [userZip, selectedTier]);
+
+  useEffect(() => {
+    // TEMP DIAGNOSTICS — remove after we confirm root cause
+    try {
+      console.log("[NearMe DIAG] userZip:", userZip);
+      console.log("[NearMe DIAG] selectedTier:", selectedTier);
+      console.log("[NearMe DIAG] ZIP_ADJACENCY has userZip:", !!ZIP_ADJACENCY?.[userZip]);
+      console.log("[NearMe DIAG] allowedZips:", allowedZips);
+    } catch (e) {
+      console.log("[NearMe DIAG] logging error:", e);
+    }
+  }, [userZip, selectedTier, allowedZips]);
   
   // Phase-2: ZIP-based locality matching (adjacency-aware)
-  const nearbySellers = sellers.filter((seller) => {
-    if (!userZip) return false;
-    if (!seller.pickup_zip) return false;
-    return allowedZips.includes(seller.pickup_zip);
-  });
+  // When ZIP_ADJACENCY exists → ZIP group filtering
+  // When ZIP_ADJACENCY missing → allowedZips === [userZip] → same ZIP only
+  // EARLY_MARKET_MODE: Bypasses ZIP filtering to show all sellers
+  const nearbySellers = EARLY_MARKET_MODE
+    ? sellers
+    : sellers.filter((seller) => {
+        if (!userZip) return false;
+        if (!seller.pickup_zip) return false;
+        return allowedZips.includes(seller.pickup_zip);
+      });
 
   // Base nearby shows (distance filtered via seller location)
   const nearbyLiveShows = liveShows.filter(show => {
@@ -400,6 +454,25 @@ export default function NearMe() {
     );
     return distance <= distanceRadius;
   });
+
+  useEffect(() => {
+    // TEMP DIAGNOSTICS — remove after we confirm root cause
+    try {
+      console.log("[NearMe DIAG] counts:", {
+        sellers_total: sellers?.length ?? null,
+        nearbySellers: nearbySellers?.length ?? null,
+        liveShows_total: liveShows?.length ?? null,
+        nearbyLiveShows: nearbyLiveShows?.length ?? null,
+        upcomingShows_total: upcomingShows?.length ?? null,
+        nearbyUpcomingShows: nearbyUpcomingShows?.length ?? null,
+        communities_total: communities?.length ?? null,
+        nearbyCommunities: nearbyCommunities?.length ?? null,
+        distanceRadius
+      });
+    } catch (e) {
+      console.log("[NearMe DIAG] count logging error:", e);
+    }
+  }, [sellers, nearbySellers, liveShows, nearbyLiveShows, upcomingShows, nearbyUpcomingShows, communities, nearbyCommunities, distanceRadius]);
 
   // ═══════════════════════════════════════════════════════════════════════════
   // "I FOLLOW" FILTER — Display Layer Only (with failsafe)

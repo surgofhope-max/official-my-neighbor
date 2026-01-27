@@ -510,3 +510,41 @@ export async function createOrderWithResult(
   }
 }
 
+/**
+ * Cancel an order by ID (safe replacement for hard delete).
+ * 
+ * This function transitions an order to 'cancelled' status instead of deleting it,
+ * which triggers the restore_inventory_on_order_cancel DB trigger to restore inventory.
+ *
+ * @param orderId - The order ID to cancel
+ * @returns { ok: boolean, error?: string }
+ *
+ * This function:
+ * - Never throws
+ * - Returns ok: false on error with message
+ * - Preserves terminal orders (cancelled, refunded, completed, picked_up)
+ */
+export async function deleteOrderById(
+  orderId: string
+): Promise<{ ok: boolean; error?: string }> {
+  if (!orderId) {
+    return { ok: false, error: "Missing orderId" };
+  }  try {
+    // Transition order to cancelled instead of deleting
+    // This triggers restore_inventory_on_order_cancel to restore inventory
+    const { error } = await supabase
+      .from("orders")
+      .update({ status: "cancelled" })
+      .eq("id", orderId)
+      .not("status", "in", '("cancelled","refunded","completed","picked_up")');    if (error) {
+      console.warn("[ORDER] cancelOrder FAILED:", error.message);
+      return { ok: false, error: error.message };
+    }    if (DEBUG_ORDERS) {
+      console.log("[ORDER] cancelOrder SUCCESS:", orderId);
+    }    return { ok: true };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    console.warn("[ORDER] cancelOrder exception:", message);
+    return { ok: false, error: message };
+  }
+}

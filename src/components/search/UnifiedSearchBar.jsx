@@ -70,10 +70,11 @@ export default function UnifiedSearchBar({ placeholder = "Search shows, sellers,
 
     try {
       // Fetch all data in parallel from Supabase
+      // NOTE: Shows fetch gets ALL shows so we can build endedShowIds correctly
       const [communitiesRes, sellersRes, showsRes, productsRes] = await Promise.all([
         supabase.from("communities").select("id, name, label, icon_name").eq("is_active", true),
         supabase.from("sellers").select("id, user_id, business_name, profile_image_url, status").eq("status", "approved"),
-        supabase.from("shows").select("id, title, description, status, seller_id").in("status", ["scheduled", "live"]),
+        supabase.from("shows").select("id, title, description, status, seller_id"),
         supabase.from("products").select("id, name, price, status, seller_id, show_id, image_urls")
       ]);
 
@@ -83,6 +84,7 @@ export default function UnifiedSearchBar({ placeholder = "Search shows, sellers,
       const products = productsRes.data ?? [];
 
       // Create a Set of ended show IDs for quick lookup
+      // FIX: Now works correctly because allShows contains ALL shows, not just scheduled/live
       const endedShowIds = new Set(
         allShows
           .filter(show => show.status === "ended" || show.status === "cancelled" || show.status === "completed")

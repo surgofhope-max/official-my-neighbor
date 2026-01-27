@@ -28,8 +28,9 @@ export async function createPaymentIntent(
 ): Promise<CreatePaymentIntentResult> {
   try {
     // Get the current session for auth header
-    const { data: { session } } = await supabase.auth.getSession();
-    
+    const { data: sessionData } = await supabase.auth.getSession();
+    const session = sessionData?.session;
+
     if (!session) {
       return {
         clientSecret: null,
@@ -38,10 +39,16 @@ export async function createPaymentIntent(
       };
     }
 
-    // Call Edge Function
-    const { data, error } = await supabase.functions.invoke("create-payment-intent", {
-      body: { order_id: orderId },
-    });
+    // Call Edge Function with explicit Authorization header
+    const { data, error } = await supabase.functions.invoke(
+      "create-payment-intent",
+      {
+        body: { order_id: orderId },
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+        },
+      }
+    );
 
     if (error) {
       console.warn("Failed to create payment intent:", error.message);

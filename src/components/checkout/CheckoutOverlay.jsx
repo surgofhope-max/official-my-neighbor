@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { supabase } from "@/lib/supabase/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,15 +9,144 @@ import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { getBuyerProfileByUserId, createBuyerProfile } from "@/api/buyers";
-import { findOrCreateBatch, updateBatch } from "@/api/batches";
-import { createOrderWithResult } from "@/api/orders";
+import { findOrCreateBatch, updateBatch, deleteBatchById } from "@/api/batches";
+import { createOrderWithResult, deleteOrderById } from "@/api/orders";
 import { getProductById } from "@/api/products";
 import { createPaymentIntent, pollOrderPaymentStatus } from "@/api/payments";
 import { checkAccountActiveAsync } from "@/lib/auth/accountGuards";
 import { isShowLive } from "@/api/streamSync";
+import { loadStripe } from "@stripe/stripe-js";
+import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
 
 // Feature flag for live payments
 const USE_LIVE_PAYMENTS = import.meta.env.VITE_STRIPE_ENABLED === "true";
+
+// Inner component for Stripe payment form (must be inside <Elements>)
+function StripePaymentForm({ 
+  onPaymentSuccess, 
+  onPaymentError, 
+  isSubmitting, 
+  setIsSubmitting,
+  orderId,
+  completionCode,
+  seller 
+}) {
+  const stripe = useStripe();
+  const elements = useElements();
+  const [paymentError, setPaymentError] = useState(null);
+  const [isProcessing, setIsProcessing] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    
+    if (!stripe || !elements) {
+      setPaymentError("Payment system not ready. Please wait.");
+      return;
+    }
+
+    if (isSubmitting || isProcessing) {
+      return;
+    }
+
+    setIsProcessing(true);
+    setIsSubmitting(true);
+    setPaymentError(null);
+
+    try {
+      // Confirm payment with Stripe
+      const { error, paymentIntent } = await stripe.confirmPayment({
+        elements,
+        confirmParams: {
+          return_url: window.location.href,
+        },
+        redirect: "if_required",
+      });
+
+      if (error) {
+        // Payment failed
+        setPaymentError(error.message || "Payment failed. Please try again.");
+        onPaymentError(error.message || "Payment failed");
+      } else if (paymentIntent && paymentIntent.status === "succeeded") {
+        // Payment succeeded immediately
+        onPaymentSuccess(orderId, completionCode);
+      } else if (paymentIntent && paymentIntent.status === "processing") {
+        // Payment is processing - poll for status
+        const status = await pollOrderPaymentStatus(orderId, 30, 2000);
+        if (status === "paid") {
+          onPaymentSuccess(orderId, completionCode);
+        } else {
+          setPaymentError("Payment is still processing. You'll receive confirmation shortly.");
+        }
+      } else {
+        // Unexpected state - poll for status
+        const status = await pollOrderPaymentStatus(orderId, 30, 2000);
+        if (status === "paid") {
+          onPaymentSuccess(orderId, completionCode);
+        } else if (status === "cancelled") {
+          setPaymentError("Payment was cancelled.");
+          onPaymentError("Payment was cancelled");
+        } else {
+          setPaymentError("Payment is processing. You'll receive confirmation shortly.");
+        }
+      }
+    } catch (err) {
+      setPaymentError(err.message || "An unexpected error occurred.");
+      onPaymentError(err.message);
+    } finally {
+      setIsProcessing(false);
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-4">
+      <div className="bg-white border border-gray-200 rounded-lg p-4">
+        <PaymentElement 
+          options={{
+            layout: "tabs",
+          }}
+        />
+      </div>
+      
+      {paymentError && (
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>{paymentError}</AlertDescription>
+        </Alert>
+      )}
+
+      <Alert>
+        <AlertCircle className="h-4 w-4" />
+        <AlertDescription className="text-xs">
+          Your payment is processed securely via Stripe.
+          This is a local pickup only from {seller?.business_name}.
+        </AlertDescription>
+      </Alert>
+
+      <Button
+        type="submit"
+        className="w-full bg-gradient-to-r from-purple-600 to-blue-500 text-lg py-6"
+        disabled={!stripe || !elements || isSubmitting || isProcessing}
+      >
+        {isSubmitting || isProcessing ? (
+          <>
+            <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+            Processing Payment...
+          </>
+        ) : (
+          <>
+            <CreditCard className="w-5 h-5 mr-2" />
+            Pay Now
+          </>
+        )}
+      </Button>
+      
+      <p className="text-xs text-center text-gray-500">
+        Secure payment powered by Stripe
+      </p>
+    </form>
+  );
+}
 
 export default function CheckoutOverlay({ product, seller, show, buyerProfile, onClose }) {
   const navigate = useNavigate();
@@ -39,6 +168,26 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
   const [paymentStep, setPaymentStep] = useState(null); // null | "processing" | "awaiting_confirmation"
   const [pendingOrderId, setPendingOrderId] = useState(null);
   const [clientSecret, setClientSecret] = useState(null);
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STRIPE CONNECT: Initialize Stripe with connected account ID
+  // For Stripe Connect, PaymentElement requires stripeAccount to match the
+  // account where the PaymentIntent was created (destination charges)
+  // ═══════════════════════════════════════════════════════════════════════════
+  const stripePromise = useMemo(() => {
+    if (!USE_LIVE_PAYMENTS) return null;
+    
+    const publishableKey = import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY;
+    if (!publishableKey) return null;
+    
+    // If seller has a connected Stripe account, pass it to loadStripe
+    // This is REQUIRED for PaymentElement to work with Connect
+    const stripeOptions = seller?.stripe_account_id
+      ? { stripeAccount: seller.stripe_account_id }
+      : undefined;
+    
+    return loadStripe(publishableKey, stripeOptions);
+  }, [seller?.stripe_account_id]);
 
   useEffect(() => {
     loadUser();
@@ -188,7 +337,7 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
     const batchNumber = generateBatchNumber(show.id, user.id);
     const batchCompletionCode = generateCompletionCode();
 
-    const { batch, isNew } = await findOrCreateBatch({
+    const { batch, isNew: batchWasCreated } = await findOrCreateBatch({
       auth_user_id: user.id,
       auth_user_email: user.email,
           seller_id: seller.id,
@@ -259,7 +408,7 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
       total_amount: newTotalAmount,
     });
 
-    return { order, completionCode: finalCompletionCode, batch, useLivePayment: USE_LIVE_PAYMENTS };
+    return { order, completionCode: finalCompletionCode, batch, batchCreated: batchWasCreated, useLivePayment: USE_LIVE_PAYMENTS };
   };
 
   const handleProfileSubmit = async (e) => {
@@ -277,6 +426,21 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  // Handle successful payment from StripePaymentForm
+  const handlePaymentSuccess = (paidOrderId, paidCompletionCode) => {
+    setOrderId(paidOrderId);
+    setCompletionCode(paidCompletionCode);
+    setOrderComplete(true);
+    setPaymentStep(null);
+    setClientSecret(null);
+  };
+
+  // Handle payment error from StripePaymentForm
+  const handlePaymentError = (errorMessage) => {
+    setCheckoutError(errorMessage);
+    setPaymentStep(null);
   };
 
   const handleCheckout = async () => {
@@ -301,14 +465,36 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
     setIsSoldOut(false);
     setPaymentStep("processing");
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // ROLLBACK TRACKING: Track created artifacts for cleanup on failure
+    // ═══════════════════════════════════════════════════════════════════════════
+    let createdOrderId = null;
+    let createdBatchId = null;
+    let createdBatchWasNew = false;
+
     try {
       // Process the order (creates pending order if live payments enabled)
       const result = await processOrder();
       
+      // Track created artifacts for potential rollback
+      createdOrderId = result.order?.id || null;
+      createdBatchId = result.batch?.id || null;
+      createdBatchWasNew = !!result.batchCreated;
+      
       if (result.useLivePayment) {
-        // Live payment flow - create PaymentIntent and redirect to Stripe
+        // ═══════════════════════════════════════════════════════════════════════════
+        // MODEL A: Live payment flow - Stripe PaymentElement is the ONLY completion path
+        // handleCheckout ONLY creates order + PaymentIntent, NEVER completes the order
+        // setOrderComplete(true) is ONLY called after stripe.confirmPayment() succeeds
+        // ═══════════════════════════════════════════════════════════════════════════
+        
+        // Verify Stripe client is configured before creating pending order
+        if (!stripePromise || !import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY) {
+          throw new Error("Stripe is not configured. Please contact support.");
+        }
+        
         setPendingOrderId(result.order.id);
-        setPaymentStep("awaiting_confirmation");
+        setCompletionCode(result.completionCode);
         
         // Create PaymentIntent via Edge Function
         const { clientSecret: secret, error: paymentError } = await createPaymentIntent(result.order.id);
@@ -317,44 +503,44 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
           throw new Error(paymentError || "Failed to initialize payment");
         }
         
+        // Set clientSecret to trigger Stripe Elements UI render
         setClientSecret(secret);
+        setPaymentStep("stripe_elements");
+        // Note: isSubmitting stays false so user can interact with PaymentElement
+        setIsSubmitting(false);
         
-        // Redirect to Stripe Checkout or use Stripe Elements
-        // For now, open Stripe hosted checkout page
-        // In production, you would integrate Stripe Elements here
-        const stripePublicKey = import.meta.env.VITE_STRIPE_PUBLIC_KEY;
+        // Clear rollback tracking on success - artifacts are now valid
+        createdOrderId = null;
+        createdBatchId = null;
+        createdBatchWasNew = false;
         
-        if (stripePublicKey) {
-          // Poll for payment completion (webhook will update status)
-          setPaymentStep("awaiting_confirmation");
-          setCompletionCode(result.completionCode);
-          
-          // For demo purposes, we'll show the client secret and poll for status
-          // In production, integrate Stripe Elements for inline payment form
-          const status = await pollOrderPaymentStatus(result.order.id, 30, 2000);
-          
-          if (status === "paid") {
-            setOrderId(result.order.id);
-            setOrderComplete(true);
-            setPaymentStep(null);
-          } else if (status === "cancelled") {
-            throw new Error("Payment was cancelled");
-          } else {
-            // Still pending - show manual instructions
-            setCheckoutError("Payment is processing. You'll receive confirmation shortly.");
-          }
-        } else {
-          throw new Error("Stripe is not configured. Please contact support.");
-        }
       } else {
         // Demo mode - order is already marked as paid
         setOrderId(result.order.id);
         setCompletionCode(result.completionCode);
         setOrderComplete(true);
         setPaymentStep(null);
+        
+        // Clear rollback tracking on success
+        createdOrderId = null;
+        createdBatchId = null;
+        createdBatchWasNew = false;
       }
     } catch (error) {
+      // ═══════════════════════════════════════════════════════════════════════════
+      // ROLLBACK CLEANUP: Delete orphan order/batch on failure
+      // ═══════════════════════════════════════════════════════════════════════════
+      if (createdOrderId) {
+        console.warn("[checkout rollback] deleting order", createdOrderId);
+        await deleteOrderById(createdOrderId);
+      }
+      if (createdBatchWasNew && createdBatchId) {
+        console.warn("[checkout rollback] deleting batch", createdBatchId);
+        await deleteBatchById(createdBatchId);
+      }
+
       setPaymentStep(null);
+      setClientSecret(null);
       // Check for sold out error
       if (error.isSoldOut || error.message === "SOLD_OUT") {
         setIsSoldOut(true);
@@ -366,7 +552,9 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
         setCheckoutError(error.message || "Checkout failed. Please try again.");
       }
     } finally {
-      setIsSubmitting(false);
+      if (!clientSecret) {
+        setIsSubmitting(false);
+      }
     }
   };
 
@@ -683,14 +871,36 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
                         >
                           Back to Show
                         </Button>
-                      ) : paymentStep === "awaiting_confirmation" ? (
+                      ) : paymentStep === "processing" ? (
                         <div className="text-center space-y-4">
                           <Loader2 className="w-8 h-8 animate-spin mx-auto text-purple-600" />
-                          <p className="text-gray-600">Processing payment...</p>
-                          <p className="text-xs text-gray-500">
-                            Please complete payment in the new window. Do not close this page.
-                          </p>
+                          <p className="text-gray-600">Creating order...</p>
                         </div>
+                      ) : paymentStep === "stripe_elements" && clientSecret && stripePromise ? (
+                        // Stripe Elements payment form
+                        <Elements 
+                          stripe={stripePromise} 
+                          options={{ 
+                            clientSecret,
+                            appearance: {
+                              theme: 'stripe',
+                              variables: {
+                                colorPrimary: '#9333ea',
+                                borderRadius: '8px',
+                              },
+                            },
+                          }}
+                        >
+                          <StripePaymentForm
+                            onPaymentSuccess={handlePaymentSuccess}
+                            onPaymentError={handlePaymentError}
+                            isSubmitting={isSubmitting}
+                            setIsSubmitting={setIsSubmitting}
+                            orderId={pendingOrderId}
+                            completionCode={completionCode}
+                            seller={seller}
+                          />
+                        </Elements>
                       ) : (
                         <>
                       <Alert>
@@ -698,7 +908,7 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
                         <AlertDescription className="text-xs">
                               {USE_LIVE_PAYMENTS ? (
                                 <>
-                                  You will be redirected to complete payment securely via Stripe.
+                                  Enter your payment details securely via Stripe.
                                   This is a local pickup only from {seller.business_name}.
                                 </>
                               ) : (
@@ -723,17 +933,19 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
                         ) : (
                           <>
                             <CreditCard className="w-5 h-5 mr-2" />
-                                {USE_LIVE_PAYMENTS ? "Pay Now" : "Complete Order (Demo)"}
+                                {USE_LIVE_PAYMENTS ? "Continue to Payment" : "Complete Order (Demo)"}
                           </>
                         )}
                       </Button>
                         </>
                       )}
-                      <p className="text-xs text-center text-gray-500">
-                        {USE_LIVE_PAYMENTS 
-                          ? "Secure payment powered by Stripe" 
-                          : "Demo mode - order will be marked as paid automatically"}
-                      </p>
+                      {paymentStep !== "stripe_elements" && (
+                        <p className="text-xs text-center text-gray-500">
+                          {USE_LIVE_PAYMENTS 
+                            ? "Secure payment powered by Stripe" 
+                            : "Demo mode - order will be marked as paid automatically"}
+                        </p>
+                      )}
                     </div>
                   )}
                 </CardContent>

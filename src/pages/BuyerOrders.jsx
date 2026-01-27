@@ -187,11 +187,19 @@ export default function BuyerOrders() {
     setTimeout(() => setCopiedCode(null), 2000);
   };
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PHASE-1 VISIBILITY FIX: Hide empty batches from buyer view
+  // A batch is "empty" if it has zero visible orders (paid/fulfilled/completed)
+  // This is purely client-side filtering — no DB changes
+  // ═══════════════════════════════════════════════════════════════════════════
+  const batchHasOrders = (batch) => getOrdersForBatch(batch.id).length > 0;
+
   // Separate active and past batches
   // FIX: Both 'completed' and 'picked_up' are terminal states for past orders
+  // PHASE-1: Only show batches that have at least one visible order
   const terminalStatuses = ['completed', 'picked_up', 'fulfilled'];
-  const activeBatches = batches.filter(batch => !terminalStatuses.includes(batch.status));
-  const pastBatches = batches.filter(batch => terminalStatuses.includes(batch.status));
+  const activeBatches = batches.filter(batch => !terminalStatuses.includes(batch.status) && batchHasOrders(batch));
+  const pastBatches = batches.filter(batch => terminalStatuses.includes(batch.status) && batchHasOrders(batch));
 
   // Status styling for batches and orders
   // Batch statuses: pending, partial, completed, cancelled, picked_up
@@ -266,7 +274,8 @@ export default function BuyerOrders() {
   const giviWins = validOrders.filter(o => o.price === 0).length;
   
   // Keep batches for display grouping only
-  const validBatches = batches.filter(b => b.status !== 'cancelled');
+  // PHASE-1: Only show batches that have at least one visible order
+  const validBatches = batches.filter(b => b.status !== 'cancelled' && batchHasOrders(b));
 
   const renderBatchCard = (batch) => {
     const seller = sellersMap[batch.seller_id];

@@ -424,20 +424,28 @@ export default function SellerOrders() {
   };
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // PHASE-1 VISIBILITY FIX: Hide empty batches from seller view
+  // A batch is "empty" if it has zero orders
+  // This is purely client-side filtering — no DB changes
+  // ═══════════════════════════════════════════════════════════════════════════
+  const batchHasOrders = (batch) => allOrders.some(order => order.batch_id === batch.id);
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // FULFILLMENT DATA WIRING
   // Build batch count map FIRST from ALL seller batches, grouped by show_id.
   // Fulfillment count is derived from all seller batches grouped by show_id.
   // This must happen BEFORE showsWithStats is computed.
+  // PHASE-1: Only count batches that have at least one order
   // ═══════════════════════════════════════════════════════════════════════════
   const batchCountByShow = React.useMemo(() => {
     const countMap = {};
     for (const batch of allBatches) {
-      if (batch.show_id) {
+      if (batch.show_id && batchHasOrders(batch)) {
         countMap[batch.show_id] = (countMap[batch.show_id] || 0) + 1;
       }
     }
     return countMap;
-  }, [allBatches]);
+  }, [allBatches, allOrders]);
 
   // ═══════════════════════════════════════════════════════════════════════════
   // BATCH CLASSIFICATION HELPERS
@@ -445,29 +453,33 @@ export default function SellerOrders() {
   //   batch.status === 'picked_up' OR batch.status === 'completed'
   // A batch is considered PENDING when:
   //   batch.status is NOT 'picked_up' AND NOT 'completed'
+  // PHASE-1: All counts exclude empty batches (batches with zero orders)
   // ═══════════════════════════════════════════════════════════════════════════
   const isBatchDone = (batch) => {
     return batch.status === 'picked_up' || batch.status === 'completed';
   };
 
   const getPendingCountForShow = (showId) => {
-    const showBatches = allBatches.filter(batch => batch.show_id === showId);
+    const showBatches = allBatches.filter(batch => batch.show_id === showId && batchHasOrders(batch));
     // Count batches that are NOT done (still need fulfillment)
     return showBatches.filter(batch => !isBatchDone(batch)).length;
   };
   
   const getDoneCountForShow = (showId) => {
-    const showBatches = allBatches.filter(batch => batch.show_id === showId);
+    const showBatches = allBatches.filter(batch => batch.show_id === showId && batchHasOrders(batch));
     // Count batches that ARE done (picked up or completed)
     return showBatches.filter(batch => isBatchDone(batch)).length;
   };
 
   // Build fulfillment stats for each show using the pre-computed batchCountByShow map.
   // fulfillmentCount is derived from all seller batches grouped by show_id (NOT analytics).
+  // PHASE-1: Only include non-empty batches (batches with at least one order)
   const showsWithStats = shows.map(show => {
-    const showBatches = allBatches.filter(batch => batch.show_id === show.id);
-    const totalRevenue = showBatches.reduce((sum, batch) => sum + (batch.total_amount || 0), 0);
-    const totalItems = showBatches.reduce((sum, batch) => sum + (batch.total_items || 0), 0);
+    const showBatches = allBatches.filter(batch => batch.show_id === show.id && batchHasOrders(batch));
+    // Revenue from ORDERS (already filtered by paid/fulfilled/completed/ready in sellerOrders.ts)
+    const showOrders = allOrders.filter(o => o.show_id === show.id);
+    const totalRevenue = showOrders.reduce((sum, o) => sum + (Number(o.price) || 0) + (Number(o.delivery_fee) || 0), 0);
+    const totalItems = showOrders.length;
     const pendingCount = getPendingCountForShow(show.id);
     const doneCount = getDoneCountForShow(show.id);
     
@@ -489,13 +501,22 @@ export default function SellerOrders() {
   // Fulfillment batches are show-scoped but NOT show-lifecycle-scoped.
   // ALL batches for the selected show are included regardless of show status (live/ended/cancelled).
   // This ensures sellers can always see and manage fulfillment for any show.
+  // PHASE-1: Only include non-empty batches (batches with at least one order)
   const batchesForShow = selectedShow 
-    ? allBatches.filter(batch => batch.show_id === selectedShow.id)
+    ? allBatches.filter(batch => batch.show_id === selectedShow.id && batchHasOrders(batch))
     : [];
 
   const getOrdersForBatch = (batchId) => {
     return allOrders.filter(order => order.batch_id === batchId);
   };
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PRE-DERIVED DATA FOR VERIFICATION MODAL
+  // Avoids function calls inside JSX render — uses in-memory filter only
+  // ═══════════════════════════════════════════════════════════════════════════
+  const selectedBatchOrders = selectedBatch
+    ? allOrders.filter(o => o.batch_id === selectedBatch.id)
+    : [];
   
   // ═══════════════════════════════════════════════════════════════════════════
   // IDENTITY HELPERS (READ-ONLY, DISPLAY ONLY)
@@ -702,7 +723,7 @@ export default function SellerOrders() {
               <CardContent className="p-2 text-center">
                 <p className="text-xs text-gray-600 mb-0.5">Revenue</p>
                 <p className="text-lg font-bold text-gray-900">
-                  ${allBatches.reduce((sum, b) => sum + (b.total_amount || 0), 0).toFixed(2)}
+                  ${allOrders.reduce((sum, o) => sum + (Number(o.price) || 0) + (Number(o.delivery_fee) || 0), 0).toFixed(2)}
                 </p>
               </CardContent>
             </Card>
@@ -902,15 +923,16 @@ export default function SellerOrders() {
               </div>
             </div>
             
+            {/* INTEGRITY FIX: Derive totals from ORDERS (filtered to eligible statuses) */}
             <div className="grid grid-cols-2 gap-3 pt-3 border-t">
               <div>
                 <p className="text-xs text-gray-600">Items</p>
-                <p className="text-lg font-bold text-gray-900">{batch.total_items}</p>
+                <p className="text-lg font-bold text-gray-900">{batchOrders.length}</p>
               </div>
               <div>
                 <p className="text-xs text-gray-600">Total</p>
                 <p className="text-lg font-bold text-gray-900">
-                  ${batch.total_amount.toFixed(2)}
+                  ${batchOrders.reduce((sum, o) => sum + (Number(o.price) || 0), 0).toFixed(2)}
                 </p>
               </div>
             </div>
@@ -1018,9 +1040,27 @@ export default function SellerOrders() {
                               variant="outline"
                               size="sm"
                               className="h-6 text-[10px] px-2 text-red-600 border-red-300 hover:bg-red-50"
-                              onClick={(e) => {
+                              onClick={async (e) => {
                                 e.stopPropagation();
-                                alert("Refund/Remove functionality coming soon");
+                                try {
+                                  const { data, error } = await supabase.functions.invoke(
+                                    "seller_refund_stripe_only",
+                                    {
+                                      body: { order_id: order.id }
+                                    }
+                                  );
+
+                                  if (error) {
+                                    console.error("Stripe refund failed:", error);
+                                    alert("Refund failed. Please check Stripe or try again.");
+                                    return;
+                                  }
+
+                                  alert("Refund processed successfully in Stripe.");
+                                } catch (err) {
+                                  console.error("Unexpected refund error:", err);
+                                  alert("Unexpected error processing refund.");
+                                }
                               }}
                             >
                               Refund / Remove Item
@@ -1130,6 +1170,7 @@ export default function SellerOrders() {
               </CardContent>
             </Card>
 
+            {/* INTEGRITY FIX: Derive totals from ORDERS (filtered to eligible statuses) */}
             <Card className="border-0 shadow-md">
               <CardContent className="p-4">
                 <div className="flex flex-col gap-2">
@@ -1139,7 +1180,7 @@ export default function SellerOrders() {
                   <div>
                     <p className="text-gray-600 text-xs">Total Items</p>
                     <p className="text-xl font-bold text-gray-900">
-                      {batchesForShow.reduce((sum, b) => sum + b.total_items, 0)}
+                      {allOrders.filter(o => o.show_id === selectedShow?.id).length}
                     </p>
                   </div>
                 </div>
@@ -1147,7 +1188,7 @@ export default function SellerOrders() {
             </Card>
           </div>
 
-          {/* Full Width Revenue Card */}
+          {/* Full Width Revenue Card - INTEGRITY FIX: Derive from ORDERS */}
           <Card className="border-0 shadow-md">
             <CardContent className="p-6">
               <div className="flex items-center gap-3">
@@ -1157,7 +1198,7 @@ export default function SellerOrders() {
                 <div>
                   <p className="text-gray-600 text-sm">Show Revenue</p>
                   <p className="text-2xl font-bold text-gray-900">
-                    ${batchesForShow.reduce((sum, b) => sum + b.total_amount, 0).toFixed(2)}
+                    ${allOrders.filter(o => o.show_id === selectedShow?.id).reduce((sum, o) => sum + (Number(o.price) || 0) + (Number(o.delivery_fee) || 0), 0).toFixed(2)}
                   </p>
                 </div>
               </div>
@@ -1334,12 +1375,13 @@ export default function SellerOrders() {
                       )}
                     </div>
                     
+                    {/* INTEGRITY FIX: Derive totals from pre-computed selectedBatchOrders (in-memory only) */}
                     <div className="bg-blue-50 p-3 rounded-lg">
                       <p className="text-xs text-gray-600">
                         <strong>Expected Code:</strong> {selectedBatch.completion_code}
                       </p>
                       <p className="text-xs text-gray-600 mt-1">
-                        <strong>Batch:</strong> {selectedBatch.total_items} items, ${selectedBatch.total_amount.toFixed(2)}
+                        <strong>Batch:</strong> {selectedBatchOrders.length} items, ${selectedBatchOrders.reduce((sum, o) => sum + (Number(o.price) || 0), 0).toFixed(2)}
                       </p>
                     </div>
                     

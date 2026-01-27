@@ -19,6 +19,7 @@ export type FulfillmentErrorType =
   | "UNAUTHORIZED"
   | "INVALID_TRANSITION"
   | "ALREADY_COMPLETED"
+  | "NO_ELIGIBLE_ORDERS"
   | "UNKNOWN_ERROR";
 
 export interface FulfillmentError {
@@ -226,8 +227,12 @@ export async function getBatchesForShow(
 /**
  * Get orders for a batch.
  *
+ * INTEGRITY FIX: Only returns ELIGIBLE orders (paid, ready, fulfilled, completed)
+ * This prevents declined / failed / canceled / refunded orders from appearing
+ * in batch totals or fulfillment flows.
+ *
  * @param batchId - The batch ID
- * @returns Array of orders in the batch
+ * @returns Array of eligible orders in the batch
  */
 export async function getOrdersForBatch(
   batchId: string | null
@@ -241,6 +246,7 @@ export async function getOrdersForBatch(
       .from("orders")
       .select("*")
       .eq("batch_id", batchId)
+      .in("status", ["paid", "ready", "fulfilled", "completed"])
       .order("created_at", { ascending: true });
 
     if (error) {
@@ -497,6 +503,22 @@ export async function completeBatchPickup(
 
     console.log("[Pickup] eligibleOrders count:", eligibleOrders.length);
     console.log("[Pickup] skippedOrders count:", skippedOrders.length);
+
+    // ─────────────────────────────────────────────────────────────────────
+    // AUTHORITATIVE GUARD — DO NOT REMOVE
+    // A batch may not be completed unless at least one order transitions with it
+    // ─────────────────────────────────────────────────────────────────────
+    if (eligibleOrders.length === 0) {
+      return {
+        batch: null,
+        ordersUpdated: 0,
+        notificationSent: false,
+        error: {
+          type: "NO_ELIGIBLE_ORDERS",
+          message: "Cannot complete pickup: batch has no paid or ready orders.",
+        },
+      };
+    }
 
     // ─────────────────────────────────────────────────────────────────────
     // STEP B: Update ONLY eligible orders (status = 'paid' or 'ready')

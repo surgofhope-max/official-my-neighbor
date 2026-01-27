@@ -284,6 +284,155 @@ export async function getScheduledShows(): Promise<Show[]> {
   return getShowsByStatus("scheduled");
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// REALTIME STATS MERGE LAYER
+// Fetches viewer counts from show_realtime_stats and merges into Show objects.
+// This is READ-ONLY and provides graceful fallback if stats table is empty.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+interface ShowStats {
+  viewer_count: number;
+  max_viewers: number;
+}
+
+/**
+ * Internal helper: Fetch stats for multiple shows from show_realtime_stats.
+ *
+ * @param showIds - Array of show IDs to fetch stats for
+ * @returns Map of show_id -> { viewer_count, max_viewers }
+ *
+ * This function:
+ * - Never throws
+ * - Returns empty Map on error (graceful fallback)
+ * - Logs warning once on error
+ */
+async function fetchShowStats(
+  showIds: string[]
+): Promise<Map<string, ShowStats>> {
+  const statsMap = new Map<string, ShowStats>();
+
+  if (!showIds.length) {
+    return statsMap;
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from("show_realtime_stats")
+      .select("show_id, viewer_count, max_viewers")
+      .in("show_id", showIds);
+
+    if (error) {
+      console.warn("[fetchShowStats] Stats query failed (using fallback):", error.message);
+      return statsMap;
+    }
+
+    if (data) {
+      for (const row of data) {
+        statsMap.set(row.show_id, {
+          viewer_count: row.viewer_count ?? 0,
+          max_viewers: row.max_viewers ?? 0,
+        });
+      }
+    }
+
+    return statsMap;
+  } catch (err) {
+    console.warn("[fetchShowStats] Unexpected error (using fallback):", err);
+    return statsMap;
+  }
+}
+
+/**
+ * Merge stats into a list of shows.
+ * Prefers show_realtime_stats.viewer_count, falls back to show.viewer_count, then 0.
+ */
+function mergeStatsIntoShows(shows: Show[], statsMap: Map<string, ShowStats>): Show[] {
+  return shows.map((show) => {
+    const stats = statsMap.get(show.id);
+    return {
+      ...show,
+      viewer_count: stats?.viewer_count ?? show.viewer_count ?? 0,
+      max_viewers: stats?.max_viewers ?? show.max_viewers,
+    };
+  });
+}
+
+/**
+ * Get live shows with real-time stats merged.
+ *
+ * @returns Array of live shows with viewer_count from show_realtime_stats
+ *
+ * This function:
+ * - Never throws
+ * - Returns [] on any error
+ * - Falls back to shows.viewer_count if stats unavailable
+ */
+export async function getLiveShowsWithStats(): Promise<Show[]> {
+  const shows = await getLiveShows();
+
+  if (!shows.length) {
+    return shows;
+  }
+
+  const ids = shows.map((s) => s.id).filter(Boolean);
+  const statsMap = await fetchShowStats(ids);
+
+  return mergeStatsIntoShows(shows, statsMap);
+}
+
+/**
+ * Get scheduled shows with real-time stats merged.
+ *
+ * @returns Array of scheduled shows with viewer_count from show_realtime_stats
+ *
+ * This function:
+ * - Never throws
+ * - Returns [] on any error
+ * - Falls back to shows.viewer_count if stats unavailable
+ */
+export async function getScheduledShowsWithStats(): Promise<Show[]> {
+  const shows = await getScheduledShows();
+
+  if (!shows.length) {
+    return shows;
+  }
+
+  const ids = shows.map((s) => s.id).filter(Boolean);
+  const statsMap = await fetchShowStats(ids);
+
+  return mergeStatsIntoShows(shows, statsMap);
+}
+
+/**
+ * Get a single show by ID with real-time stats merged.
+ *
+ * @param showId - The show ID to look up
+ * @returns The show with viewer_count from show_realtime_stats, or null
+ *
+ * This function:
+ * - Never throws
+ * - Returns null for null showId or not found
+ * - Falls back to show.viewer_count if stats unavailable
+ */
+export async function getShowByIdWithStats(
+  showId: string | null
+): Promise<Show | null> {
+  const show = await getShowById(showId);
+
+  if (!show) {
+    return null;
+  }
+
+  const statsMap = await fetchShowStats([show.id]);
+  const stats = statsMap.get(show.id);
+
+  return {
+    ...show,
+    viewer_count: stats?.viewer_count ?? show.viewer_count ?? 0,
+    max_viewers: stats?.max_viewers ?? show.max_viewers,
+  };
+}
+
 /**
  * Create a new show.
  * 

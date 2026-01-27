@@ -6,3 +6,10 @@ dist/
 .vercel/
 .DS_Store
 supabase/.temp/
+
+# --- Local audit & secret artifacts (DO NOT COMMIT) ---
+anon.txt
+token.txt
+schema_dump.sql
+audit_out/
+audit_out_*/

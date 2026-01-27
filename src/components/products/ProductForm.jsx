@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/select";
 import { supabase } from "@/lib/supabase/supabaseClient";
 import { Upload, X, Gift, Video } from "lucide-react";
+import { FEATURES } from "@/config/features";
 
 export default function ProductForm({ product, onSave, onCancel, isSubmitting }) {
   const [formData, setFormData] = useState({
@@ -239,27 +240,29 @@ export default function ProductForm({ product, onSave, onCancel, isSubmitting })
         />
       </div>
 
-      {/* GIVEY Toggle */}
-      <div className="flex items-center justify-between p-4 bg-gradient-to-r from-pink-50 to-orange-50 rounded-lg border-2 border-pink-200">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-gradient-to-r from-pink-500 to-orange-500 rounded-lg flex items-center justify-center">
-            <Gift className="w-5 h-5 text-white" />
+      {/* GIVEY Toggle - Gated by feature flag */}
+      {FEATURES.givi && (
+        <div className="flex items-center justify-between p-4 bg-gradient-to-r from-pink-50 to-orange-50 rounded-lg border-2 border-pink-200">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-gradient-to-r from-pink-500 to-orange-500 rounded-lg flex items-center justify-center">
+              <Gift className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <Label className="text-base font-semibold">Mark as GIVEY Item</Label>
+              <p className="text-sm text-gray-600 mt-1">
+                Giveaway/raffle item - Shows timer and share button only (no pricing/checkout)
+              </p>
+            </div>
           </div>
-          <div>
-            <Label className="text-base font-semibold">Mark as GIVEY Item</Label>
-            <p className="text-sm text-gray-600 mt-1">
-              Giveaway/raffle item - Shows timer and share button only (no pricing/checkout)
-            </p>
-          </div>
+          <Switch
+            checked={formData.is_givey}
+            onCheckedChange={(checked) => setFormData({ ...formData, is_givey: checked })}
+          />
         </div>
-        <Switch
-          checked={formData.is_givey}
-          onCheckedChange={(checked) => setFormData({ ...formData, is_givey: checked })}
-        />
-      </div>
+      )}
 
-      {/* GIVEY Notice */}
-      {formData.is_givey && (
+      {/* GIVEY Notice - Only shows when GIVI enabled AND toggle is on */}
+      {FEATURES.givi && formData.is_givey && (
         <div className="bg-orange-50 border-2 border-orange-200 rounded-lg p-4">
           <p className="text-sm text-orange-900">
             <strong>📢 GIVEY Mode:</strong> This item will appear in your GIVEY Inventory 

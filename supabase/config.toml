@@ -1,0 +1,31 @@
+# Supabase Edge Functions Configuration
+# ======================================
+# This file configures behavior for Edge Functions deployed to Supabase.
+#
+# Documentation: https://supabase.com/docs/guides/functions/config
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Stripe Webhook Function
+# ──────────────────────────────────────────────────────────────────────────────
+# Stripe webhooks do NOT send a Supabase JWT. They authenticate using the
+# stripe-signature header, which is verified inside the function using
+# STRIPE_WEBHOOK_SECRET.
+#
+# SECURITY: JWT verification is disabled at the platform level, but the
+# function validates requests using Stripe's cryptographic signature.
+# ──────────────────────────────────────────────────────────────────────────────
+[functions.stripe-webhook]
+verify_jwt = false
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Daily Webhook Function
+# ──────────────────────────────────────────────────────────────────────────────
+# Daily.co webhooks do NOT send a Supabase JWT. They authenticate using the
+# x-webhook-secret header, which is verified inside the function using
+# DAILY_WEBHOOK_SECRET.
+#
+# SECURITY: JWT verification is disabled at the platform level, but the
+# function validates requests using Daily's shared secret.
+# ──────────────────────────────────────────────────────────────────────────────
+[functions.daily-webhook]
+verify_jwt = false

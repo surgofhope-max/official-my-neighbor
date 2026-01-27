@@ -47,7 +47,14 @@ window.__stopDailyHost = async () => {
   console.log("[DailyBroadcaster] __stopDailyHost complete - camera released");
 };
 
-export default function DailyBroadcaster({ roomUrl, token }) {
+/**
+ * DailyBroadcaster - Host/Seller video broadcast component
+ * 
+ * @param {string} roomUrl - Daily room URL
+ * @param {string} token - Daily meeting token (host)
+ * @param {function} onViewerCountChange - MVP PHASE-1: Callback for live viewer count updates (UI-only)
+ */
+export default function DailyBroadcaster({ roomUrl, token, onViewerCountChange }) {
   const callObjectRef = useRef(null);
   const localVideoRef = useRef(null);
   
@@ -101,6 +108,18 @@ export default function DailyBroadcaster({ roomUrl, token }) {
       call.on("participant-updated", onParticipantUpdated);
       call.on("track-started", onTrackStarted);
 
+      // ═══════════════════════════════════════════════════════════════════════
+      // MVP PHASE-1: UI-only viewer count from Daily SDK (no backend writes)
+      // Mirrors buyer-side behavior in WebRTCViewer.jsx
+      // ═══════════════════════════════════════════════════════════════════════
+      call.on("participant-counts-updated", (event) => {
+        const count = event?.participantCounts?.present;
+        if (typeof count === "number" && onViewerCountChange) {
+          console.log("[DailyBroadcaster] Participant count:", count);
+          onViewerCountChange(count);
+        }
+      });
+
       // Start camera/mic using Daily v0.58 supported API
       await call.startCamera({
         videoSource: true,
@@ -145,7 +164,7 @@ export default function DailyBroadcaster({ roomUrl, token }) {
       // Clear preview AFTER leave/destroy (idempotent safety)
       clearLocalPreview();
     };
-  }, [roomUrl, token]);
+  }, [roomUrl, token, onViewerCountChange]);
 
   return (
     <div className="absolute inset-0 bg-black flex items-center justify-center">

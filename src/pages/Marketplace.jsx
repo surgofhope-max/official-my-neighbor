@@ -10,7 +10,7 @@ import LiveShowCard from "../components/marketplace/LiveShowCard";
 import SellerCard from "../components/marketplace/SellerCard";
 import CommunityCarousel from "../components/marketplace/CommunityCarousel";
 import UnifiedSearchBar from "../components/search/UnifiedSearchBar";
-import { getLiveShows, getScheduledShows } from "@/api/shows";
+import { getLiveShowsWithStats, getScheduledShows } from "@/api/shows";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // SELLER CARD FIELD MAPPING
@@ -182,7 +182,7 @@ export default function Marketplace() {
   const loadShows = async () => {
     try {
       const [live, scheduled] = await Promise.all([
-        getLiveShows(),
+        getLiveShowsWithStats(),
         getScheduledShows(),
       ]);
       

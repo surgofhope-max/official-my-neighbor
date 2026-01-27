@@ -1050,14 +1050,16 @@ export default function BuyerProfile() {
                     </Button>
                   </div>
 
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    className="text-red-600 hover:text-red-700 hover:bg-red-50 text-sm px-3 py-1 h-auto mt-2 self-start"
-                    onClick={() => setShowDeleteConfirm(true)}
-                  >
-                    Delete Account
-                  </Button>
+                  {false && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="text-red-600 hover:text-red-700 hover:bg-red-50 text-sm px-3 py-1 h-auto mt-2 self-start"
+                      onClick={() => setShowDeleteConfirm(true)}
+                    >
+                      Delete Account
+                    </Button>
+                  )}
                 </div>
               </form>
             </CardContent>

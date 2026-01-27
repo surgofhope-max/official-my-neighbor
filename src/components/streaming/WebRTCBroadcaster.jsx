@@ -728,18 +728,8 @@ export default function WebRTCBroadcaster({ show, onStreamStart, onStreamStop })
       addDebugLog("💾 STEP 6: Updating database", "info");
       await updateShowStreamingStatus(true, DAILY_ROOM_URL);
 
-      // STEP 7: Start sync interval
-      addDebugLog("🔄 STEP 7: Starting sync", "info");
-      syncIntervalRef.current = setInterval(async () => {
-        try {
-          await base44.entities.Show.update(show.id, {
-            is_streaming: true,
-            viewer_count: show.viewer_count || 0
-          });
-        } catch (err) {
-          addDebugLog(`⚠️ Sync failed: ${err.message}`, "error");
-        }
-      }, 10000);
+      // NOTE: Sync interval removed — viewer_count is now server-authoritative only
+      // (see sync-ivs-stream-status Edge Function for IVS, future daily-participant-sync for Daily)
 
       addDebugLog("━━━━━━━━━━━━━━━━━━━━━━━━━━", "info");
       addDebugLog("✅ HOST BROADCAST STARTED!", "success");

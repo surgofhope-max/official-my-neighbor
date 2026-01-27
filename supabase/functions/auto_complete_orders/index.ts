@@ -21,7 +21,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
 interface StaleOrder {
   id: string;
   status: string;
-  paid_at: string;
+  updated_at: string;
   buyer_id: string;
   seller_id: string;
 }
@@ -72,21 +72,21 @@ Deno.serve(async (req) => {
     // ─────────────────────────────────────────────────────────────────────────
     // Orders are stale if:
     // - status is 'paid' or 'fulfilled' (not yet completed)
-    // - paid_at is older than STALE_DAYS days
+    // - updated_at is older than STALE_DAYS days
     // - status is NOT 'cancelled' or 'refunded' (excluded by IN clause)
     
     const staleThreshold = new Date();
     staleThreshold.setDate(staleThreshold.getDate() - STALE_DAYS);
     const staleThresholdISO = staleThreshold.toISOString();
 
-    console.log(`[auto_complete_orders] Looking for orders paid before: ${staleThresholdISO}`);
+    console.log(`[auto_complete_orders] Looking for orders updated before: ${staleThresholdISO}`);
 
     const { data: staleOrders, error: queryError } = await supabase
       .from("orders")
-      .select("id, status, paid_at, buyer_id, seller_id")
+      .select("id, status, updated_at, buyer_id, seller_id")
       .in("status", ["paid", "fulfilled"])
-      .lte("paid_at", staleThresholdISO)
-      .order("paid_at", { ascending: true });
+      .lte("updated_at", staleThresholdISO)
+      .order("updated_at", { ascending: true });
 
     if (queryError) {
       console.error("[auto_complete_orders] Query error:", queryError.message);

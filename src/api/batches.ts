@@ -375,3 +375,35 @@ export async function findOrCreateBatch(
 
   return { batch: newBatch, isNew: true };
 }
+
+/**
+ * Delete a batch by ID (for rollback cleanup).
+ *
+ * @param batchId - The batch ID to delete
+ * @returns { ok: boolean, error?: string }
+ *
+ * This function:
+ * - Never throws
+ * - Returns ok: false on error with message
+ */
+export async function deleteBatchById(
+  batchId: string
+): Promise<{ ok: boolean; error?: string }> {
+  if (!batchId) {
+    return { ok: false, error: "Missing batchId" };
+  }  try {
+    const { error } = await supabase
+      .from("batches")
+      .delete()
+      .eq("id", batchId);    if (error) {
+      console.warn("[BATCH] deleteBatchById FAILED:", error.message);
+      return { ok: false, error: error.message };
+    }    if (DEBUG_BATCH) {
+      console.log("[BATCH] deleteBatchById SUCCESS:", batchId);
+    }    return { ok: true };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    console.warn("[BATCH] deleteBatchById exception:", message);
+    return { ok: false, error: message };
+  }
+}

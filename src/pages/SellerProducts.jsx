@@ -40,6 +40,7 @@ import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { getProductsBySellerId } from "@/api/products";
 import { getShowsBySellerId } from "@/api/shows";
+import { FEATURES } from "@/config/features";
 
 export default function SellerProducts() {
   const navigate = useNavigate();
@@ -391,14 +392,16 @@ export default function SellerProducts() {
               <h1 className="text-3xl font-bold text-gray-900">Product Inventory</h1>
               <p className="text-gray-600 mt-1">Select a show to manage products</p>
             </div>
-            <Button
-              variant="outline"
-              className="border-pink-500 text-pink-600 hover:bg-pink-50"
-              onClick={handleViewGivey}
-            >
-              <Gift className="w-4 h-4 mr-2" />
-              GIVEY Inventory ({giveyProducts.length})
-            </Button>
+            {FEATURES.givi && (
+              <Button
+                variant="outline"
+                className="border-pink-500 text-pink-600 hover:bg-pink-50"
+                onClick={handleViewGivey}
+              >
+                <Gift className="w-4 h-4 mr-2" />
+                GIVEY Inventory ({giveyProducts.length})
+              </Button>
+            )}
           </div>
 
           {/* Search */}
@@ -426,12 +429,14 @@ export default function SellerProducts() {
                 <p className="text-lg font-bold text-gray-900">{regularProducts.length}</p>
               </CardContent>
             </Card>
-            <Card className="border-0 shadow-sm flex-1 bg-pink-50">
-              <CardContent className="p-2 text-center">
-                <p className="text-xs text-gray-600 mb-0.5">GIVEYs</p>
-                <p className="text-lg font-bold text-gray-900">{giveyProducts.length}</p>
-              </CardContent>
-            </Card>
+            {FEATURES.givi && (
+              <Card className="border-0 shadow-sm flex-1 bg-pink-50">
+                <CardContent className="p-2 text-center">
+                  <p className="text-xs text-gray-600 mb-0.5">GIVEYs</p>
+                  <p className="text-lg font-bold text-gray-900">{giveyProducts.length}</p>
+                </CardContent>
+              </Card>
+            )}
           </div>
 
           <Card className="border-0 shadow-sm bg-green-50">
@@ -747,9 +752,9 @@ export default function SellerProducts() {
   }
 
   // ========================================
-  // VIEW 3: GIVEY INVENTORY
+  // VIEW 3: GIVEY INVENTORY (Gated by feature flag)
   // ========================================
-  if (view === 'givey') {
+  if (FEATURES.givi && view === 'givey') {
     const filteredGivey = giveyProducts.filter(product =>
       product.title?.toLowerCase().includes(searchTerm.toLowerCase())
     );

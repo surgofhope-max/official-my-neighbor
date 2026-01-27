@@ -86,6 +86,7 @@ export async function getOrdersBySeller(
       .from("orders")
       .select("*")
       .or(orConditions.join(","))
+      .in("status", ["paid", "fulfilled", "completed", "ready"])
       .order("created_at", { ascending: false });
 
     if (error) {
@@ -124,6 +125,7 @@ export async function getOrdersBySellerId(
       .from("orders")
       .select("*")
       .eq("seller_id", sellerId)
+      .in("status", ["paid", "fulfilled", "completed", "ready"])
       .order("created_at", { ascending: false });
 
     if (error) {
@@ -160,7 +162,8 @@ export async function getSellerOrdersByBatchId(
     const { data, error } = await supabase
       .from("orders")
       .select("*")
-      .eq("batch_id", batchId);
+      .eq("batch_id", batchId)
+      .in("status", ["paid", "fulfilled", "completed", "ready"]);
 
     if (error) {
       console.warn("Failed to fetch orders by batch ID:", error.message);
@@ -197,6 +200,7 @@ export async function getSellerOrderById(
       .from("orders")
       .select("*")
       .eq("id", orderId)
+      .in("status", ["paid", "fulfilled", "completed", "ready"])
       .maybeSingle();
 
     if (error) {

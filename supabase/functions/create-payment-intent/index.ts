@@ -1,14 +1,20 @@
 /**
  * Supabase Edge Function: create-payment-intent
  *
- * Creates a Stripe PaymentIntent for an order.
+ * Creates a Stripe PaymentIntent for an order using MODEL A (Direct Charges).
  * Called by frontend after order is created with "pending" status.
  *
  * Flow:
  * 1. Frontend creates order (status: pending, inventory reserved)
  * 2. Frontend calls this function with order_id
- * 3. Function creates PaymentIntent and updates order with payment_intent_id
- * 4. Returns client_secret for Stripe Elements
+ * 3. Function creates PaymentIntent ON THE CONNECTED ACCOUNT (seller)
+ * 4. Returns client_secret for Stripe Elements (frontend must use same stripeAccount)
+ *
+ * MODEL A: Direct Charges on Connected Account
+ * - PaymentIntent is created ON the seller's connected account
+ * - Platform collects application_fee_amount (5%)
+ * - clientSecret belongs to connected account context
+ * - Frontend MUST use loadStripe(pk, { stripeAccount: acct_xxx })
  */
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
@@ -114,22 +120,6 @@ serve(async (req: Request) => {
       );
     }
 
-    // If PaymentIntent already exists, retrieve it
-    if (order.payment_intent_id) {
-      const existingIntent = await stripe.paymentIntents.retrieve(order.payment_intent_id);
-      
-      if (existingIntent.status === "requires_payment_method" || 
-          existingIntent.status === "requires_confirmation") {
-        return new Response(
-          JSON.stringify({
-            client_secret: existingIntent.client_secret,
-            payment_intent_id: existingIntent.id,
-          }),
-          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-    }
-
     // Calculate amount in cents
     const amountInCents = Math.round((order.price || 0) * 100);
 
@@ -140,57 +130,100 @@ serve(async (req: Request) => {
       );
     }
 
-    // Get seller's Stripe account for Connect (if applicable)
-    const { data: seller } = await supabase
-      .from("sellers")
-      .select("stripe_account_id, business_name")
-      .eq("id", order.seller_id)
-      .single();
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Get seller's Stripe account for Connect (REQUIRED for Model A)
+    // DUAL-READ: Prefer seller_entity_id (canonical), fallback to seller_id (legacy)
+    // - New orders: seller_entity_id = sellers.id (canonical entity PK)
+    // - Legacy orders: seller_id = sellers.user_id (auth.users.id FK)
+    // ═══════════════════════════════════════════════════════════════════════════
+    const sellerEntityId = (order as any).seller_entity_id || null;
 
-    // Create PaymentIntent
+    let seller: any = null;
+
+    // Try canonical lookup first (seller_entity_id → sellers.id)
+    if (sellerEntityId) {
+      const { data } = await supabase
+        .from("sellers")
+        .select("id, user_id, stripe_account_id, business_name")
+        .eq("id", sellerEntityId)
+        .single();
+      seller = data;
+    }
+
+    // Fallback to legacy lookup (seller_id → sellers.user_id)
+    if (!seller && order.seller_id) {
+      const { data } = await supabase
+        .from("sellers")
+        .select("id, user_id, stripe_account_id, business_name")
+        .eq("user_id", order.seller_id)
+        .single();
+      seller = data;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // MODEL A: Direct Charges on Connected Account
+    // - Seller MUST have stripe_account_id
+    // - PaymentIntent is created ON the connected account
+    // - NO transfer_data.destination (that's for destination charges)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    // Require seller to have Stripe Connect for live payments
+    if (!seller?.stripe_account_id) {
+      return new Response(
+        JSON.stringify({ error: "Seller Stripe account not connected" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const connectedAccountId = seller.stripe_account_id;
+
+    // Calculate platform fee (5%)
+    const platformFee = Math.round(amountInCents * 0.05);
+
+    // Create PaymentIntent params - NO transfer_data (that's destination charges)
     const paymentIntentParams: Stripe.PaymentIntentCreateParams = {
       amount: amountInCents,
       currency: "usd",
       automatic_payment_methods: {
         enabled: true,
       },
+      // Platform fee collected from this direct charge
+      application_fee_amount: platformFee,
       metadata: {
         order_id: order.id,
         buyer_id: order.buyer_id,
-        seller_id: order.seller_id,
+        seller_user_id: order.seller_id || "",           // Legacy: auth.users.id
+        seller_entity_id: seller?.id || sellerEntityId || "",  // Canonical: sellers.id
         product_id: order.product_id || "",
         show_id: order.show_id || "",
+        platform: "livemarket",
       },
       description: `Order for ${order.product_title}`,
       receipt_email: order.buyer_email || undefined,
     };
 
-    // If seller has Stripe Connect, use transfer_data
-    if (seller?.stripe_account_id) {
-      // Calculate platform fee (e.g., 5%)
-      const platformFee = Math.round(amountInCents * 0.05);
-      
-      paymentIntentParams.transfer_data = {
-        destination: seller.stripe_account_id,
-      };
-      paymentIntentParams.application_fee_amount = platformFee;
-    }
+    // Audit log BEFORE creating PaymentIntent
+    console.log("[create-payment-intent] MODELA direct charge", {
+      orderId: order?.id,
+      sellerId: seller?.id,
+      connectedAccountId,
+      amountInCents,
+      platformFee,
+      hasTransferData: !!paymentIntentParams.transfer_data,
+    });
 
-    const paymentIntent = await stripe.paymentIntents.create(paymentIntentParams);
+    // Create PaymentIntent ON THE CONNECTED ACCOUNT (Direct Charges / Model A)
+    const paymentIntent = await stripe.paymentIntents.create(
+      paymentIntentParams,
+      { stripeAccount: connectedAccountId }
+    );
 
-    // Update order with payment_intent_id
-    const { error: updateError } = await supabase
-      .from("orders")
-      .update({
-        payment_intent_id: paymentIntent.id,
-      })
-      .eq("id", order_id);
-
-    if (updateError) {
-      // Cancel the PaymentIntent since we couldn't store it
-      await stripe.paymentIntents.cancel(paymentIntent.id);
-      throw new Error("Failed to update order with payment intent");
-    }
+    // Audit log AFTER creating PaymentIntent
+    console.log("[create-payment-intent] PI created", {
+      orderId: order?.id,
+      connectedAccountId,
+      paymentIntentId: paymentIntent?.id,
+    });
 
     const response: CreatePaymentIntentResponse = {
       client_secret: paymentIntent.client_secret!,

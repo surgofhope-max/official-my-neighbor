@@ -11,6 +11,7 @@ import LiveChatOverlay from "../chat/LiveChatOverlay";
 import ShareButton from "../sharing/ShareButton";
 import GIVIViewerOverlay from "../givi/GIVIViewerOverlay";
 import { isShowLive } from "@/api/streamSync";
+import { FEATURES } from "@/config/features";
 
 export default function LiveShowCardWrapper({ 
   show, 
@@ -63,8 +64,8 @@ export default function LiveShowCardWrapper({
         </div>
       </div>
 
-      {/* GIVI Overlay */}
-      {show && seller && (
+      {/* GIVI Overlay - Gated by feature flag */}
+      {FEATURES.givi && show && seller && (
         <GIVIViewerOverlay show={show} seller={seller} />
       )}
 

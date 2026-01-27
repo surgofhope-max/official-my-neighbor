@@ -78,6 +78,11 @@ export default function SellerOnboarding() {
   const [loading, setLoading] = useState(true);
   const [activeStep, setActiveStep] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // BUSINESS NAME AVAILABILITY: Error state for name reservation check
+  // ═══════════════════════════════════════════════════════════════════════════
+  const [businessNameError, setBusinessNameError] = useState(null);
   // ═══════════════════════════════════════════════════════════════════════════
   // FAIL-SAFE: Track if canonical user query failed to prevent redirect loops
   // ═══════════════════════════════════════════════════════════════════════════
@@ -209,9 +214,13 @@ export default function SellerOnboarding() {
       setRevenueRange(userMeta.seller_revenue_range || "");
       setChannels(userMeta.seller_sales_channels || []);
       
-      // Address: Pre-fill name from canonical, rest from metadata (seller-specific)
+      // ═══════════════════════════════════════════════════════════════════════════
+      // BUSINESS NAME: Seller must explicitly enter their business name
+      // DO NOT auto-fill from buyer full_name (canonicalUser?.full_name)
+      // Only restore previously saved seller business name from metadata
+      // ═══════════════════════════════════════════════════════════════════════════
       setAddress({
-        fullName: canonicalUser?.full_name || userMeta.seller_return_full_name || "",
+        fullName: userMeta.seller_return_full_name || "",
         line1: userMeta.seller_return_address_1 || "",
         line2: userMeta.seller_return_address_2 || "",
         city: userMeta.seller_return_city || "",
@@ -457,6 +466,19 @@ export default function SellerOnboarding() {
           })}
         </div>
 
+        {/* Business Name Availability Error */}
+        {businessNameError && (
+          <div className="mt-6 p-4 bg-red-50 border border-red-200 rounded-lg">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0" />
+              <p className="text-sm text-red-700 font-medium">{businessNameError}</p>
+            </div>
+            <p className="text-xs text-red-600 mt-1 ml-7">
+              Update your business name in the "Return Address" step.
+            </p>
+          </div>
+        )}
+
         {/* Complete Button */}
         <Button 
           className={`w-full h-14 text-lg font-bold shadow-lg mt-8 transition-all ${
@@ -493,6 +515,39 @@ export default function SellerOnboarding() {
                   .select("full_name, phone, email")
                   .eq("id", currentUser.id)
                   .maybeSingle();
+
+                // ═══════════════════════════════════════════════════════════════════════════
+                // BUSINESS NAME AVAILABILITY CHECK (MVP GATE)
+                // Query public.reserved_names to ensure the chosen name is available
+                // READ-ONLY: Does not write to reserved_names
+                // ═══════════════════════════════════════════════════════════════════════════
+                const proposedBusinessName = address.fullName || canonicalIdentity?.full_name || currentUser.email?.split("@")[0] || "New Seller";
+                
+                // Clear any previous error
+                setBusinessNameError(null);
+                
+                // Check if name is reserved (case-insensitive)
+                const { data: reservedNameMatch, error: reservedCheckError } = await supabase
+                  .from("reserved_names")
+                  .select("id")
+                  .ilike("name", proposedBusinessName)
+                  .eq("status", "active")
+                  .limit(1)
+                  .maybeSingle();
+                
+                if (reservedCheckError) {
+                  console.warn("[SellerOnboarding] reserved_names check failed:", reservedCheckError.message);
+                  // Non-blocking: If the table doesn't exist or query fails, proceed with submission
+                  // This ensures graceful degradation during MVP rollout
+                }
+                
+                if (reservedNameMatch) {
+                  // Name is already taken - block submission
+                  console.log("[SellerOnboarding] Business name is reserved:", proposedBusinessName);
+                  setBusinessNameError("That business name is already taken. Please choose another.");
+                  setSubmitting(false);
+                  return; // EXIT - do not proceed
+                }
 
                 // Build seller payload using FORM STATE and CANONICAL data, NOT metadata
                 const sellerPayload = {
