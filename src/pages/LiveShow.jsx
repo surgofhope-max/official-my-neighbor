@@ -1223,19 +1223,6 @@ export default function LiveShow() {
               )}
             </div>
 
-            <div className="flex items-center justify-center">
-              <ShareButton
-                type="show"
-                id={showId}
-                title={show?.title}
-                description={show?.description}
-                imageUrl={show?.thumbnail_url}
-                variant="ghost"
-                size="icon"
-                showLabel={false}
-                className="w-12 h-12 rounded-full bg-black/70 backdrop-blur-lg hover:bg-black/80 border-2 border-white/30 text-white shadow-lg"
-              />
-            </div>
           </div>
         </div>
       </div>

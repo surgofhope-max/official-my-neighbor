@@ -409,7 +409,7 @@ export default function SupabaseLiveChat({
   return (
     <div
       className={`
-        ${isOverlay ? "fixed bottom-20 left-4 right-4 z-40 max-w-md" : "w-full h-full"}
+        ${isOverlay ? "fixed bottom-2 left-4 right-4 z-40 max-w-md" : "w-full h-full"}
         flex flex-col
       `}
     >
