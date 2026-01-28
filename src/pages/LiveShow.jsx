@@ -1213,12 +1213,14 @@ export default function LiveShow() {
         >
           <div className="flex items-center gap-2 px-2">
             <div className="flex-1">
-              <LiveChatOverlay
-                showId={showId}
-                sellerId={show?.seller_id}
-                isSeller={false}
-                inputOnly={true}
-              />
+              {!useSupabaseChat && (
+                <LiveChatOverlay
+                  showId={showId}
+                  sellerId={show?.seller_id}
+                  isSeller={false}
+                  inputOnly={true}
+                />
+              )}
             </div>
 
             <div className="flex items-center justify-center">
@@ -1542,27 +1544,6 @@ export default function LiveShow() {
           animation: pulse-slow 3s ease-in-out infinite;
         }
       `}</style>
-
-      {/* TEMPORARY AUDIT INDICATOR - REMOVE AFTER TESTING */}
-      {__auditSalesCount !== null && (
-        <div
-          style={{
-            position: "fixed",
-            bottom: "8px",
-            right: "8px",
-            zIndex: 99999,
-            background: "rgba(0,0,0,0.75)",
-            color: "#00ff99",
-            fontSize: "11px",
-            padding: "4px 6px",
-            borderRadius: "4px",
-            pointerEvents: "none",
-            fontFamily: "monospace"
-          }}
-        >
-          AUDIT sales_count: {__auditSalesCount}
-        </div>
-      )}
     </div>
   );
 }
