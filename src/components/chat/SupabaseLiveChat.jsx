@@ -416,7 +416,7 @@ export default function SupabaseLiveChat({
       {/* Messages Container */}
       <div
         className={`
-          ${isOverlay ? "max-h-48" : "flex-1"}
+          ${isOverlay ? "max-h-48 pb-20" : "flex-1"}
           overflow-y-auto mb-2
           ${fadeMessages && isOverlay ? "opacity-30" : "opacity-100"}
           transition-opacity duration-500
@@ -581,17 +581,12 @@ function ChatMessage({ message, isCurrentUser, isOverlay, buyerName }) {
         )}
       </div>
 
-      {/* Message Bubble */}
+      {/* Message Text - Simple overlay style (no bubbles) */}
       <div
         className={`
-          max-w-[80%] rounded-lg px-3 py-1.5
           ${isOverlay
-            ? isCurrentUser
-              ? "bg-purple-600/80"
-              : "bg-black/60 backdrop-blur-sm"
-            : isCurrentUser
-              ? "bg-purple-600"
-              : "bg-gray-700"
+            ? "text-sm leading-tight"
+            : "max-w-[80%] rounded-lg px-3 py-1.5 " + (isCurrentUser ? "bg-purple-600" : "bg-gray-700")
           }
         `}
       >
