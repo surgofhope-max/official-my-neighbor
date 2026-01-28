@@ -23,21 +23,25 @@ export default function Login() {
 
       if (signInError) {
         setError(signInError.message);
-      } else {
-        // Login successful - check for stored return URL (e.g., from BUY NOW click)
-        const returnUrl = sessionStorage.getItem("login_return_url");
-        if (returnUrl) {
-          sessionStorage.removeItem("login_return_url");
-          // Use window.location for full page navigation to preserve query params
-          window.location.href = returnUrl;
-          return;
-        }
-        // Explicit default redirect after login
-        navigate(createPageUrl("Marketplace"), { replace: true });
+        setLoading(false);
+        return;
       }
+
+      // Login successful - check for stored return URL (e.g., from BUY NOW click)
+      const returnUrl = sessionStorage.getItem("login_return_url");
+      if (returnUrl) {
+        sessionStorage.removeItem("login_return_url");
+        // Use window.location for full page navigation to preserve query params
+        window.location.href = returnUrl;
+        return;
+      }
+
+      // Explicit default redirect after login
+      navigate(createPageUrl("Marketplace"), { replace: true });
+      return;
+
     } catch (err) {
       setError("An unexpected error occurred");
-    } finally {
       setLoading(false);
     }
   };
