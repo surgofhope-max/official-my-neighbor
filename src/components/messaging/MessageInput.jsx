@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
+import { useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Send, Loader2 } from "lucide-react";
@@ -8,13 +9,24 @@ export default function MessageInput({ onSend, disabled, placeholder = "Type a m
   const [sending, setSending] = useState(false);
   const textareaRef = useRef(null);
 
+  // LiveShow isolation: prevent DM input from mounting on LiveShow page
+  const location = useLocation();
+  const isLiveShow =
+    location.pathname.toLowerCase().includes("liveshow") ||
+    location.search.toLowerCase().includes("showid");
+
   useEffect(() => {
-    // Auto-resize textarea
+    // Auto-resize textarea (skip if LiveShow isolation active)
+    if (isLiveShow) return;
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
       textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 120) + "px";
     }
-  }, [message]);
+  }, [message, isLiveShow]);
+
+  if (isLiveShow) {
+    return null;
+  }
 
   const handleSend = async () => {
     if (!message.trim() || sending) return;
