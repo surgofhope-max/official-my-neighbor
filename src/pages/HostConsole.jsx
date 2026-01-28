@@ -1413,6 +1413,8 @@ export default function HostConsole() {
             onAddProduct={() => setShowAddProductDrawer(true)}
             onSearch={setSearchTerm}
             searchTerm={searchTerm}
+            useSupabaseChat={useSupabaseChat}
+            user={currentUser}
           />
           
           {/* Host Controls - Top Right Icons */}

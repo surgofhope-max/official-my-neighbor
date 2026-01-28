@@ -3,6 +3,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Plus, Search, Lock, ShoppingBag } from "lucide-react";
 import LiveChatOverlay from "../chat/LiveChatOverlay";
+import SupabaseLiveChat from "../chat/SupabaseLiveChat";
 
 export default function HostBottomControls({
   mode, // 'products' | 'message'
@@ -14,6 +15,9 @@ export default function HostBottomControls({
   onAddProduct,
   onSearch,
   searchTerm,
+  // NEW: Props for Supabase chat wiring
+  useSupabaseChat = false,
+  user = null,
 }) {
   const carouselRef = useRef(null);
 
@@ -110,14 +114,24 @@ export default function HostBottomControls({
             </Button>
           </div>
         ) : (
-          /* MODE B: Message Bar */
+          /* MODE B: Message Bar — Use Supabase chat when live, legacy fallback otherwise */
           <div className="animate-fade-in">
-            <LiveChatOverlay 
-              showId={showId} 
-              isSeller={true}
-              sellerId={sellerId}
-              inputOnly={true}
-            />
+            {useSupabaseChat ? (
+              <SupabaseLiveChat
+                showId={showId}
+                sellerId={sellerId}
+                isSeller={true}
+                isOverlay={true}
+                user={user}
+              />
+            ) : (
+              <LiveChatOverlay 
+                showId={showId} 
+                isSeller={true}
+                sellerId={sellerId}
+                inputOnly={true}
+              />
+            )}
           </div>
         )}
       </div>
