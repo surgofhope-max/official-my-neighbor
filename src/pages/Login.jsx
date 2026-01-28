@@ -32,7 +32,8 @@ export default function Login() {
           window.location.href = returnUrl;
           return;
         }
-        // No return URL - default navigation handled by auth state change
+        // Explicit default redirect after login
+        navigate(createPageUrl("Marketplace"), { replace: true });
       }
     } catch (err) {
       setError("An unexpected error occurred");
