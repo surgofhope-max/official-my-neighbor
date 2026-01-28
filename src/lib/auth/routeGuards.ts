@@ -500,13 +500,18 @@ export function getUnauthorizedRedirect(
   user: User | null | undefined,
   buyerProfile?: BuyerProfile | null | undefined
 ): string {
-  // Not logged in - redirect to Marketplace (not Login, per requirements)
+  // Not logged in - store intended destination and redirect to Login
   if (!requireAuth(user)) {
+    // UX POLISH: Store return URL so user lands back here after login
+    if (typeof window !== "undefined") {
+      const returnUrl = window.location.pathname + window.location.search;
+      sessionStorage.setItem("login_return_url", returnUrl);
+    }
     if (LM_FORENSIC()) {
       console.warn("[GATE FORENSIC][getUnauthorizedRedirect]", {
         ts: new Date().toISOString(),
         routeName,
-        returning: "Marketplace",
+        returning: "Login",
         user_id: (user as any)?.id,
         user_email: (user as any)?.email,
         user_role: (user as any)?.role,
@@ -517,7 +522,7 @@ export function getUnauthorizedRedirect(
         buyerProfile_user_id: (buyerProfile as any)?.user_id,
       });
     }
-    return "Marketplace";
+    return "Login";
   }
 
   // BuyerSafetyAgreement: if buyer profile is incomplete, redirect to BuyerProfile with forceEdit
