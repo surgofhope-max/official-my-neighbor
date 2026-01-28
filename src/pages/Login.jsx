@@ -1,14 +1,32 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/lib/supabase/supabaseClient";
 import { createPageUrl } from "@/utils";
+import { useSupabaseAuth } from "@/lib/auth/SupabaseAuthProvider";
 
 export default function Login() {
   const navigate = useNavigate();
+  const { user, isLoadingAuth } = useSupabaseAuth();
+  
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // AUTH REDIRECT: If user becomes authenticated while on Login, redirect away
+  // This prevents the "double login" visual flash during auth state propagation
+  // ═══════════════════════════════════════════════════════════════════════════
+  useEffect(() => {
+    if (!isLoadingAuth && user) {
+      navigate(createPageUrl("Marketplace"), { replace: true });
+    }
+  }, [isLoadingAuth, user, navigate]);
+
+  // Early return: Don't render login form if user is authenticated
+  if (!isLoadingAuth && user) {
+    return null;
+  }
 
   const handleSubmit = async (e) => {
     e.preventDefault();
