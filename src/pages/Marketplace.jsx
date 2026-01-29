@@ -478,7 +478,7 @@ export default function Marketplace() {
               <h2 className="text-2xl sm:text-3xl font-bold text-gray-900">Featured Sellers</h2>
             </div>
             
-            <div className="overflow-x-scroll snap-x snap-mandatory scrollbar-hide -mx-4">
+            <div className="overflow-x-scroll overflow-y-visible snap-x snap-mandatory scrollbar-hide -mx-4">
               <div className="flex px-4" style={{ scrollSnapType: 'x mandatory' }}>
                 {Array.from({ length: Math.ceil(sellers.length / 4) }).map((_, blockIndex) => {
                   const startIdx = blockIndex * 4;
