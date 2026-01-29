@@ -332,8 +332,8 @@ export default function SellerProducts() {
       ...show,
       productCount: linkedProducts.length,
       totalValue,
-      availableCount: linkedProducts.filter(p => p.status === 'available' || p.status === 'active').length,
-      soldCount: linkedProducts.filter(p => p.status === 'sold' || p.status === 'sold_out').length
+      availableCount: linkedProducts.filter(p => p.status === 'active').length,
+      soldCount: linkedProducts.filter(p => p.status === 'sold_out').length
     };
   });
 

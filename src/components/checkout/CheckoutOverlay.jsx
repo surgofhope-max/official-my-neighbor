@@ -297,7 +297,7 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
         throw new Error("Product is out of stock");
       }
       
-    if (currentProduct.status === "sold_out" || currentProduct.status === "sold") {
+    if (currentProduct.status === "sold_out") {
       throw new Error("Product is sold out");
     }
     

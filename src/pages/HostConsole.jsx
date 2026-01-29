@@ -595,20 +595,20 @@ export default function HostConsole() {
         throw new Error("Quantity must be a non-negative number.");
       }
       
-      // If quantity becomes 0, mark as sold
+      // If quantity becomes 0, mark as sold_out
       const updates = {
         quantity: qty
       };
       
       if (qty === 0) {
-        updates.status = "sold";
-        console.log("   Marking as sold (quantity = 0)");
+        updates.status = "sold_out";
+        console.log("   Marking as sold_out (quantity = 0)");
       } else if (qty > 0) {
-        // If increasing from 0, restore to available unless it was explicitly locked
+        // If increasing from 0, restore to active unless it was explicitly locked
         const currentProduct = products.find(p => p.id === productId);
-        if (currentProduct?.status === "sold") {
-          updates.status = "available";
-          console.log("   Restoring to available (quantity > 0 and was sold)");
+        if (currentProduct?.status === "sold_out") {
+          updates.status = "active";
+          console.log("   Restoring to active (quantity > 0 and was sold_out)");
         }
       }
       
@@ -1386,7 +1386,7 @@ export default function HostConsole() {
               isFeatured={selectedProduct.is_featured || selectedProduct.id === show.featured_product_id}
               onClose={() => setSelectedProduct(null)}
               onPushToLive={(product) => {
-                const isLocked = product.status === "locked" || product.status === "sold";
+                const isLocked = product.status === "locked" || product.status === "sold_out";
                 const isFeatured = product.is_featured || product.id === show.featured_product_id;
                 
                 if (!isLocked) {
@@ -1625,7 +1625,7 @@ export default function HostConsole() {
             <h2 className="text-white font-bold text-lg">Products</h2>
             <div className="space-y-3">
               {filteredProducts.map((product) => {
-                const isLocked = product.status === "locked" || product.status === "sold";
+                const isLocked = product.status === "locked" || product.status === "sold_out";
                 const isFeatured = product.is_featured || product.id === show.featured_product_id;
                 const isEditingQty = editingQuantityProductId === product.id;
                 const isEditingPrice = editingPriceProductId === product.id;
@@ -1747,7 +1747,7 @@ export default function HostConsole() {
                         )}
                         {isLocked && (
                           <Badge className="bg-red-500 text-white text-xs mt-1">
-                            {product.status === "sold" ? "SOLD" : "LOCKED"}
+                            {product.status === "sold_out" ? "SOLD" : "LOCKED"}
                           </Badge>
                         )}
                       </div>

@@ -518,7 +518,7 @@ export default function LiveShow() {
     }
 
     // Validate product is still available
-    if (product.status === "sold" || product.status === "locked") {
+    if (product.status === "sold_out" || product.status === "locked") {
       return;
     }
     if ((product.quantity || 0) <= 0) {
@@ -1164,14 +1164,14 @@ export default function LiveShow() {
                     className={`w-full h-12 relative group flex items-center justify-center gap-3 transition-all rounded-xl overflow-hidden
                       ${!canBuy ? 'bg-gray-800/80 cursor-not-allowed' :
                         expandedProduct.status === 'locked' ? 'bg-gray-800/80 cursor-not-allowed' : 
-                        expandedProduct.status === 'sold' ? 'bg-gray-800/80 cursor-not-allowed' : 
+                        expandedProduct.status === 'sold_out' ? 'bg-gray-800/80 cursor-not-allowed' : 
                         'hover:scale-[1.02] active:scale-95'
                       }`}
                     onClick={() => handleBuyNow(expandedProduct)}
-                    disabled={!canBuy || expandedProduct.status === "locked" || expandedProduct.status === "sold"}
+                    disabled={!canBuy || expandedProduct.status === "locked" || expandedProduct.status === "sold_out"}
                   >
                     {/* Background Aura for Active State */}
-                    {canBuy && expandedProduct.status !== 'locked' && expandedProduct.status !== 'sold' && (
+                    {canBuy && expandedProduct.status !== 'locked' && expandedProduct.status !== 'sold_out' && (
                        <div className="absolute inset-0 bg-gradient-to-r from-[#00FF2A]/10 to-[#4D9FFF]/10 animate-pulse-slow"></div>
                     )}
 
@@ -1179,7 +1179,7 @@ export default function LiveShow() {
                        <span className="text-gray-400 font-bold text-sm">Waiting for host to go live...</span>
                     ) : expandedProduct.status === "locked" ? (
                        <span className="text-gray-400 font-bold flex items-center gap-2"><Lock className="w-4 h-4"/> LOCKED</span>
-                    ) : expandedProduct.status === "sold" ? (
+                    ) : expandedProduct.status === "sold_out" ? (
                        <span className="text-gray-400 font-bold">SOLD OUT</span>
                     ) : (
                       <>
@@ -1281,21 +1281,21 @@ export default function LiveShow() {
                     {/* Desktop Buy Button */}
                     <button
                       className={`w-full mt-2 h-9 relative group flex items-center justify-center gap-2 transition-all rounded-lg overflow-hidden border border-white/10
-                        ${(product.status === 'locked' || product.status === 'sold') ? 'bg-gray-700/50 cursor-not-allowed' : 
+                        ${(product.status === 'locked' || product.status === 'sold_out') ? 'bg-gray-700/50 cursor-not-allowed' : 
                           'hover:scale-[1.02] active:scale-95 bg-black/20'
                         }`}
                       onClick={(e) => {
                         e.stopPropagation();
                         handleBuyNow(product);
                       }}
-                      disabled={product.status === "locked" || product.status === "sold"}
+                      disabled={product.status === "locked" || product.status === "sold_out"}
                     >
                       {/* Background Aura */}
-                      {product.status !== 'locked' && product.status !== 'sold' && (
+                      {product.status !== 'locked' && product.status !== 'sold_out' && (
                           <div className="absolute inset-0 bg-gradient-to-r from-[#00FF2A]/10 to-[#4D9FFF]/10 animate-pulse-slow"></div>
                       )}
 
-                      {(product.status === "locked" || product.status === "sold") ? (
+                      {(product.status === "locked" || product.status === "sold_out") ? (
                           <span className="text-gray-400 text-xs font-bold flex items-center gap-1">
                             {product.status === 'locked' ? <Lock className="w-3 h-3"/> : null}
                             {product.status === 'locked' ? 'LOCKED' : 'SOLD'}

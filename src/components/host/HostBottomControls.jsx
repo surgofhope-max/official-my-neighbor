@@ -32,7 +32,7 @@ export default function HostBottomControls({
         >
           {products.map((product) => {
             const isFeatured = product.id === featuredProductId;
-            const isLocked = product.status === "locked" || product.status === "sold";
+            const isLocked = product.status === "locked" || product.status === "sold_out";
             
             return (
               <div 
