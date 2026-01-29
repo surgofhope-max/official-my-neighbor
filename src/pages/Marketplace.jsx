@@ -213,6 +213,12 @@ export default function Marketplace() {
         .order('follower_count', { ascending: false })
         .limit(50);
       
+      console.log('[Marketplace seller_cards]', {
+        dataLength: data?.length,
+        firstRow: data?.[0],
+        error,
+      });
+      
       if (error) {
         console.error("[Marketplace] seller_cards query error:", error.message);
         setSellers([]);
