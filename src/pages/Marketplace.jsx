@@ -472,7 +472,7 @@ export default function Marketplace() {
         )}
 
         {/* Featured Sellers */}
-        {sellers.length > 0 && selectedCommunity === "all" && (
+        {sellers.length > 0 && (
           <section>
             <div className="flex items-center gap-3 mb-1">
               <h2 className="text-2xl sm:text-3xl font-bold text-gray-900">Featured Sellers</h2>
