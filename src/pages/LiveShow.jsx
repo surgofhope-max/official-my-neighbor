@@ -503,14 +503,31 @@ export default function LiveShow() {
 
   const handleBuyNow = (product) => {
     // ═══════════════════════════════════════════════════════════════════════════
+    // DIAGNOSTIC LOGGING: Trace product ID at buy click
+    // ═══════════════════════════════════════════════════════════════════════════
+    console.log("[BUY NOW CLICK] product.id:", product?.id);
+    console.log("[BUY NOW CLICK] product.show_product_id:", product?.show_product_id);
+    console.log("[BUY NOW CLICK] product.product_id:", product?.product_id);
+    console.log("[BUY NOW CLICK] product.title:", product?.title);
+    console.log("[BUY NOW CLICK] full product:", product);
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // LIFECYCLE GATING: Only allow buying when show is actually live
     // ═══════════════════════════════════════════════════════════════════════════
     if (!isShowLive(show)) {
+      console.log("[GATE BLOCKED] reason: show not live", {
+        streamStatus: show?.stream_status,
+        showStatus: show?.status,
+        productId: product?.id,
+      });
       console.warn("[LiveShow] Buy blocked - show is not live (stream_status !== 'live')");
       return;
     }
     
     if (!user) {
+      console.log("[GATE BLOCKED] reason: no user logged in", {
+        productId: product?.id,
+      });
       // Store return URL for post-login redirect
       sessionStorage.setItem('login_return_url', window.location.href);
       navigate(createPageUrl("Login"));
@@ -519,12 +536,29 @@ export default function LiveShow() {
 
     // Validate product is still available
     if (product.status === "sold_out" || product.status === "locked") {
+      console.log("[GATE BLOCKED] reason: product status blocked", {
+        productStatus: product?.status,
+        productQuantity: product?.quantity,
+        productId: product?.id,
+        productTitle: product?.title,
+      });
       return;
     }
     if ((product.quantity || 0) <= 0) {
+      console.log("[GATE BLOCKED] reason: product quantity <= 0", {
+        productQuantity: product?.quantity,
+        productStatus: product?.status,
+        productId: product?.id,
+        productTitle: product?.title,
+      });
       return;
     }
 
+    console.log("[SET selectedProduct]", {
+      selectedProductId: product?.id,
+      selectedTitle: product?.title,
+      selectedShowProductId: product?.show_product_id,
+    });
     setSelectedProduct(product);
     setExpandedProduct(null);
     setShowCheckout(true);
@@ -1242,6 +1276,13 @@ export default function LiveShow() {
           )}
           
           {canShowProducts && allShowProducts.map((product) => {
+            console.log("[RENDER PRODUCT CARD] (desktop list)", {
+              cardProductId: product?.id,
+              cardTitle: product?.title,
+              cardShowProductId: product?.show_product_id,
+              cardQuantity: product?.quantity,
+              cardStatus: product?.status,
+            });
             const isFeatured = product.id === featuredProduct?.id;
             return (
               <div
@@ -1465,20 +1506,29 @@ export default function LiveShow() {
       )}
 
       {/* Checkout Overlay - GATED: Only render when canBuy (stream_status === "live") */}
-      {canBuy && showCheckout && selectedProduct && seller && (
-        <div className="fixed inset-0 z-[200]">
-          <CheckoutOverlay
-            product={selectedProduct}
-            seller={seller}
-            show={show}
-            buyerProfile={buyerProfile}
-            onClose={() => {
-              setShowCheckout(false);
-              setSelectedProduct(null);
-            }}
-          />
-        </div>
-      )}
+      {canBuy && showCheckout && selectedProduct && seller && (() => {
+        console.log("[CHECKOUT RECEIVES PRODUCT]", {
+          checkoutProductId: selectedProduct?.id,
+          checkoutTitle: selectedProduct?.title,
+          checkoutShowProductId: selectedProduct?.show_product_id,
+          checkoutQuantity: selectedProduct?.quantity,
+          checkoutStatus: selectedProduct?.status,
+        });
+        return (
+          <div className="fixed inset-0 z-[200]">
+            <CheckoutOverlay
+              product={selectedProduct}
+              seller={seller}
+              show={show}
+              buyerProfile={buyerProfile}
+              onClose={() => {
+                setShowCheckout(false);
+                setSelectedProduct(null);
+              }}
+            />
+          </div>
+        );
+      })()}
 
       <style>{`
         .scrollbar-hide::-webkit-scrollbar {

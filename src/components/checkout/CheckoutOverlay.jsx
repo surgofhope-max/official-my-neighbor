@@ -286,26 +286,51 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
   };
 
   const validateProductAvailability = async () => {
+    console.log("[VALIDATE AVAILABILITY] checking product.id:", product?.id);
     // Check current product availability
     const currentProduct = await getProductById(product.id);
+    console.log("[VALIDATE AVAILABILITY] fetched currentProduct:", {
+      id: currentProduct?.id,
+      status: currentProduct?.status,
+      quantity: currentProduct?.quantity,
+      title: currentProduct?.title,
+    });
     
     if (!currentProduct) {
-        throw new Error("Product not found");
-      }
+      console.log("[CHECKOUT BLOCKED] reason: product not found in DB", {
+        requestedProductId: product?.id,
+        productTitle: product?.title,
+      });
+      throw new Error("Product not found");
+    }
       
     if ((currentProduct.quantity || 0) <= 0) {
-        throw new Error("Product is out of stock");
-      }
+      console.log("[CHECKOUT BLOCKED] reason: DB quantity <= 0", {
+        productId: currentProduct?.id,
+        dbQuantity: currentProduct?.quantity,
+        dbStatus: currentProduct?.status,
+        propQuantity: product?.quantity,
+      });
+      throw new Error("Product is out of stock");
+    }
       
     if (currentProduct.status === "sold_out") {
+      console.log("[CHECKOUT BLOCKED] reason: DB status is sold_out", {
+        productId: currentProduct?.id,
+        dbStatus: currentProduct?.status,
+        dbQuantity: currentProduct?.quantity,
+      });
       throw new Error("Product is sold out");
     }
     
+    console.log("[VALIDATE AVAILABILITY] product is available, proceeding");
     return currentProduct;
   };
 
   const processOrder = async () => {
+    console.log("[PROCESS ORDER] starting processOrder()");
     if (!user) {
+      console.log("[CHECKOUT BLOCKED] reason: no user", { user });
       throw new Error("Please log in to complete your purchase");
     }
 
@@ -314,6 +339,11 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
     // ═══════════════════════════════════════════════════════════════════════════
     if (!isShowLive(show)) {
       const status = show?.status || "unknown";
+      console.log("[CHECKOUT BLOCKED] reason: show not live", {
+        showStatus: status,
+        streamStatus: show?.stream_status,
+        showId: show?.id,
+      });
       if (status === "scheduled") {
         throw new Error("This show hasn't started yet. Please wait for the show to go live.");
       } else if (status === "ended") {
@@ -347,17 +377,31 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
     });
 
     if (!batch) {
+      console.log("[CHECKOUT BLOCKED] reason: batch creation failed", {
+        batchNumber,
+        sellerId: seller?.id,
+        showId: show?.id,
+      });
       throw new Error("Failed to create order batch");
     }
+    console.log("[PROCESS ORDER] batch ready:", { batchId: batch?.id, batchNumber: batch?.batch_number });
 
     // Use the batch's completion code (either existing or newly generated)
     const finalCompletionCode = batch.completion_code || batchCompletionCode;
     const finalBatchNumber = batch.batch_number || batchNumber;
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // DIAGNOSTIC LOGGING: Trace product ID at INSERT payload creation
+    // ═══════════════════════════════════════════════════════════════════════════
+    console.log("[CHECKOUT INSERT] product.id:", product?.id);
+    console.log("[CHECKOUT INSERT] product.show_product_id:", product?.show_product_id);
+    console.log("[CHECKOUT INSERT] product.product_id:", product?.product_id);
+    console.log("[CHECKOUT INSERT] product.title:", product?.title);
+
     // Create the order (with inventory enforcement at DB layer)
     // Use live payments if enabled, otherwise demo mode
     // DUAL-WRITE (Step T3.6): Pass both seller identifiers
-    const { order, error: orderError } = await createOrderWithResult({
+    const orderPayload = {
       batch_id: batch.id,
       buyer_id: user.id,
       buyer_name: profileData.full_name,
@@ -377,11 +421,28 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
       group_code: finalBatchNumber,
       completion_code: finalCompletionCode,
       useLivePayment: USE_LIVE_PAYMENTS,
+    };
+    console.log("[ORDER PAYLOAD FINAL]", orderPayload);
+
+    const { order, error: orderError } = await createOrderWithResult(orderPayload);
+    console.log("[PROCESS ORDER] createOrderWithResult returned:", {
+      orderId: order?.id,
+      orderError: orderError,
+      errorType: orderError?.type,
+      errorMessage: orderError?.message,
+      isSoldOut: orderError?.isSoldOut,
     });
 
     // Handle inventory/sold out errors from database
     if (orderError) {
+      console.log("[CHECKOUT BLOCKED] reason: orderError from DB", {
+        errorType: orderError?.type,
+        errorMessage: orderError?.message,
+        isSoldOut: orderError?.isSoldOut,
+        fullError: orderError,
+      });
       if (orderError.isSoldOut) {
+        console.log("[SOLD OUT MESSAGE TRIGGERED] source: orderError.isSoldOut flag");
         const soldOutError = new Error("SOLD_OUT");
         soldOutError.isSoldOut = true;
         soldOutError.displayMessage = "Sorry, this item just sold out!";
@@ -391,8 +452,10 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
     }
 
     if (!order) {
+      console.log("[CHECKOUT BLOCKED] reason: order is null after createOrderWithResult");
       throw new Error("Failed to create order");
     }
+    console.log("[PROCESS ORDER] order created successfully:", order?.id);
 
     // Signal LiveShow to refresh product list (slight delay for read-after-write consistency)
     setTimeout(() => {
@@ -542,13 +605,27 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
       setPaymentStep(null);
       setClientSecret(null);
       // Check for sold out error
+      console.log("[ERROR HANDLER] caught error:", {
+        message: error?.message,
+        isSoldOut: error?.isSoldOut,
+        displayMessage: error?.displayMessage,
+        stack: error?.stack?.split('\n').slice(0, 5).join('\n'),
+      });
       if (error.isSoldOut || error.message === "SOLD_OUT") {
+        console.log("[SOLD OUT MESSAGE TRIGGERED] source: error.isSoldOut or SOLD_OUT message", {
+          isSoldOut: error.isSoldOut,
+          message: error.message,
+        });
         setIsSoldOut(true);
         setCheckoutError(error.displayMessage || "Sorry, this item is no longer available.");
       } else if (error.message?.includes("out of stock") || error.message?.includes("sold out")) {
+        console.log("[SOLD OUT MESSAGE TRIGGERED] source: error message contains 'out of stock' or 'sold out'", {
+          message: error.message,
+        });
         setIsSoldOut(true);
         setCheckoutError("Sorry, this item just sold out!");
       } else {
+        console.log("[CHECKOUT ERROR] non-soldout error:", error.message);
         setCheckoutError(error.message || "Checkout failed. Please try again.");
       }
     } finally {
