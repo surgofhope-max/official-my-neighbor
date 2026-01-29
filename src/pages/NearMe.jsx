@@ -422,13 +422,14 @@ export default function NearMe() {
   // When ZIP_ADJACENCY exists → ZIP group filtering
   // When ZIP_ADJACENCY missing → allowedZips === [userZip] → same ZIP only
   // EARLY_MARKET_MODE: Bypasses ZIP filtering to show all sellers
-  const nearbySellers = EARLY_MARKET_MODE
-    ? sellers
-    : sellers.filter((seller) => {
-        if (!userZip) return false;
-        if (!seller.pickup_zip) return false;
-        return allowedZips.includes(seller.pickup_zip);
-      });
+  const nearbySellers =
+    EARLY_MARKET_MODE || selectedTier === "metro"
+      ? sellers
+      : sellers.filter((seller) => {
+          if (!userZip) return false;
+          if (!seller.pickup_zip) return false;
+          return allowedZips.includes(seller.pickup_zip);
+        });
 
   // Base nearby shows (distance filtered via seller location)
   const nearbyLiveShows = liveShows.filter(show => {
