@@ -314,13 +314,13 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
       throw new Error("Product is out of stock");
     }
       
-    if (currentProduct.status === "sold_out") {
-      console.log("[CHECKOUT BLOCKED] reason: DB status is sold_out", {
+    if (currentProduct.status !== "active") {
+      console.log("[CHECKOUT BLOCKED] reason: DB status is not active", {
         productId: currentProduct?.id,
         dbStatus: currentProduct?.status,
         dbQuantity: currentProduct?.quantity,
       });
-      throw new Error("Product is sold out");
+      throw new Error("Product is not available");
     }
     
     console.log("[VALIDATE AVAILABILITY] product is available, proceeding");

@@ -398,13 +398,13 @@ export async function createOrderWithResult(
 
   try {
     // QA HARDENING: Check for existing pending order to prevent duplicates
-    // This handles double-click scenarios
+    // Scoped to show_id (not batch_id) to prevent duplicates across batches
     const { data: existingOrder } = await supabase
       .from("orders")
       .select("*")
       .eq("buyer_id", input.buyer_id)
       .eq("product_id", input.product_id)
-      .eq("batch_id", input.batch_id)
+      .eq("show_id", input.show_id)
       .eq("status", "pending")
       .maybeSingle();
 

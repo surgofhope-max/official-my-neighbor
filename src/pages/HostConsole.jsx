@@ -1386,17 +1386,15 @@ export default function HostConsole() {
               isFeatured={selectedProduct.is_featured || selectedProduct.id === show.featured_product_id}
               onClose={() => setSelectedProduct(null)}
               onPushToLive={(product) => {
-                const isLocked = product.status === "locked" || product.status === "sold_out";
                 const isFeatured = product.is_featured || product.id === show.featured_product_id;
                 
-                if (!isLocked) {
-                  if (isFeatured) {
-                    // Unfeature if already featured (unpush)
-                    unfeatureProductMutation.mutate();
-                  } else {
-                    // Feature if not featured (push)
-                    featureProductMutation.mutate(product);
-                  }
+                // Only active products can be featured; any status can be unfeatured
+                if (isFeatured) {
+                  unfeatureProductMutation.mutate();
+                } else if (product.status === "active") {
+                  featureProductMutation.mutate(product);
+                } else {
+                  console.warn("[HostConsole] Cannot feature product - status is not active:", product.status);
                 }
               }}
             />
@@ -1634,14 +1632,13 @@ export default function HostConsole() {
                   <div
                     key={product.id}
                     onClick={() => {
-                      if (!isLocked) {
-                        if (isFeatured) {
-                          // Unfeature if already featured (unpush)
-                          unfeatureProductMutation.mutate();
-                        } else {
-                          // Feature if not featured (push)
-                          featureProductMutation.mutate(product);
-                        }
+                      // Only active products can be featured; any status can be unfeatured
+                      if (isFeatured) {
+                        unfeatureProductMutation.mutate();
+                      } else if (product.status === "active") {
+                        featureProductMutation.mutate(product);
+                      } else {
+                        console.warn("[HostConsole] Cannot feature product - status is not active:", product.status);
                       }
                     }}
                     className={`cursor-pointer rounded-lg p-3 transition-all ${
