@@ -98,10 +98,10 @@ export default function Login() {
           <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-2xl p-6 sm:p-8 space-y-6">
             <div className="text-center">
               <h2 className="text-xl sm:text-2xl font-bold text-gray-900">
-                Welcome back
+                Create your account
               </h2>
               <p className="mt-1 text-sm text-gray-500">
-                Sign in to your account
+                Get started with MyNeighbor.Live
               </p>
             </div>
 
@@ -148,19 +148,19 @@ export default function Login() {
                 disabled={loading}
                 className="w-full py-3 px-4 bg-gradient-to-r from-purple-600 to-blue-500 text-white font-semibold rounded-lg shadow-md hover:from-purple-700 hover:to-blue-600 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {loading ? "Signing in..." : "Sign In"}
+                {loading ? "Signing in..." : "Create Account"}
               </button>
             </form>
 
             <div className="text-center pt-2">
               <p className="text-sm text-gray-600">
-                Don't have an account?{" "}
+                Already have an account?{" "}
                 <button
                   type="button"
                   onClick={() => navigate(createPageUrl("Signup"))}
                   className="font-semibold text-purple-600 hover:text-purple-500 transition-colors"
                 >
-                  Sign up
+                  Log in
                 </button>
               </p>
             </div>
