@@ -873,6 +873,7 @@ export default function SellerStorefront() {
                     <Card
                       key={show.id}
                       className="bg-gray-800 border-gray-700 overflow-hidden cursor-pointer hover:shadow-xl transition-all"
+                      onClick={() => navigate(createPageUrl("LiveShow") + `?showId=${show.id}`)}
                     >
                       <div className="relative h-48 bg-gray-900">
                         {show.thumbnail_url ? (
