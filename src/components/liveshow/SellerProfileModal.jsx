@@ -104,7 +104,9 @@ export default function SellerProfileModal({ seller, user, onClose }) {
               
               {/* Stats Rows */}
               <div className="space-y-2 mb-3">
-                {/* Followers/Following Row */}
+                {/* LAUNCH SUPPRESSION: Followers/Following hidden (base44.entities broken) */}
+                {/* TODO: Re-enable after migrating to getFollowersBySellerId() */}
+                {false && (
                 <div className="flex items-center gap-4 text-sm">
                   <div>
                     <span className="font-bold text-white">{followerCount.toLocaleString()}</span>
@@ -115,6 +117,7 @@ export default function SellerProfileModal({ seller, user, onClose }) {
                     <span className="text-gray-400 ml-1">Following</span>
                   </div>
                 </div>
+                )}
 
                 {/* Ratings/Sold Row */}
                 <div className="flex items-center gap-4 text-sm">
