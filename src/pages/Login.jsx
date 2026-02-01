@@ -98,10 +98,10 @@ export default function Login() {
           <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-2xl p-6 sm:p-8 space-y-6">
             <div className="text-center">
               <h2 className="text-xl sm:text-2xl font-bold text-gray-900">
-                Create your account
+                Welcome back
               </h2>
               <p className="mt-1 text-sm text-gray-500">
-                Get started with MyNeighbor.Live
+                Sign in to your account
               </p>
             </div>
 
@@ -148,22 +148,28 @@ export default function Login() {
                 disabled={loading}
                 className="w-full py-3 px-4 bg-gradient-to-r from-purple-600 to-blue-500 text-white font-semibold rounded-lg shadow-md hover:from-purple-700 hover:to-blue-600 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {loading ? "Signing in..." : "Create Account"}
+                {loading ? "Logging in..." : "Log In"}
               </button>
             </form>
 
-            <div className="text-center pt-2">
-              <p className="text-sm text-gray-600">
-                Already have an account?{" "}
-                <button
-                  type="button"
-                  onClick={() => navigate(createPageUrl("Signup"))}
-                  className="font-semibold text-purple-600 hover:text-purple-500 transition-colors"
-                >
-                  Log in
-                </button>
-              </p>
+            {/* Divider */}
+            <div className="relative py-2">
+              <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t border-gray-200"></div>
+              </div>
+              <div className="relative flex justify-center text-sm">
+                <span className="px-4 bg-white text-gray-500">New to MyNeighbor.Live?</span>
+              </div>
             </div>
+
+            {/* Create Account CTA */}
+            <button
+              type="button"
+              onClick={() => navigate(createPageUrl("Signup"))}
+              className="w-full py-4 px-4 bg-white border-2 border-purple-500 text-purple-600 font-bold text-lg rounded-lg shadow-sm hover:bg-purple-50 hover:border-purple-600 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 transition-all"
+            >
+              Create Account
+            </button>
           </div>
 
           {/* Footer */}
