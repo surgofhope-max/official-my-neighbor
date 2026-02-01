@@ -61,24 +61,27 @@ export default function ShareButton({
   // Generate unique share URL with referral tracking
   const generateShareUrl = () => {
     const baseUrl = window.location.origin;
+    const params = new URLSearchParams();
     let path = "";
     
     switch (type) {
       case "show":
-        path = `/LiveShow?showId=${id}`;
+        path = `/LiveShow`;
+        params.set('showId', id);
         break;
       case "community":
-        path = `/CommunityPage?community=${id}`;
+        path = `/CommunityPage`;
+        params.set('community', id);
         break;
       case "seller":
-        path = `/SellerStorefront?sellerId=${id}`;
+        path = `/SellerStorefront`;
+        params.set('sellerId', id);
         break;
       default:
         path = `/`;
     }
 
     // Add referral tracking if user is logged in
-    const params = new URLSearchParams();
     if (user) {
       params.set('ref', user.id);
       params.set('givi', `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`);
