@@ -89,6 +89,7 @@ export default function SupabaseLiveChat({
   const pollingIntervalRef = useRef(null);
   const fadeTimeoutRef = useRef(null);
   const lastMessageIdRef = useRef(null);
+  const knownMessageIdsRef = useRef(new Set()); // Track IDs we've already processed
   const mountedRef = useRef(true);
 
   // Poll interval (ms)
@@ -210,20 +211,39 @@ export default function SupabaseLiveChat({
   const pollMessages = useCallback(async () => {
     if (!showId) return;
 
-    const { messages: newMessages, error } = await getLiveShowMessages(showId, {
+    const { messages: serverMessages, error } = await getLiveShowMessages(showId, {
       limit: 100,
     });
 
-    if (mountedRef.current && !error) {
-      // Merge new messages
-      if (newMessages.length > 0) {
-        const lastNewId = newMessages[newMessages.length - 1].id;
+    if (mountedRef.current && !error && serverMessages.length > 0) {
+      const lastServerId = serverMessages[serverMessages.length - 1].id;
 
-        // Check if we have new messages
-        if (lastNewId !== lastMessageIdRef.current) {
-          lastMessageIdRef.current = lastNewId;
-          setMessages(newMessages);
-          fetchBuyerNames(newMessages);
+      // Only process if there are new messages (compare last ID)
+      if (lastServerId !== lastMessageIdRef.current) {
+        lastMessageIdRef.current = lastServerId;
+
+        // INCREMENTAL APPEND: Find only truly new messages using ref for O(1) lookup
+        const onlyNew = serverMessages.filter((m) => !knownMessageIdsRef.current.has(m.id));
+        
+        if (onlyNew.length > 0) {
+          // Update known IDs ref BEFORE state update
+          onlyNew.forEach((m) => knownMessageIdsRef.current.add(m.id));
+          
+          // Trim ref if it grows too large (keep last ~150 to allow some buffer)
+          if (knownMessageIdsRef.current.size > 150) {
+            const idsArray = Array.from(knownMessageIdsRef.current);
+            knownMessageIdsRef.current = new Set(idsArray.slice(-100));
+          }
+
+          // Update state with only new messages appended
+          setMessages((prev) => {
+            const merged = [...prev, ...onlyNew];
+            // Keep only last 100 messages (trim oldest)
+            return merged.length > 100 ? merged.slice(-100) : merged;
+          });
+
+          // Fetch buyer names ONLY for newly appended messages
+          fetchBuyerNames(onlyNew);
           resetFadeTimer();
         }
       }
@@ -231,7 +251,7 @@ export default function SupabaseLiveChat({
 
     // Also check availability periodically
     await checkAvailability();
-  }, [showId, checkAvailability]);
+  }, [showId, checkAvailability, fetchBuyerNames]);
 
   // Start/stop polling
   useEffect(() => {
