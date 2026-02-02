@@ -13,6 +13,7 @@ import {
   useSupabaseAuth as useAuth,
 } from "@/lib/auth/SupabaseAuthProvider";
 import UserNotRegisteredError from '@/components/UserNotRegisteredError';
+import { Analytics } from "@vercel/analytics/react";
 
 const { Pages, Layout, mainPage } = pagesConfig;
 const mainPageKey = mainPage ?? Object.keys(Pages)[0];
@@ -75,6 +76,7 @@ function App() {
         <Toaster />
         <VisualEditAgent />
       </QueryClientProvider>
+      <Analytics />
     </AuthProvider>
   )
 }
