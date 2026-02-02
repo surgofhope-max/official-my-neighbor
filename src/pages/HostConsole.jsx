@@ -1419,16 +1419,6 @@ export default function HostConsole() {
           <div 
             className="fixed top-16 right-3 flex flex-col gap-3 z-[200]"
           >
-            {/* Revenue (Icon Only) */}
-            <Button
-              variant="ghost"
-              size="icon"
-              className="bg-black/40 backdrop-blur-md border border-white/20 text-white hover:bg-black/60 h-10 w-10 rounded-full"
-              title={`Revenue: $${stats.revenue.toFixed(2)}`}
-            >
-              <DollarSign className="w-5 h-5 text-green-400" />
-            </Button>
-
             {/* Message Toggle (Icon Only) */}
             <Button
               onClick={() => setBottomBarMode("message")}
