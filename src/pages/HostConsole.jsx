@@ -1129,6 +1129,7 @@ export default function HostConsole() {
                   <div className="text-center">
                     <p className="text-[10px] text-white/70 leading-tight font-bold">Revenue</p>
                     <p className="text-sm font-bold leading-tight">${stats.revenue.toFixed(2)}</p>
+                    <p className="text-[9px] text-white/50 leading-tight mt-0.5">👁 {stats.viewers} viewers</p>
                   </div>
                 </Button>
 
