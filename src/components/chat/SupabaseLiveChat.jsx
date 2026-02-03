@@ -437,7 +437,7 @@ export default function SupabaseLiveChat({
       {/* Messages Container */}
       <div
         className={`
-          ${isOverlay ? "max-h-48 pb-20" : "flex-1"}
+          ${isOverlay ? "max-h-[50vh] pb-20" : "flex-1"}
           overflow-y-auto mb-2
           opacity-100
           transition-opacity duration-500
