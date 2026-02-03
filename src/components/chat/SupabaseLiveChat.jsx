@@ -429,7 +429,7 @@ export default function SupabaseLiveChat({
   return (
     <div
       className={`
-        ${isOverlay ? "fixed bottom-2 left-4 right-4 z-40 max-w-md" : "w-full h-full"}
+        ${isOverlay ? "fixed bottom-[120px] left-4 right-4 z-40 max-w-md" : "w-full h-full"}
         flex flex-col
       `}
     >
@@ -587,20 +587,6 @@ function ChatMessage({ message, isCurrentUser, isOverlay, buyerName }) {
         ${isCurrentUser ? "flex-row-reverse" : ""}
       `}
     >
-      {/* Avatar */}
-      <div
-        className={`
-          w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0
-          ${isSeller ? "bg-purple-600" : "bg-gray-600"}
-        `}
-      >
-        {isSeller ? (
-          <Radio className="w-3 h-3 text-white" />
-        ) : (
-          <User className="w-3 h-3 text-white" />
-        )}
-      </div>
-
       {/* Message Text - Simple overlay style (no bubbles) */}
       <div
         className={`

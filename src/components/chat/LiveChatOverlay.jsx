@@ -287,26 +287,6 @@ export default function LiveChatOverlay({ showId, isSeller = false, onClose, inp
                 animationFillMode: 'backwards'
               }}
             >
-              {/* Avatar with enhanced shadow */}
-              <div 
-                className="w-6 h-6 rounded-full flex items-center justify-center text-white font-semibold text-[10px] flex-shrink-0 shadow-lg"
-                style={{
-                  background: msg.is_seller 
-                    ? 'linear-gradient(135deg, #a855f7 0%, #3b82f6 100%)'
-                    : 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)'
-                }}
-              >
-                {msg.user_avatar ? (
-                  <img 
-                    src={msg.user_avatar} 
-                    alt={msg.user_name} 
-                    className="w-full h-full rounded-full object-cover" 
-                  />
-                ) : (
-                  msg.user_name[0].toUpperCase()
-                )}
-              </div>
-
               {/* Message Content - Enhanced text shadows for readability */}
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-1.5 mb-0.5">
