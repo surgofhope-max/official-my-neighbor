@@ -88,6 +88,44 @@ serve(async (req: Request) => {
     return new Response("ok", { headers: corsHeaders });
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // TEMPORARY AUDIT: Verify Stripe platform identity
+  // ═══════════════════════════════════════════════════════════════════════════
+  {
+    const _auditKey = Deno.env.get("STRIPE_SECRET_KEY") || "";
+    console.log("[STRIPE PLATFORM AUDIT] ═══════════════════════════════════════");
+    console.log("[STRIPE PLATFORM AUDIT] STRIPE_SECRET_KEY exists:", !!_auditKey);
+    console.log("[STRIPE PLATFORM AUDIT] Key prefix:", _auditKey ? _auditKey.substring(0, 8) : "NONE");
+    
+    if (_auditKey) {
+      try {
+        const _auditRes = await fetch("https://api.stripe.com/v1/account", {
+          method: "GET",
+          headers: { "Authorization": `Bearer ${_auditKey}` },
+        });
+        const _auditData = await _auditRes.json();
+        
+        console.log("[STRIPE PLATFORM AUDIT] HTTP status:", _auditRes.status);
+        
+        if (_auditData.error) {
+          console.log("[STRIPE PLATFORM AUDIT] error.type:", _auditData.error.type);
+          console.log("[STRIPE PLATFORM AUDIT] error.message:", _auditData.error.message);
+        } else {
+          console.log("[STRIPE PLATFORM AUDIT] account.id:", _auditData.id);
+          console.log("[STRIPE PLATFORM AUDIT] account.country:", _auditData.country);
+          console.log("[STRIPE PLATFORM AUDIT] account.type:", _auditData.type);
+          console.log("[STRIPE PLATFORM AUDIT] account.charges_enabled:", _auditData.charges_enabled);
+          console.log("[STRIPE PLATFORM AUDIT] account.details_submitted:", _auditData.details_submitted);
+          console.log("[STRIPE PLATFORM AUDIT] account.capabilities:", JSON.stringify(_auditData.capabilities));
+        }
+      } catch (_auditErr) {
+        console.log("[STRIPE PLATFORM AUDIT] FETCH EXCEPTION:", _auditErr);
+      }
+    }
+    console.log("[STRIPE PLATFORM AUDIT] ═══════════════════════════════════════");
+  }
+  // ═══════════════════════════════════════════════════════════════════════════
+
   try {
     // Supabase clients
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -261,6 +299,16 @@ serve(async (req: Request) => {
 
     // Create Stripe Express connected account via pure fetch
     // CRITICAL: Use canonical auth email (not editable profile/contact emails)
+    
+    // [STRIPE CONNECT AUDIT] Log request parameters (no secrets)
+    console.log("[STRIPE CONNECT AUDIT] ═══════════════════════════════════════");
+    console.log("[STRIPE CONNECT AUDIT] Creating Express account with:");
+    console.log("[STRIPE CONNECT AUDIT]   country: US");
+    console.log("[STRIPE CONNECT AUDIT]   email:", canonicalEmail || "(undefined)");
+    console.log("[STRIPE CONNECT AUDIT]   businessName:", sellerRow.business_name || "(undefined)");
+    console.log("[STRIPE CONNECT AUDIT]   sellerId:", sellerRow.id);
+    console.log("[STRIPE CONNECT AUDIT]   userId:", jwtUserId);
+    
     const acctRes = await stripeCreateExpressAccount({
       country: "US",
       email: canonicalEmail || undefined,
@@ -269,12 +317,31 @@ serve(async (req: Request) => {
       userId: jwtUserId,
     });
 
+    // [STRIPE CONNECT AUDIT] Log full response
+    console.log("[STRIPE CONNECT AUDIT] Response status:", acctRes.status);
+    console.log("[STRIPE CONNECT AUDIT] Response ok:", acctRes.ok);
+
     if (!acctRes.ok) {
+      // [STRIPE CONNECT AUDIT] Log full error payload
+      const stripeError = acctRes.json?.stripe || acctRes.json?.error || acctRes.json;
+      console.log("[STRIPE CONNECT AUDIT] ─── ERROR DETAILS ───");
+      console.log("[STRIPE CONNECT AUDIT] HTTP status:", acctRes.status);
+      console.log("[STRIPE CONNECT AUDIT] error.type:", stripeError?.type);
+      console.log("[STRIPE CONNECT AUDIT] error.code:", stripeError?.code);
+      console.log("[STRIPE CONNECT AUDIT] error.message:", stripeError?.message || acctRes.json?.error);
+      console.log("[STRIPE CONNECT AUDIT] error.param:", stripeError?.param);
+      console.log("[STRIPE CONNECT AUDIT] error.doc_url:", stripeError?.doc_url);
+      console.log("[STRIPE CONNECT AUDIT] FULL ERROR JSON:", JSON.stringify(acctRes.json, null, 2));
+      console.log("[STRIPE CONNECT AUDIT] ═══════════════════════════════════════");
+      
       return new Response(JSON.stringify(acctRes.json), {
         status: acctRes.status,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+    
+    console.log("[STRIPE CONNECT AUDIT] SUCCESS - account.id:", acctRes.json?.id);
+    console.log("[STRIPE CONNECT AUDIT] ═══════════════════════════════════════");
 
     const accountId = acctRes.json.id as string;
 

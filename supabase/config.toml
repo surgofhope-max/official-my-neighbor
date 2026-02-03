@@ -29,3 +29,16 @@ verify_jwt = false
 # ──────────────────────────────────────────────────────────────────────────────
 [functions.daily-webhook]
 verify_jwt = false
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Stripe Connect Return Redirect
+# ──────────────────────────────────────────────────────────────────────────────
+# Stripe Connect onboarding redirects the user's browser back to this endpoint.
+# Browser redirects do NOT include a Supabase JWT.
+#
+# SECURITY: JWT verification is disabled. The function identifies the seller
+# by the Stripe account ID passed as a query parameter, and uses service role
+# to update the database.
+# ──────────────────────────────────────────────────────────────────────────────
+[functions.stripe-return]
+verify_jwt = false

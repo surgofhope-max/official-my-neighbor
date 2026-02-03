@@ -249,17 +249,19 @@ async function handlePaymentSucceeded(
   }
 
   // Update order status to paid + persist payment_intent_id for refunds
-  const { error: updateError } = await supabase
+  const { data: updatedOrder, error: updateError } = await supabase
     .from("orders")
     .update({
       status: "paid",
       payment_intent_id: paymentIntent.id,
     })
-    .eq("id", orderId);
+    .eq("id", orderId)
+    .select("id")
+    .single();
 
-  if (updateError) {
-    console.error("[WEBHOOK] Failed to update order status:", updateError.message);
-    throw updateError;
+  if (updateError || !updatedOrder) {
+    console.error("[WEBHOOK] Failed to update order status:", updateError?.message || "No row matched");
+    throw new Error(updateError?.message || `Order ${orderId} not found or already updated`);
   }
 
   // QA HARDENING: Safe batch status update
