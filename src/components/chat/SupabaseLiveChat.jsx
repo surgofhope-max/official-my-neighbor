@@ -355,6 +355,7 @@ export default function SupabaseLiveChat({
       } else if (message) {
         // Add to local messages immediately for responsiveness
         setMessages((prev) => [...prev, message]);
+        knownMessageIdsRef.current.add(message.id);
         setNewMessage("");
         resetFadeTimer();
       }
