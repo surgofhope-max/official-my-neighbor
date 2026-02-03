@@ -248,9 +248,7 @@ export default function LiveChatOverlay({ showId, isSeller = false, onClose, inp
             {pinnedMessages.map((msg) => (
               <div 
                 key={msg.id} 
-                className={`flex items-start gap-1.5 px-2 py-1 rounded transition-opacity duration-500 ${
-                  fadeMessages ? 'opacity-30' : 'opacity-90'
-                }`}
+                className={`flex items-start gap-1.5 px-2 py-1 rounded transition-opacity duration-500 opacity-100`}
                 style={{
                   backgroundColor: 'rgba(250, 204, 21, 0.2)',
                 }}
@@ -273,9 +271,7 @@ export default function LiveChatOverlay({ showId, isSeller = false, onClose, inp
         <div className="space-y-2">
           {visibleMessages.length === 0 && (
             <div 
-              className={`text-center py-4 transition-opacity duration-500 ${
-                fadeMessages ? 'opacity-20' : 'opacity-50'
-              }`}
+              className={`text-center py-4 transition-opacity duration-500 opacity-100`}
             >
               <MessageCircle className="w-8 h-8 text-white/40 mx-auto mb-2 drop-shadow-lg" />
               <p className="text-xs text-white/60 drop-shadow-lg">No messages yet</p>
@@ -285,9 +281,7 @@ export default function LiveChatOverlay({ showId, isSeller = false, onClose, inp
           {visibleMessages.map((msg, index) => (
             <div 
               key={msg.id} 
-              className={`flex items-start gap-2 group animate-slide-in transition-opacity duration-500 ${
-                fadeMessages ? 'opacity-30' : 'opacity-100'
-              }`}
+              className={`flex items-start gap-2 group animate-slide-in transition-opacity duration-500 opacity-100`}
               style={{ 
                 animationDelay: `${index * 0.05}s`,
                 animationFillMode: 'backwards'

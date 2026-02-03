@@ -438,7 +438,7 @@ export default function SupabaseLiveChat({
         className={`
           ${isOverlay ? "max-h-48 pb-20" : "flex-1"}
           overflow-y-auto mb-2
-          ${fadeMessages && isOverlay ? "opacity-30" : "opacity-100"}
+          opacity-100
           transition-opacity duration-500
         `}
         onMouseEnter={() => setFadeMessages(false)}
