@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Radio, Users, Calendar, Clock } from "lucide-react";
+import { Radio, Users, Calendar, Clock, Bookmark } from "lucide-react";
 import { format, formatDistanceToNow } from "date-fns";
 import { supabase } from "@/lib/supabase/supabaseClient";
 import BookmarkButton from "./BookmarkButton";
@@ -10,11 +10,27 @@ import { isShowLive } from "@/api/streamSync";
 export default function LiveShowCard({ show, seller, onClick, isUpcoming = false }) {
   const [user, setUser] = useState(null);
   const [isHovered, setIsHovered] = useState(false);
+  const [animateBookmark, setAnimateBookmark] = useState(false);
   const videoRef = useRef(null);
+  const prevBookmarkCountRef = useRef(show.bookmark_count);
 
   useEffect(() => {
     loadUser();
   }, []);
+
+  // Animate bookmark count when it changes
+  useEffect(() => {
+    if (
+      typeof show.bookmark_count === "number" &&
+      show.bookmark_count !== prevBookmarkCountRef.current
+    ) {
+      setAnimateBookmark(true);
+      prevBookmarkCountRef.current = show.bookmark_count;
+
+      const t = setTimeout(() => setAnimateBookmark(false), 300);
+      return () => clearTimeout(t);
+    }
+  }, [show.bookmark_count]);
 
   const loadUser = async () => {
     try {
@@ -223,15 +239,28 @@ export default function LiveShowCard({ show, seller, onClick, isUpcoming = false
 
         {/* Stats */}
         <div className="flex items-center justify-between text-xs text-gray-500">
-          {badgeInfo.type === 'upcoming' ? (
-            <span className="leading-none">
-              {(show.scheduled_start_time || show.started_at)
-                ? format(new Date(show.scheduled_start_time || show.started_at), "MMM d 'at' h:mm a")
-                : "Not scheduled"}
-            </span>
-          ) : (
-            <span className="leading-none">{show.total_sales || 0} sales</span>
-          )}
+          <div className="flex items-center gap-2">
+            {badgeInfo.type === 'upcoming' ? (
+              <span className="leading-none">
+                {(show.scheduled_start_time || show.started_at)
+                  ? format(new Date(show.scheduled_start_time || show.started_at), "MMM d 'at' h:mm a")
+                  : "Not scheduled"}
+              </span>
+            ) : (
+              <span className="leading-none">{show.total_sales || 0} sales</span>
+            )}
+            {show.bookmark_count > 0 && (
+              <span
+                title={`${show.bookmark_count} people bookmarked this show`}
+                className={`flex items-center gap-0.5 text-gray-400 transition-transform duration-300 ${
+                  animateBookmark ? "scale-110 text-purple-400" : "scale-100"
+                }`}
+              >
+                <Bookmark className="w-3 h-3" />
+                {show.bookmark_count}
+              </span>
+            )}
+          </div>
           <span className="text-purple-600 font-medium leading-none">
             {badgeInfo.type === 'upcoming' ? "Set Reminder" : "Watch Now"}
           </span>
