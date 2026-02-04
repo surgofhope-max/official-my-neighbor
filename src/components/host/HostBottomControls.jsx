@@ -114,25 +114,8 @@ export default function HostBottomControls({
             </Button>
           </div>
         ) : (
-          /* MODE B: Message Bar — Use Supabase chat when live, legacy fallback otherwise */
-          <div className="animate-fade-in">
-            {useSupabaseChat ? (
-              <SupabaseLiveChat
-                showId={showId}
-                sellerId={sellerId}
-                isSeller={true}
-                isOverlay={true}
-                user={user}
-              />
-            ) : (
-              <LiveChatOverlay 
-                showId={showId} 
-                isSeller={true}
-                sellerId={sellerId}
-                inputOnly={true}
-              />
-            )}
-          </div>
+          /* MODE B: Message mode — chat is handled by permanent overlay, no duplicate mount */
+          <div className="animate-fade-in" />
         )}
       </div>
     </div>
