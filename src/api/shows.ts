@@ -106,6 +106,9 @@ export interface Show {
 
   // Sales tracking
   sales_count?: number;           // Number of orders for this show
+
+  // Bookmark tracking (computed, not stored in DB)
+  bookmark_count?: number;        // Number of users who bookmarked this show
 }
 
 /**
@@ -272,16 +275,26 @@ export async function getLiveShows(): Promise<Show[]> {
 }
 
 /**
- * Get scheduled (upcoming) shows.
+ * Get scheduled (upcoming) shows with bookmark counts.
  *
- * @returns Array of scheduled shows
+ * @returns Array of scheduled shows with bookmark_count
  *
  * This function:
  * - Never throws
  * - Returns [] on any error
+ * - Includes bookmark_count (defaults to 0)
  */
 export async function getScheduledShows(): Promise<Show[]> {
-  return getShowsByStatus("scheduled");
+  const shows = await getShowsByStatus("scheduled");
+
+  if (!shows.length) {
+    return shows;
+  }
+
+  const ids = shows.map((s) => s.id).filter(Boolean);
+  const bookmarkCountMap = await fetchBookmarkCounts(ids);
+
+  return mergeBookmarkCountsIntoShows(shows, bookmarkCountMap);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -357,15 +370,84 @@ function mergeStatsIntoShows(shows: Show[], statsMap: Map<string, ShowStats>): S
   });
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// BOOKMARK COUNT MERGE LAYER
+// Fetches bookmark counts from bookmarked_shows and merges into Show objects.
+// This is READ-ONLY and provides graceful fallback if query fails.
+// ═══════════════════════════════════════════════════════════════════════════════
+
 /**
- * Get live shows with real-time stats merged.
+ * Internal helper: Fetch bookmark counts for multiple shows.
  *
- * @returns Array of live shows with viewer_count from show_realtime_stats
+ * @param showIds - Array of show IDs to fetch bookmark counts for
+ * @returns Map of show_id -> bookmark_count
+ *
+ * This function:
+ * - Never throws
+ * - Returns empty Map on error (graceful fallback)
+ * - Logs warning once on error
+ */
+async function fetchBookmarkCounts(
+  showIds: string[]
+): Promise<Map<string, number>> {
+  const countMap = new Map<string, number>();
+
+  if (!showIds.length) {
+    return countMap;
+  }
+
+  try {
+    // Query bookmark counts grouped by show_id
+    // Using a raw query pattern since Supabase JS doesn't support GROUP BY directly
+    const { data, error } = await supabase
+      .from("bookmarked_shows")
+      .select("show_id")
+      .in("show_id", showIds);
+
+    if (error) {
+      console.warn("[fetchBookmarkCounts] Query failed (using fallback):", error.message);
+      return countMap;
+    }
+
+    if (data) {
+      // Count occurrences of each show_id
+      for (const row of data) {
+        const currentCount = countMap.get(row.show_id) ?? 0;
+        countMap.set(row.show_id, currentCount + 1);
+      }
+    }
+
+    return countMap;
+  } catch (err) {
+    console.warn("[fetchBookmarkCounts] Unexpected error (using fallback):", err);
+    return countMap;
+  }
+}
+
+/**
+ * Merge bookmark counts into a list of shows.
+ * Adds bookmark_count field to each show (defaults to 0 if not found).
+ */
+function mergeBookmarkCountsIntoShows(
+  shows: Show[],
+  countMap: Map<string, number>
+): Show[] {
+  return shows.map((show) => ({
+    ...show,
+    bookmark_count: countMap.get(show.id) ?? 0,
+  }));
+}
+
+/**
+ * Get live shows with real-time stats and bookmark counts merged.
+ *
+ * @returns Array of live shows with viewer_count from show_realtime_stats and bookmark_count
  *
  * This function:
  * - Never throws
  * - Returns [] on any error
  * - Falls back to shows.viewer_count if stats unavailable
+ * - Includes bookmark_count (defaults to 0)
  */
 export async function getLiveShowsWithStats(): Promise<Show[]> {
   const shows = await getLiveShows();
@@ -375,9 +457,15 @@ export async function getLiveShowsWithStats(): Promise<Show[]> {
   }
 
   const ids = shows.map((s) => s.id).filter(Boolean);
-  const statsMap = await fetchShowStats(ids);
 
-  return mergeStatsIntoShows(shows, statsMap);
+  // Fetch stats and bookmark counts in parallel
+  const [statsMap, bookmarkCountMap] = await Promise.all([
+    fetchShowStats(ids),
+    fetchBookmarkCounts(ids),
+  ]);
+
+  const withStats = mergeStatsIntoShows(shows, statsMap);
+  return mergeBookmarkCountsIntoShows(withStats, bookmarkCountMap);
 }
 
 /**
