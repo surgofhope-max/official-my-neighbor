@@ -43,6 +43,12 @@ export default function BookmarkButton({ show, user, variant = "ghost", size = "
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['is-bookmarked', user?.id, show.id] });
       queryClient.invalidateQueries({ queryKey: ['bookmarked-shows', user?.id] });
+      // NearMe show lists
+      queryClient.invalidateQueries({ queryKey: ['nearme-live-shows'] });
+      queryClient.invalidateQueries({ queryKey: ['nearme-upcoming-shows'] });
+      // Community show lists
+      queryClient.invalidateQueries({ queryKey: ['community-live-shows'] });
+      queryClient.invalidateQueries({ queryKey: ['community-upcoming-shows'] });
     },
     onError: () => {
       // Fail silently — do not redirect, do not modify auth state
@@ -73,6 +79,12 @@ export default function BookmarkButton({ show, user, variant = "ghost", size = "
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['is-bookmarked', user?.id, show.id] });
       queryClient.invalidateQueries({ queryKey: ['bookmarked-shows', user?.id] });
+      // NearMe show lists
+      queryClient.invalidateQueries({ queryKey: ['nearme-live-shows'] });
+      queryClient.invalidateQueries({ queryKey: ['nearme-upcoming-shows'] });
+      // Community show lists
+      queryClient.invalidateQueries({ queryKey: ['community-live-shows'] });
+      queryClient.invalidateQueries({ queryKey: ['community-upcoming-shows'] });
     },
     onError: () => {
       // Fail silently — do not redirect, do not modify auth state
