@@ -591,7 +591,10 @@ async function upsertSellerStripeConnectionFromAccount(
 
 /**
  * Handle account.updated event from Stripe Connect.
- * Syncs charges_enabled && payouts_enabled to sellers.stripe_connected.
+ * 
+ * MODEL A: stripe_connected means "Stripe Connect relationship exists and is active."
+ * It does NOT flip false due to charges/payouts toggling.
+ * Only account.application.deauthorized may set it false.
  */
 async function handleConnectAccountUpdated(
   supabase: ReturnType<typeof createClient>,
@@ -606,17 +609,19 @@ async function handleConnectAccountUpdated(
   const chargesEnabled = acct?.charges_enabled === true;
   const payoutsEnabled = acct?.payouts_enabled === true;
 
-  // Canonical definition: "connected" means Stripe says both money rails are enabled
-  const enabled = chargesEnabled && payoutsEnabled;
+  // MODEL A:
+  // Connected means the Stripe account exists and is not deauthorized.
+  // Charges/payouts are informational only — they do NOT affect stripe_connected.
+  const connected = !!stripeAccountId;
 
-  console.log("[WEBHOOK][CONNECT] account.updated:", {
+  console.log("[WEBHOOK][CONNECT][MODEL_A] account.updated:", {
     stripe_account_id: stripeAccountId,
     charges_enabled: chargesEnabled,
     payouts_enabled: payoutsEnabled,
-    enabled,
+    connected,
   });
 
-  await upsertSellerStripeConnectionFromAccount(supabase, stripeAccountId, enabled);
+  await upsertSellerStripeConnectionFromAccount(supabase, stripeAccountId, true);
 }
 
 /**
