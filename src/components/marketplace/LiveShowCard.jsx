@@ -249,15 +249,23 @@ export default function LiveShowCard({ show, seller, onClick, isUpcoming = false
             ) : (
               <span className="leading-none">{show.total_sales || 0} sales</span>
             )}
-            {show.bookmark_count > 0 && (
+            {(
               <span
-                title={`${show.bookmark_count} people bookmarked this show`}
-                className={`flex items-center gap-0.5 text-gray-400 transition-transform duration-300 ${
+                title={
+                  show.bookmark_count > 0
+                    ? `${show.bookmark_count} people bookmarked this show`
+                    : "Bookmark this show"
+                }
+                className={`flex flex-col items-center text-gray-400 transition-transform duration-300 ${
                   animateBookmark ? "scale-110 text-purple-400" : "scale-100"
                 }`}
               >
                 <Bookmark className="w-3 h-3" />
-                {show.bookmark_count}
+                {typeof show.bookmark_count === "number" && show.bookmark_count > 0 && (
+                  <span className="text-[10px] leading-none">
+                    {show.bookmark_count}
+                  </span>
+                )}
               </span>
             )}
           </div>
