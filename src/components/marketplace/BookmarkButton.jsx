@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React from "react";
 import { supabase } from "@/lib/supabase/supabaseClient";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -6,11 +6,6 @@ import { Bookmark, BookmarkCheck } from "lucide-react";
 
 export default function BookmarkButton({ show, user, variant = "ghost", size = "icon", className = "" }) {
   const queryClient = useQueryClient();
-
-  // Local optimistic count — works even if parent page never refetches
-  const [localCount, setLocalCount] = useState(
-    typeof show?.bookmark_count === "number" ? show.bookmark_count : 0
-  );
 
   // Check if user has bookmarked this show
   const { data: bookmarkData } = useQuery({
@@ -46,7 +41,6 @@ export default function BookmarkButton({ show, user, variant = "ghost", size = "
       return data;
     },
     onSuccess: () => {
-      setLocalCount((c) => c + 1);
       queryClient.invalidateQueries({ queryKey: ['is-bookmarked', user?.id, show.id] });
       queryClient.invalidateQueries({ queryKey: ['bookmarked-shows', user?.id] });
       // NearMe show lists
@@ -83,7 +77,6 @@ export default function BookmarkButton({ show, user, variant = "ghost", size = "
       if (error) throw error;
     },
     onSuccess: () => {
-      setLocalCount((c) => Math.max(0, c - 1));
       queryClient.invalidateQueries({ queryKey: ['is-bookmarked', user?.id, show.id] });
       queryClient.invalidateQueries({ queryKey: ['bookmarked-shows', user?.id] });
       // NearMe show lists
@@ -123,17 +116,12 @@ export default function BookmarkButton({ show, user, variant = "ghost", size = "
       size={size}
       onClick={handleClick}
       disabled={isPending}
-      className={`${className} ${isBookmarked ? "text-yellow-500" : "text-white"} flex flex-col items-center justify-center gap-0 h-auto min-h-[2.5rem] py-1`}
+      className={`${className} ${isBookmarked ? "text-yellow-500" : "text-white"}`}
     >
       {isBookmarked ? (
         <BookmarkCheck className="w-4 h-4" />
       ) : (
         <Bookmark className="w-4 h-4" />
-      )}
-      {localCount > 0 && (
-        <span className="text-[10px] leading-none font-medium">
-          {localCount}
-        </span>
       )}
     </Button>
   );
