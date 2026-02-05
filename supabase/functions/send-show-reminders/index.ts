@@ -81,11 +81,11 @@ Deno.serve(async (req) => {
   console.log("[REMINDER] ✅ Clients initialized");
 
   // ═══════════════════════════════════════════════════════════════════════
-  // STEP 3: Calculate reminder window (4-6 minutes from now)
+  // STEP 3: Calculate reminder window (4-8 minutes from now)
   // ═══════════════════════════════════════════════════════════════════════
   const now = new Date();
   const windowStart = new Date(now.getTime() + 4 * 60 * 1000); // +4 minutes
-  const windowEnd = new Date(now.getTime() + 6 * 60 * 1000);   // +6 minutes
+  const windowEnd = new Date(now.getTime() + 8 * 60 * 1000);   // +8 minutes
 
   console.log(`[REMINDER] Now: ${now.toISOString()}`);
   console.log(`[REMINDER] Window: ${windowStart.toISOString()} to ${windowEnd.toISOString()}`);
