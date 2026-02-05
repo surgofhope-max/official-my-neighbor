@@ -2,18 +2,18 @@
  * LIVE SHOW REMINDER EMAIL SENDER
  * 
  * PURPOSE: Send reminder emails to users who bookmarked shows
- * starting in 4-6 minutes.
+ * starting in 3-15 minutes.
  * 
  * THIS FUNCTION:
- * - ✅ Queries scheduled shows in 4-6 minute window
+ * - ✅ Queries scheduled shows in 3-15 minute window
  * - ✅ Joins bookmarked_shows to find interested users
  * - ✅ Excludes users who already received reminders
  * - ✅ Sends ONE email per eligible user/show pair
  * - ✅ Records sent reminders in sent_show_reminders
+ * - ✅ Handles auth.users pagination to fetch all bookmarked users
  * 
  * THIS FUNCTION DOES NOT:
  * - ❌ Retry failed emails
- * - ❌ Use cron (manual invocation only)
  * - ❌ Send SMS
  * - ❌ Touch orders, notifications, Stripe, etc.
  */
@@ -81,11 +81,11 @@ Deno.serve(async (req) => {
   console.log("[REMINDER] ✅ Clients initialized");
 
   // ═══════════════════════════════════════════════════════════════════════
-  // STEP 3: Calculate reminder window (4-8 minutes from now)
+  // STEP 3: Calculate reminder window (3-15 minutes from now)
   // ═══════════════════════════════════════════════════════════════════════
   const now = new Date();
-  const windowStart = new Date(now.getTime() + 4 * 60 * 1000); // +4 minutes
-  const windowEnd = new Date(now.getTime() + 8 * 60 * 1000);   // +8 minutes
+  const windowStart = new Date(now.getTime() + 3 * 60 * 1000);  // +3 minutes
+  const windowEnd = new Date(now.getTime() + 15 * 60 * 1000);   // +15 minutes
 
   console.log(`[REMINDER] Now: ${now.toISOString()}`);
   console.log(`[REMINDER] Window: ${windowStart.toISOString()} to ${windowEnd.toISOString()}`);
@@ -184,32 +184,61 @@ Deno.serve(async (req) => {
   console.log(`[REMINDER] Already sent: ${sentSet.size} reminders`);
 
   // ═══════════════════════════════════════════════════════════════════════
-  // STEP 7: Get user emails from auth.users
+  // STEP 7: Get user emails from auth.users (with pagination)
   // ═══════════════════════════════════════════════════════════════════════
   console.log("[REMINDER] Fetching user emails...");
 
   const userIds = [...new Set(bookmarks.map((b) => b.user_id))];
-  const { data: usersData, error: usersError } = await supabase.auth.admin.listUsers();
-
-  if (usersError) {
-    console.log(`[REMINDER] ❌ Users query error: ${usersError.message}`);
-    return new Response(JSON.stringify({ error: usersError.message }), {
-      status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  }
+  console.log(`[REMINDER] Need emails for ${userIds.length} unique users`);
 
   const userEmailMap = new Map<string, string>();
-  for (const user of usersData.users) {
-    if (user.email && userIds.includes(user.id)) {
-      userEmailMap.set(user.id, user.email);
+  const perPage = 1000;
+  let page = 1;
+  let hasMore = true;
+
+  while (hasMore) {
+    const { data: usersData, error: usersError } = await supabase.auth.admin.listUsers({
+      page,
+      perPage,
+    });
+
+    if (usersError) {
+      console.log(`[REMINDER] ❌ Users query error (page ${page}): ${usersError.message}`);
+      return new Response(JSON.stringify({ error: usersError.message }), {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const users = usersData?.users || [];
+    for (const user of users) {
+      if (user.email && userIds.includes(user.id)) {
+        userEmailMap.set(user.id, user.email);
+      }
+    }
+
+    // Stop if: fewer users than perPage (last page) OR we have all needed emails
+    if (users.length < perPage || userEmailMap.size === userIds.length) {
+      hasMore = false;
+    } else {
+      page++;
     }
   }
-  console.log(`[REMINDER] Found emails for ${userEmailMap.size} users`);
+
+  console.log(`[REMINDER] Found emails for ${userEmailMap.size} users (fetched ${page} page(s))`);
+
+  // Log if some users are missing emails
+  const missingEmailCount = userIds.length - userEmailMap.size;
+  if (missingEmailCount > 0) {
+    console.log(`[REMINDER] ⚠️ Missing emails for ${missingEmailCount} bookmarked users (no email on file or user not found)`);
+  }
 
   // ═══════════════════════════════════════════════════════════════════════
   // STEP 8: Build list of reminder candidates
   // ═══════════════════════════════════════════════════════════════════════
+  // Debug: Log counts to explain why bookmarks may reduce to fewer candidates
+  console.log(`[REMINDER] Candidate filter inputs: bookmarks=${bookmarks.length}, uniqueUsers=${userIds.length}, alreadySent=${sentSet.size}, emailsFound=${userEmailMap.size}`);
+
   const showMap = new Map(eligibleShows.map((s) => [s.id, s]));
   const candidates: ReminderCandidate[] = [];
 
