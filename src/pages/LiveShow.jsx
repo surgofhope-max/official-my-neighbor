@@ -52,6 +52,7 @@ import SellerProfileModal from "../components/liveshow/SellerProfileModal";
 import GIVIWinnerBanner from "../components/givi/GIVIWinnerBanner";
 import FollowButton from "../components/marketplace/FollowButton";
 import { FEATURES } from "@/config/features";
+import { useDeviceClass } from "@/hooks/useDeviceClass";
 
 export default function LiveShow() {
   const navigate = useNavigate();
@@ -112,49 +113,12 @@ export default function LiveShow() {
   const [ivsError, setIvsError] = useState(null);
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // REACTIVE VIEWPORT DETECTION
+  // DEVICE-LOCKED CLASSIFICATION (NO VIEWPORT FLIPS)
   // Prevents dual WebRTCViewer AND dual SupabaseLiveChat mount.
-  // Updates on: mediaQuery change, resize, orientationchange.
+  // Classification is determined ONCE by device type, NOT viewport width.
+  // This ensures SDKs don't remount on orientation change.
   // ═══════════════════════════════════════════════════════════════════════════
-  const [isDesktop, setIsDesktop] = useState(() => 
-    typeof window !== 'undefined' && window.matchMedia('(min-width: 640px)').matches
-  );
-
-  useEffect(() => {
-    const mediaQuery = window.matchMedia("(min-width: 640px)");
-    
-    const handleChange = (e) => {
-      setIsDesktop(e.matches);
-    };
-
-    // Named handler for orientation change (must match add/remove for proper cleanup)
-    const handleOrientationChange = () => {
-      // Small delay to let viewport settle after rotation
-      setTimeout(() => {
-        setIsDesktop(window.matchMedia("(min-width: 640px)").matches);
-      }, 100);
-    };
-
-    // Modern browsers
-    if (mediaQuery.addEventListener) {
-      mediaQuery.addEventListener("change", handleChange);
-    } else {
-      // Fallback for older browsers
-      mediaQuery.addListener(handleChange);
-    }
-
-    // Also listen for orientation change (mobile rotation)
-    window.addEventListener("orientationchange", handleOrientationChange);
-
-    return () => {
-      if (mediaQuery.removeEventListener) {
-        mediaQuery.removeEventListener("change", handleChange);
-      } else {
-        mediaQuery.removeListener(handleChange);
-      }
-      window.removeEventListener("orientationchange", handleOrientationChange);
-    };
-  }, []);
+  const { isMobileDevice, isDesktopDevice } = useDeviceClass();
 
   // Determine which player to use based on streaming_provider field:
   // - "ivs" with ivs_playback_url → IVSPlayer (OBS/external encoder)
@@ -191,19 +155,6 @@ export default function LiveShow() {
       document.documentElement.style.overscrollBehavior = '';
     };
   }, [showId]);
-
-  // Viewport listener for single WebRTCViewer mount
-  useEffect(() => {
-    const mediaQuery = window.matchMedia('(min-width: 640px)');
-    const handleChange = (e) => setIsDesktop(e.matches);
-    
-    // Set initial value
-    setIsDesktop(mediaQuery.matches);
-    
-    // Listen for changes
-    mediaQuery.addEventListener('change', handleChange);
-    return () => mediaQuery.removeEventListener('change', handleChange);
-  }, []);
 
   // Load buyer profile when canonical user becomes available
   useEffect(() => {
@@ -936,7 +887,7 @@ export default function LiveShow() {
               autoplay={true}
               muted={false}
             />
-          ) : !isDesktop ? (
+          ) : isMobileDevice ? (
             <WebRTCViewer
               show={show}
               onViewerCountChange={handleViewerCountChange}
@@ -1012,10 +963,11 @@ export default function LiveShow() {
         </div>
 
         {/* Chat Messages Overlay */}
-        {/* CONDITIONAL MOUNT: Only mount mobile chat when !isDesktop.
+        {/* CONDITIONAL MOUNT: Only mount mobile chat on mobile devices.
+            Device classification is locked for the session (no rotation flips).
             This prevents double polling and freeze under load by ensuring
             only one chat instance mounts at any time. */}
-        {!isDesktop && (
+        {isMobileDevice && (
           <>
             {(() => { console.log("[AUTH DEBUG][LiveShow] rendering mobile chat with user:", user); return null; })()}
             {(() => {
@@ -1422,7 +1374,7 @@ export default function LiveShow() {
               autoplay={true}
               muted={false}
             />
-          ) : isDesktop ? (
+          ) : isDesktopDevice ? (
             <WebRTCViewer
               show={show}
               onViewerCountChange={handleViewerCountChange}
@@ -1508,11 +1460,12 @@ export default function LiveShow() {
           </div>
 
           {/* Chat Component - Full Height */}
-          {/* CONDITIONAL MOUNT: Only mount desktop chat when isDesktop.
+          {/* CONDITIONAL MOUNT: Only mount desktop chat on desktop devices.
+              Device classification is locked for the session (no rotation flips).
               This prevents double polling and freeze under load by ensuring
               only one chat instance mounts at any time. */}
           <div className="flex-1 flex flex-col min-h-0">
-            {isDesktop && (
+            {isDesktopDevice && (
               <>
                 {(() => { console.log("[AUTH DEBUG][LiveShow] rendering desktop chat with user:", user); return null; })()}
                 {(() => {
