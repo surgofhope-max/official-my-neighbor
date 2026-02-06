@@ -93,10 +93,47 @@ export default function HostConsole() {
   const [showFulfillmentDialog, setShowFulfillmentDialog] = useState(false);
   const [showPurchaseBanner, setShowPurchaseBanner] = useState(false);
   
-  // Viewport detection to prevent dual DailyBroadcaster mount
+  // ═══════════════════════════════════════════════════════════════════════════
+  // REACTIVE VIEWPORT DETECTION
+  // Prevents dual DailyBroadcaster AND dual SupabaseLiveChat mount.
+  // Updates on: mediaQuery change, resize, orientationchange.
+  // ═══════════════════════════════════════════════════════════════════════════
   const [isDesktop, setIsDesktop] = useState(() =>
     window.matchMedia("(min-width: 640px)").matches
   );
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(min-width: 640px)");
+    
+    const handleChange = (e) => {
+      setIsDesktop(e.matches);
+    };
+
+    // Modern browsers
+    if (mediaQuery.addEventListener) {
+      mediaQuery.addEventListener("change", handleChange);
+    } else {
+      // Fallback for older browsers
+      mediaQuery.addListener(handleChange);
+    }
+
+    // Also listen for orientation change (mobile rotation)
+    window.addEventListener("orientationchange", () => {
+      // Small delay to let viewport settle after rotation
+      setTimeout(() => {
+        setIsDesktop(window.matchMedia("(min-width: 640px)").matches);
+      }, 100);
+    });
+
+    return () => {
+      if (mediaQuery.removeEventListener) {
+        mediaQuery.removeEventListener("change", handleChange);
+      } else {
+        mediaQuery.removeListener(handleChange);
+      }
+      window.removeEventListener("orientationchange", handleChange);
+    };
+  }, []);
   
   // ═══════════════════════════════════════════════════════════════════════════
   // MVP PHASE-1: Seller viewer count sourced from Daily SDK (UI-only)
@@ -1363,27 +1400,32 @@ export default function HostConsole() {
           )}
           
           {/* Chat Overlay - Left Side, Transparent */}
-          <div style={{ zIndex: 100 }}>
-            {console.log("[HOSTCONSOLE AUTH DEBUG][MOBILE]", {
-              currentUserId: currentUser?.id ?? null,
-              currentUserRole: currentUser?.role ?? null
-            })}
-            {useSupabaseChat ? (
-              <SupabaseLiveChat
-                showId={showId}
-                sellerId={currentSeller?.id}
-                isSeller={true}
-                isOverlay={true}
-                user={currentUser}
-              />
-            ) : (
-              <LiveChatOverlay 
-                showId={showId} 
-                isSeller={true}
-                sellerId={currentSeller?.id}
-              />
-            )}
-          </div>
+          {/* CONDITIONAL MOUNT: Only mount mobile chat when !isDesktop.
+              This prevents double polling and freeze under load by ensuring
+              only one chat instance mounts at any time. */}
+          {!isDesktop && (
+            <div style={{ zIndex: 100 }}>
+              {console.log("[HOSTCONSOLE AUTH DEBUG][MOBILE]", {
+                currentUserId: currentUser?.id ?? null,
+                currentUserRole: currentUser?.role ?? null
+              })}
+              {useSupabaseChat ? (
+                <SupabaseLiveChat
+                  showId={showId}
+                  sellerId={currentSeller?.id}
+                  isSeller={true}
+                  isOverlay={true}
+                  user={currentUser}
+                />
+              ) : (
+                <LiveChatOverlay 
+                  showId={showId} 
+                  isSeller={true}
+                  sellerId={currentSeller?.id}
+                />
+              )}
+            </div>
+          )}
           
           {/* Seller Product Detail Card (Overlay) */}
           {selectedProduct && (
@@ -1849,26 +1891,33 @@ export default function HostConsole() {
             </div>
 
             {/* Chat Component */}
+            {/* CONDITIONAL MOUNT: Only mount desktop chat when isDesktop.
+                This prevents double polling and freeze under load by ensuring
+                only one chat instance mounts at any time. */}
             <div className="flex-1 flex flex-col min-h-0 pb-6">
-              {console.log("[HOSTCONSOLE AUTH DEBUG][DESKTOP]", {
-                currentUserId: currentUser?.id ?? null,
-                currentUserRole: currentUser?.role ?? null
-              })}
-              {useSupabaseChat ? (
-                <SupabaseLiveChat
-                  showId={showId}
-                  sellerId={currentSeller?.id}
-                  isSeller={true}
-                  isOverlay={false}
-                  user={currentUser}
-                />
-              ) : (
-                <LiveChat
-                  showId={showId}
-                  sellerId={currentSeller?.id}
-                  isSeller={true}
-                  isEmbedded={true}
-                />
+              {isDesktop && (
+                <>
+                  {console.log("[HOSTCONSOLE AUTH DEBUG][DESKTOP]", {
+                    currentUserId: currentUser?.id ?? null,
+                    currentUserRole: currentUser?.role ?? null
+                  })}
+                  {useSupabaseChat ? (
+                    <SupabaseLiveChat
+                      showId={showId}
+                      sellerId={currentSeller?.id}
+                      isSeller={true}
+                      isOverlay={false}
+                      user={currentUser}
+                    />
+                  ) : (
+                    <LiveChat
+                      showId={showId}
+                      sellerId={currentSeller?.id}
+                      isSeller={true}
+                      isEmbedded={true}
+                    />
+                  )}
+                </>
               )}
             </div>
           </div>

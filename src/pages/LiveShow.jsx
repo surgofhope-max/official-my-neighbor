@@ -111,10 +111,47 @@ export default function LiveShow() {
   const [ivsPlayerState, setIvsPlayerState] = useState(null);
   const [ivsError, setIvsError] = useState(null);
 
-  // Viewport detection to prevent dual WebRTCViewer mount
+  // ═══════════════════════════════════════════════════════════════════════════
+  // REACTIVE VIEWPORT DETECTION
+  // Prevents dual WebRTCViewer AND dual SupabaseLiveChat mount.
+  // Updates on: mediaQuery change, resize, orientationchange.
+  // ═══════════════════════════════════════════════════════════════════════════
   const [isDesktop, setIsDesktop] = useState(() => 
     typeof window !== 'undefined' && window.matchMedia('(min-width: 640px)').matches
   );
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(min-width: 640px)");
+    
+    const handleChange = (e) => {
+      setIsDesktop(e.matches);
+    };
+
+    // Modern browsers
+    if (mediaQuery.addEventListener) {
+      mediaQuery.addEventListener("change", handleChange);
+    } else {
+      // Fallback for older browsers
+      mediaQuery.addListener(handleChange);
+    }
+
+    // Also listen for orientation change (mobile rotation)
+    window.addEventListener("orientationchange", () => {
+      // Small delay to let viewport settle after rotation
+      setTimeout(() => {
+        setIsDesktop(window.matchMedia("(min-width: 640px)").matches);
+      }, 100);
+    });
+
+    return () => {
+      if (mediaQuery.removeEventListener) {
+        mediaQuery.removeEventListener("change", handleChange);
+      } else {
+        mediaQuery.removeListener(handleChange);
+      }
+      window.removeEventListener("orientationchange", handleChange);
+    };
+  }, []);
 
   // Determine which player to use based on streaming_provider field:
   // - "ivs" with ivs_playback_url → IVSPlayer (OBS/external encoder)
@@ -972,39 +1009,46 @@ export default function LiveShow() {
         </div>
 
         {/* Chat Messages Overlay */}
-        {(() => { console.log("[AUTH DEBUG][LiveShow] rendering mobile chat with user:", user); return null; })()}
-        {(() => {
-          console.log("[CHAT PROPS DEBUG][LiveShow][MOBILE]", {
-            showId,
-            sellerId: show?.seller_id,
-            isShowOwner,
-            userId: user?.id ?? null,
-            userRole: user?.role ?? null,
-          });
-          return null;
-        })()}
-        {showChatOverlay && (
-          useSupabaseChat ? (
-            <SupabaseLiveChat
-              showId={showId}
-              sellerId={show?.seller_id}
-              isSeller={isShowOwner}
-              user={user}
-              isOverlay={true}
-              onClose={() => setShowChatOverlay(false)}
-              onMessageSeller={() => {
-                // Navigate to messages page with seller context
-                navigate(createPageUrl("Messages") + `?sellerId=${show?.seller_id}`);
-              }}
-            />
-          ) : (
-            <LiveChatOverlay
-              showId={showId}
-              sellerId={show?.seller_id}
-              isSeller={false}
-              onClose={() => setShowChatOverlay(false)}
-            />
-          )
+        {/* CONDITIONAL MOUNT: Only mount mobile chat when !isDesktop.
+            This prevents double polling and freeze under load by ensuring
+            only one chat instance mounts at any time. */}
+        {!isDesktop && (
+          <>
+            {(() => { console.log("[AUTH DEBUG][LiveShow] rendering mobile chat with user:", user); return null; })()}
+            {(() => {
+              console.log("[CHAT PROPS DEBUG][LiveShow][MOBILE]", {
+                showId,
+                sellerId: show?.seller_id,
+                isShowOwner,
+                userId: user?.id ?? null,
+                userRole: user?.role ?? null,
+              });
+              return null;
+            })()}
+            {showChatOverlay && (
+              useSupabaseChat ? (
+                <SupabaseLiveChat
+                  showId={showId}
+                  sellerId={show?.seller_id}
+                  isSeller={isShowOwner}
+                  user={user}
+                  isOverlay={true}
+                  onClose={() => setShowChatOverlay(false)}
+                  onMessageSeller={() => {
+                    // Navigate to messages page with seller context
+                    navigate(createPageUrl("Messages") + `?sellerId=${show?.seller_id}`);
+                  }}
+                />
+              ) : (
+                <LiveChatOverlay
+                  showId={showId}
+                  sellerId={show?.seller_id}
+                  isSeller={false}
+                  onClose={() => setShowChatOverlay(false)}
+                />
+              )
+            )}
+          </>
         )}
 
         {/* Product Carousel - Show during "starting" and "live", hide when "ended" */}
@@ -1461,36 +1505,43 @@ export default function LiveShow() {
           </div>
 
           {/* Chat Component - Full Height */}
+          {/* CONDITIONAL MOUNT: Only mount desktop chat when isDesktop.
+              This prevents double polling and freeze under load by ensuring
+              only one chat instance mounts at any time. */}
           <div className="flex-1 flex flex-col min-h-0">
-            {(() => { console.log("[AUTH DEBUG][LiveShow] rendering desktop chat with user:", user); return null; })()}
-            {(() => {
-              console.log("[CHAT PROPS DEBUG][LiveShow][DESKTOP]", {
-                showId,
-                sellerId: show?.seller_id,
-                isShowOwner,
-                userId: user?.id ?? null,
-                userRole: user?.role ?? null,
-              });
-              return null;
-            })()}
-            {useSupabaseChat ? (
-              <SupabaseLiveChat
-                showId={showId}
-                sellerId={show?.seller_id}
-                isSeller={isShowOwner}
-                user={user}
-                isOverlay={false}
-                onMessageSeller={() => {
-                  navigate(createPageUrl("Messages") + `?sellerId=${show?.seller_id}`);
-                }}
-              />
-            ) : (
-              <LiveChat
-                showId={showId}
-                sellerId={show?.seller_id}
-                isSeller={false}
-                isEmbedded={true}
-              />
+            {isDesktop && (
+              <>
+                {(() => { console.log("[AUTH DEBUG][LiveShow] rendering desktop chat with user:", user); return null; })()}
+                {(() => {
+                  console.log("[CHAT PROPS DEBUG][LiveShow][DESKTOP]", {
+                    showId,
+                    sellerId: show?.seller_id,
+                    isShowOwner,
+                    userId: user?.id ?? null,
+                    userRole: user?.role ?? null,
+                  });
+                  return null;
+                })()}
+                {useSupabaseChat ? (
+                  <SupabaseLiveChat
+                    showId={showId}
+                    sellerId={show?.seller_id}
+                    isSeller={isShowOwner}
+                    user={user}
+                    isOverlay={false}
+                    onMessageSeller={() => {
+                      navigate(createPageUrl("Messages") + `?sellerId=${show?.seller_id}`);
+                    }}
+                  />
+                ) : (
+                  <LiveChat
+                    showId={showId}
+                    sellerId={show?.seller_id}
+                    isSeller={false}
+                    isEmbedded={true}
+                  />
+                )}
+              </>
             )}
           </div>
         </div>
