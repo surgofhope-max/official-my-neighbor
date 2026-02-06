@@ -1947,7 +1947,6 @@ export default function HostConsole() {
             </Tabs>
           </DialogContent>
         </Dialog>
-      </div>
     </div>
   );
 }
