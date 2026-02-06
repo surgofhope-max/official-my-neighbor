@@ -127,6 +127,14 @@ export default function LiveShow() {
       setIsDesktop(e.matches);
     };
 
+    // Named handler for orientation change (must match add/remove for proper cleanup)
+    const handleOrientationChange = () => {
+      // Small delay to let viewport settle after rotation
+      setTimeout(() => {
+        setIsDesktop(window.matchMedia("(min-width: 640px)").matches);
+      }, 100);
+    };
+
     // Modern browsers
     if (mediaQuery.addEventListener) {
       mediaQuery.addEventListener("change", handleChange);
@@ -136,12 +144,7 @@ export default function LiveShow() {
     }
 
     // Also listen for orientation change (mobile rotation)
-    window.addEventListener("orientationchange", () => {
-      // Small delay to let viewport settle after rotation
-      setTimeout(() => {
-        setIsDesktop(window.matchMedia("(min-width: 640px)").matches);
-      }, 100);
-    });
+    window.addEventListener("orientationchange", handleOrientationChange);
 
     return () => {
       if (mediaQuery.removeEventListener) {
@@ -149,7 +152,7 @@ export default function LiveShow() {
       } else {
         mediaQuery.removeListener(handleChange);
       }
-      window.removeEventListener("orientationchange", handleChange);
+      window.removeEventListener("orientationchange", handleOrientationChange);
     };
   }, []);
 

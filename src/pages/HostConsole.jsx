@@ -109,6 +109,14 @@ export default function HostConsole() {
       setIsDesktop(e.matches);
     };
 
+    // Named handler for orientation change (must match add/remove for proper cleanup)
+    const handleOrientationChange = () => {
+      // Small delay to let viewport settle after rotation
+      setTimeout(() => {
+        setIsDesktop(window.matchMedia("(min-width: 640px)").matches);
+      }, 100);
+    };
+
     // Modern browsers
     if (mediaQuery.addEventListener) {
       mediaQuery.addEventListener("change", handleChange);
@@ -118,12 +126,7 @@ export default function HostConsole() {
     }
 
     // Also listen for orientation change (mobile rotation)
-    window.addEventListener("orientationchange", () => {
-      // Small delay to let viewport settle after rotation
-      setTimeout(() => {
-        setIsDesktop(window.matchMedia("(min-width: 640px)").matches);
-      }, 100);
-    });
+    window.addEventListener("orientationchange", handleOrientationChange);
 
     return () => {
       if (mediaQuery.removeEventListener) {
@@ -131,7 +134,7 @@ export default function HostConsole() {
       } else {
         mediaQuery.removeListener(handleChange);
       }
-      window.removeEventListener("orientationchange", handleChange);
+      window.removeEventListener("orientationchange", handleOrientationChange);
     };
   }, []);
   
@@ -1352,7 +1355,10 @@ export default function HostConsole() {
         )}
 
         {/* MOBILE: Fullscreen Video with Overlay Chat */}
-        <div className="sm:hidden fixed inset-0 bg-black" style={{ zIndex: 1 }}>
+        {/* CONDITIONAL CONTAINER: Only mount mobile layout when !isDesktop.
+            This prevents ghost underlay and ensures exactly one layout tree exists. */}
+        {!isDesktop && (
+        <div className="fixed inset-0 bg-black" style={{ zIndex: 1 }}>
           {/* Back Arrow - Top Left */}
           <Button
             variant="ghost"
@@ -1539,9 +1545,13 @@ export default function HostConsole() {
                 )}
           </div>
         </div>
-        
+        )}
+
         {/* DESKTOP: 3-Column Whatnot-Style Layout */}
-        <div className="hidden sm:grid sm:grid-cols-[25%_50%_25%] h-screen bg-black fixed inset-0" style={{ top: 0, paddingTop: 0 }}>
+        {/* CONDITIONAL CONTAINER: Only mount desktop layout when isDesktop.
+            This prevents ghost underlay and ensures exactly one layout tree exists. */}
+        {isDesktop && (
+        <div className="grid grid-cols-[25%_50%_25%] h-screen bg-black fixed inset-0" style={{ top: 0, paddingTop: 0 }}>
           {/* LEFT COLUMN - Host Tools & Products */}
           <div className="bg-gray-900 overflow-y-auto p-4 space-y-4">
             {/* Host Control Buttons - GATED: Broadcast disabled if show ended/cancelled */}
@@ -1922,6 +1932,7 @@ export default function HostConsole() {
             </div>
           </div>
         </div>
+        )}
 
 
         {/* Recent Orders Dialog - DESKTOP ONLY */}
