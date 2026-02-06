@@ -55,6 +55,15 @@ export async function getShowProductsByShowId(
     return [];
   }
 
+  // Fire-and-forget: expire stale pending orders for this show
+  try {
+    await supabase.rpc("expire_pending_orders_for_show", {
+      p_show_id: showId,
+    });
+  } catch {
+    // non-blocking: expiration failure should not break product loading
+  }
+
   try {
     const { data, error } = await supabase
       .from("show_products")
