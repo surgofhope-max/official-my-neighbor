@@ -1120,7 +1120,7 @@ export default function HostConsole() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-blue-900 px-3 py-4 sm:p-6" style={{ 
+    <div style={{ 
       overscrollBehavior: 'none',
       touchAction: 'pan-y'
     }}>
@@ -1140,148 +1140,7 @@ export default function HostConsole() {
         </div>
       )}
 
-      <div className="max-w-7xl mx-auto space-y-4 sm:space-y-6">
-        {/* Header with Seller Verification */}
-        <Card className="bg-white/10 backdrop-blur-md border-white/20">
-          <CardContent className="p-3 sm:p-6">
-            {/* Back Button + Title - Mobile: with right buttons, Desktop: full width */}
-            <div className="flex items-center gap-2 mb-3 sm:mb-4">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => navigate(createPageUrl("SellerShows"))}
-                className="text-white hover:bg-white/20 p-1 h-auto flex-shrink-0"
-              >
-                <ArrowLeft className="w-4 h-4 sm:w-5 sm:h-5" />
-              </Button>
-              <div className="min-w-0 flex-1">
-                <h1 className="text-base sm:text-2xl font-bold text-white truncate">{show.title}</h1>
-                <p className="text-[10px] sm:text-sm text-white/70">Host Console</p>
-              </div>
-
-              {/* MOBILE ONLY: Compact Revenue + GIVI + Feature Product buttons on right */}
-              <div className="flex flex-col gap-1.5 sm:hidden">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="bg-purple-500/20 border-purple-400/30 text-white hover:bg-purple-500/30 px-3 py-3 h-auto min-w-[70px]"
-                >
-                  <div className="text-center">
-                    <p className="text-[10px] text-white/70 leading-tight font-bold">Revenue</p>
-                    <p className="text-sm font-bold leading-tight">${stats.revenue.toFixed(2)}</p>
-                  </div>
-                </Button>
-
-                {FEATURES.givi && (
-                  <Button
-                    onClick={() => {
-                      setShowGiviDrawer(true);
-                      setGiviDrawerMode(activeGIVI ? "console" : "form");
-                    }}
-                    className="bg-gradient-to-r from-purple-600 to-blue-600 px-3 py-3 h-auto text-sm min-w-[70px] backdrop-blur-md font-bold"
-                  >
-                    <span>GIVI</span>
-                  </Button>
-                )}
-                
-                <Button
-                  onClick={() => setShowFeatureProductDrawer(true)}
-                  className="bg-gradient-to-r from-blue-600 to-cyan-600 px-3 py-3 h-auto text-sm min-w-[70px] font-bold"
-                >
-                  <span>Products</span>
-                </Button>
-                
-                {/* Mobile Broadcast Status - One-way live indicator */}
-                {isAlreadyLive ? (
-                  <div className="bg-red-600 px-3 py-3 h-auto text-sm min-w-[70px] font-bold rounded-md flex items-center justify-center">
-                    <Radio className="w-3 h-3 mr-1 animate-pulse" />
-                    <span>LIVE</span>
-                  </div>
-                ) : (
-                  <Button
-                    onClick={startDailyBroadcast}
-                    disabled={isBroadcastBlocked || dailyLoading}
-                    className="bg-gradient-to-r from-green-600 to-emerald-600 px-3 py-3 h-auto text-sm min-w-[70px] font-bold"
-                  >
-                    <span>{dailyLoading ? "Starting…" : "Go Live"}</span>
-                  </Button>
-                )}
-              </div>
-            </div>
-            
-            {/* Seller & Show Verification - with NULL checks - HIDDEN ON MOBILE */}
-            <Alert className="hidden sm:block bg-green-500/20 border-green-500">
-              <div className="flex items-start gap-2 sm:gap-3">
-                <div className="text-green-300 text-xs sm:text-sm">
-                  <strong>✅ Verified Host Console</strong>
-                </div>
-              </div>
-              <AlertDescription className="text-green-100 mt-2">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1 sm:gap-2 text-[10px] sm:text-xs font-mono">
-                  <div className="truncate">
-                    <strong>Your Seller:</strong> {currentSeller?.business_name || "Loading..."}
-                  </div>
-                  <div className="truncate">
-                    <strong>Seller ID:</strong> {currentSeller?.id || "Loading..."}
-                  </div>
-                  <div className="truncate">
-                    <strong>Show Title:</strong> {show?.title || "Loading..."}
-                  </div>
-                  <div className="truncate">
-                    <strong>Show ID:</strong> {show?.id || "Loading..."}
-                  </div>
-                </div>
-              </AlertDescription>
-            </Alert>
-          </CardContent>
-        </Card>
-
-        {/* Stats Row - DESKTOP ONLY (hidden on mobile) */}
-        <div className="hidden sm:grid grid-cols-3 gap-4">
-          <Card className="bg-white/10 backdrop-blur-md border-white/20">
-            <CardContent className="p-6">
-              <div className="flex items-center gap-3">
-                <div className="w-12 h-12 bg-blue-500/20 rounded-lg flex items-center justify-center">
-                  <Users className="w-6 h-6 text-blue-400" />
-                </div>
-                <div className="text-left">
-                  <p className="text-white/70 text-sm">Viewers</p>
-                  <p className="text-2xl font-bold text-white">{stats.viewers}</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-          <Card className="bg-white/10 backdrop-blur-md border-white/20">
-            <CardContent className="p-6">
-              <div className="flex items-center gap-3">
-                <div className="w-12 h-12 bg-green-500/20 rounded-lg flex items-center justify-center">
-                  <Package className="w-6 h-6 text-green-400" />
-                </div>
-                <div className="text-left">
-                  <p className="text-white/70 text-sm">Sales</p>
-                  <p className="text-2xl font-bold text-white">{stats.sales}</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-          <Card className="bg-white/10 backdrop-blur-md border-white/20">
-            <CardContent className="p-6">
-              <div className="flex items-center gap-3">
-                <div className="w-12 h-12 bg-purple-500/20 rounded-lg flex items-center justify-center">
-                  <DollarSign className="w-6 h-6 text-purple-400" />
-                </div>
-                <div className="text-left">
-                  <p className="text-white/70 text-sm">Revenue</p>
-                  <p className="text-2xl font-bold text-white">${stats.revenue.toFixed(2)}</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-
-
-
-        {/* GIVI Drawer - MOBILE ONLY - Gated by feature flag */}
+      {/* GIVI Drawer - MOBILE ONLY - Gated by feature flag */}
         {FEATURES.givi && currentSeller && showGiviDrawer && typeof window !== 'undefined' && window.innerWidth < 640 && (
           <BottomDrawer
             isOpen={showGiviDrawer}
