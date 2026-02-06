@@ -1127,14 +1127,20 @@ export default function Layout({ children, currentPageName }) {
     location.pathname.toLowerCase().includes('live-show') ||
     location.search.toLowerCase().includes('showid');
 
+  const isHostConsolePage =
+    currentPageName === "hostconsole" ||
+    location.pathname.toLowerCase().includes("hostconsole");
+
+  const isFullScreenPage = isLiveShowPage || isHostConsolePage;
+
   const isNearMePage = 
     currentPageName === "NearMe" || 
     location.pathname.toLowerCase().includes('nearme') ||
     location.pathname.toLowerCase().includes('near-me');
 
-  // Poll for unread messages every 30 seconds (skip on LiveShow or when degraded)
+  // Poll for unread messages every 30 seconds (skip on fullscreen pages or when degraded)
   useEffect(() => {
-    if (isLiveShowPage || !user || supabaseDegraded) {
+    if (isFullScreenPage || !user || supabaseDegraded) {
       return;
     }
 
@@ -1145,11 +1151,11 @@ export default function Layout({ children, currentPageName }) {
     }, 30000);
 
     return () => clearInterval(interval);
-  }, [isLiveShowPage, user, supabaseDegraded]);
+  }, [isFullScreenPage, user, supabaseDegraded]);
 
-  // Poll for unread notifications every 30 seconds (skip on LiveShow or when degraded)
+  // Poll for unread notifications every 30 seconds (skip on fullscreen pages or when degraded)
   useEffect(() => {
-    if (isLiveShowPage || !user || supabaseDegraded) {
+    if (isFullScreenPage || !user || supabaseDegraded) {
       return;
     }
 
@@ -1160,7 +1166,7 @@ export default function Layout({ children, currentPageName }) {
     }, 30000);
 
     return () => clearInterval(interval);
-  }, [isLiveShowPage, user, supabaseDegraded]);
+  }, [isFullScreenPage, user, supabaseDegraded]);
 
   const handleLogout = async () => {
     // Clear identity cache and refs on logout
@@ -1347,7 +1353,7 @@ export default function Layout({ children, currentPageName }) {
         }
       `}</style>
 
-      <div className={`min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-purple-50 ${isLiveShowPage ? 'pb-0' : 'pb-20'}`}>
+      <div className={`min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-purple-50 ${isFullScreenPage ? 'pb-0' : 'pb-20'}`}>
         {/* Admin Impersonation Banner - Always on top */}
         {isImpersonating && <ImpersonationBanner />}
 
@@ -1519,12 +1525,12 @@ export default function Layout({ children, currentPageName }) {
         )}
 
         {/* Main Content */}
-        <main className={isLiveShowPage ? '' : 'pb-4'}>
+        <main className={isFullScreenPage ? '' : 'pb-4'}>
           {children}
         </main>
 
-        {/* Bottom Navigation Bar - HIDE on LiveShow page */}
-        {!isLiveShowPage && (
+        {/* Bottom Navigation Bar - HIDE on fullscreen pages (LiveShow, HostConsole) */}
+        {!isFullScreenPage && (
           <nav className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t border-gray-200 shadow-lg z-50">
             <div className="max-w-7xl mx-auto px-2">
               <div className="flex justify-around items-center h-16">
