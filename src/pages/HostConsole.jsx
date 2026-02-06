@@ -59,6 +59,7 @@ import PickupVerification from "../components/fulfillment/PickupVerification";
 import BatchFulfillmentList from "../components/fulfillment/BatchFulfillmentList";
 import DailyBroadcaster from "@/components/streaming/DailyBroadcaster";
 import { useDeviceClass } from "@/hooks/useDeviceClass";
+import { useMobilePortraitLock } from "@/hooks/useMobilePortraitLock";
 
 export default function HostConsole() {
   const navigate = useNavigate();
@@ -101,6 +102,7 @@ export default function HostConsole() {
   // This ensures SDKs don't remount on orientation change.
   // ═══════════════════════════════════════════════════════════════════════════
   const { isMobileDevice, isDesktopDevice, reason: deviceClassReason } = useDeviceClass();
+  useMobilePortraitLock(isMobileDevice);
   
   // Log device classification for debugging
   useEffect(() => {
@@ -1620,8 +1622,8 @@ export default function HostConsole() {
           {/* CENTER COLUMN - Live Video */}
           <div className="relative bg-black flex items-center justify-center">
             {/* Daily SDK Broadcaster OR Placeholder */}
-            {/* CRITICAL: Only mount DailyBroadcaster when viewport is desktop to prevent duplicate Daily instances */}
-            {isDesktop && dailyRoomUrl && dailyToken ? (
+            {/* Container is device-gated (isDesktopDevice), so we only check room availability */}
+            {dailyRoomUrl && dailyToken ? (
               <DailyBroadcaster 
                 roomUrl={dailyRoomUrl} 
                 token={dailyToken} 
@@ -1714,33 +1716,28 @@ export default function HostConsole() {
             </div>
 
             {/* Chat Component */}
-            {/* CONDITIONAL MOUNT: Only mount desktop chat when isDesktop.
-                This prevents double polling and freeze under load by ensuring
-                only one chat instance mounts at any time. */}
+            {/* Container is device-gated (isDesktopDevice), so chat mounts only on desktop.
+                This prevents double polling and freeze under load. */}
             <div className="flex-1 flex flex-col min-h-0 pb-6">
-              {isDesktop && (
-                <>
-                  {console.log("[HOSTCONSOLE AUTH DEBUG][DESKTOP]", {
-                    currentUserId: currentUser?.id ?? null,
-                    currentUserRole: currentUser?.role ?? null
-                  })}
-                  {useSupabaseChat ? (
-                    <SupabaseLiveChat
-                      showId={showId}
-                      sellerId={currentSeller?.id}
-                      isSeller={true}
-                      isOverlay={false}
-                      user={currentUser}
-                    />
-                  ) : (
-                    <LiveChat
-                      showId={showId}
-                      sellerId={currentSeller?.id}
-                      isSeller={true}
-                      isEmbedded={true}
-                    />
-                  )}
-                </>
+              {console.log("[HOSTCONSOLE AUTH DEBUG][DESKTOP]", {
+                currentUserId: currentUser?.id ?? null,
+                currentUserRole: currentUser?.role ?? null
+              })}
+              {useSupabaseChat ? (
+                <SupabaseLiveChat
+                  showId={showId}
+                  sellerId={currentSeller?.id}
+                  isSeller={true}
+                  isOverlay={false}
+                  user={currentUser}
+                />
+              ) : (
+                <LiveChat
+                  showId={showId}
+                  sellerId={currentSeller?.id}
+                  isSeller={true}
+                  isEmbedded={true}
+                />
               )}
             </div>
           </div>

@@ -53,6 +53,7 @@ import GIVIWinnerBanner from "../components/givi/GIVIWinnerBanner";
 import FollowButton from "../components/marketplace/FollowButton";
 import { FEATURES } from "@/config/features";
 import { useDeviceClass } from "@/hooks/useDeviceClass";
+import { useMobilePortraitLock } from "@/hooks/useMobilePortraitLock";
 
 export default function LiveShow() {
   const navigate = useNavigate();
@@ -119,6 +120,7 @@ export default function LiveShow() {
   // This ensures SDKs don't remount on orientation change.
   // ═══════════════════════════════════════════════════════════════════════════
   const { isMobileDevice, isDesktopDevice } = useDeviceClass();
+  useMobilePortraitLock(isMobileDevice);
 
   // Determine which player to use based on streaming_provider field:
   // - "ivs" with ivs_playback_url → IVSPlayer (OBS/external encoder)
@@ -875,10 +877,13 @@ export default function LiveShow() {
       <PickupInstructionsBubble pickupInstructions={show.pickup_instructions} />
 
       {/* MOBILE VIEW - Original Layout */}
-      <div className="sm:hidden">
+      {/* CONTAINER GATED BY DEVICE CLASS: Only mount on mobile devices.
+          This prevents desktop layout from appearing on phones in landscape. */}
+      {isMobileDevice && (
+      <div>
         <div className="fixed inset-0 z-0">
           {/* Conditional video player: IVS for AWS IVS streams, WebRTC for Daily.co */}
-          {/* CRITICAL: Only mount WebRTCViewer when viewport is mobile to prevent duplicate Daily instances */}
+          {/* Container is device-gated, so we only need to check IVS vs Daily */}
           {useIvsPlayer ? (
             <IVSPlayer
               show={show}
@@ -887,12 +892,12 @@ export default function LiveShow() {
               autoplay={true}
               muted={false}
             />
-          ) : isMobileDevice ? (
+          ) : (
             <WebRTCViewer
               show={show}
               onViewerCountChange={handleViewerCountChange}
             />
-          ) : null}
+          )}
         </div>
 
         {/* Share + Follow Overlay - Buyer Only */}
@@ -963,47 +968,41 @@ export default function LiveShow() {
         </div>
 
         {/* Chat Messages Overlay */}
-        {/* CONDITIONAL MOUNT: Only mount mobile chat on mobile devices.
-            Device classification is locked for the session (no rotation flips).
-            This prevents double polling and freeze under load by ensuring
-            only one chat instance mounts at any time. */}
-        {isMobileDevice && (
-          <>
-            {(() => { console.log("[AUTH DEBUG][LiveShow] rendering mobile chat with user:", user); return null; })()}
-            {(() => {
-              console.log("[CHAT PROPS DEBUG][LiveShow][MOBILE]", {
-                showId,
-                sellerId: show?.seller_id,
-                isShowOwner,
-                userId: user?.id ?? null,
-                userRole: user?.role ?? null,
-              });
-              return null;
-            })()}
-            {showChatOverlay && (
-              useSupabaseChat ? (
-                <SupabaseLiveChat
-                  showId={showId}
-                  sellerId={show?.seller_id}
-                  isSeller={isShowOwner}
-                  user={user}
-                  isOverlay={true}
-                  onClose={() => setShowChatOverlay(false)}
-                  onMessageSeller={() => {
-                    // Navigate to messages page with seller context
-                    navigate(createPageUrl("Messages") + `?sellerId=${show?.seller_id}`);
-                  }}
-                />
-              ) : (
-                <LiveChatOverlay
-                  showId={showId}
-                  sellerId={show?.seller_id}
-                  isSeller={false}
-                  onClose={() => setShowChatOverlay(false)}
-                />
-              )
-            )}
-          </>
+        {/* Container is device-gated (isMobileDevice), so chat mounts only on mobile.
+            This prevents double polling and freeze under load. */}
+        {(() => { console.log("[AUTH DEBUG][LiveShow] rendering mobile chat with user:", user); return null; })()}
+        {(() => {
+          console.log("[CHAT PROPS DEBUG][LiveShow][MOBILE]", {
+            showId,
+            sellerId: show?.seller_id,
+            isShowOwner,
+            userId: user?.id ?? null,
+            userRole: user?.role ?? null,
+          });
+          return null;
+        })()}
+        {showChatOverlay && (
+          useSupabaseChat ? (
+            <SupabaseLiveChat
+              showId={showId}
+              sellerId={show?.seller_id}
+              isSeller={isShowOwner}
+              user={user}
+              isOverlay={true}
+              onClose={() => setShowChatOverlay(false)}
+              onMessageSeller={() => {
+                // Navigate to messages page with seller context
+                navigate(createPageUrl("Messages") + `?sellerId=${show?.seller_id}`);
+              }}
+            />
+          ) : (
+            <LiveChatOverlay
+              showId={showId}
+              sellerId={show?.seller_id}
+              isSeller={false}
+              onClose={() => setShowChatOverlay(false)}
+            />
+          )
         )}
 
         {/* Product Carousel - Show during "starting" and "live", hide when "ended" */}
@@ -1259,9 +1258,13 @@ export default function LiveShow() {
           </div>
         </div>
       </div>
+      )}
 
       {/* DESKTOP VIEW - 3-Column Whatnot Layout */}
-      <div className="hidden sm:grid sm:grid-cols-[25%_50%_25%] h-screen bg-black">
+      {/* CONTAINER GATED BY DEVICE CLASS: Only mount on desktop devices.
+          This prevents desktop layout from appearing on phones in landscape. */}
+      {isDesktopDevice && (
+      <div className="grid grid-cols-[25%_50%_25%] h-screen bg-black">
         {/* LEFT COLUMN - Products Panel - GATED: Only show when live */}
         <div className="bg-gray-900 overflow-y-auto p-4 space-y-4">
           <h2 className="text-white font-bold text-lg mb-4">Products</h2>
@@ -1365,7 +1368,7 @@ export default function LiveShow() {
         {/* CENTER COLUMN - Live Video */}
         <div className="relative bg-black h-full">
           {/* Conditional video player: IVS for AWS IVS streams, WebRTC for Daily.co */}
-          {/* CRITICAL: Only mount WebRTCViewer when viewport is desktop to prevent duplicate Daily instances */}
+          {/* Container is device-gated, so we only need to check IVS vs Daily */}
           {useIvsPlayer ? (
             <IVSPlayer
               show={show}
@@ -1374,12 +1377,12 @@ export default function LiveShow() {
               autoplay={true}
               muted={false}
             />
-          ) : isDesktopDevice ? (
+          ) : (
             <WebRTCViewer
               show={show}
               onViewerCountChange={handleViewerCountChange}
             />
-          ) : null}
+          )}
           
           {/* Header overlay on video */}
           <div className="absolute top-0 left-0 right-0 z-50 bg-gradient-to-b from-black/80 via-black/40 to-transparent p-4">
@@ -1460,48 +1463,43 @@ export default function LiveShow() {
           </div>
 
           {/* Chat Component - Full Height */}
-          {/* CONDITIONAL MOUNT: Only mount desktop chat on desktop devices.
-              Device classification is locked for the session (no rotation flips).
-              This prevents double polling and freeze under load by ensuring
-              only one chat instance mounts at any time. */}
+          {/* Container is device-gated (isDesktopDevice), so chat mounts only on desktop.
+              This prevents double polling and freeze under load. */}
           <div className="flex-1 flex flex-col min-h-0">
-            {isDesktopDevice && (
-              <>
-                {(() => { console.log("[AUTH DEBUG][LiveShow] rendering desktop chat with user:", user); return null; })()}
-                {(() => {
-                  console.log("[CHAT PROPS DEBUG][LiveShow][DESKTOP]", {
-                    showId,
-                    sellerId: show?.seller_id,
-                    isShowOwner,
-                    userId: user?.id ?? null,
-                    userRole: user?.role ?? null,
-                  });
-                  return null;
-                })()}
-                {useSupabaseChat ? (
-                  <SupabaseLiveChat
-                    showId={showId}
-                    sellerId={show?.seller_id}
-                    isSeller={isShowOwner}
-                    user={user}
-                    isOverlay={false}
-                    onMessageSeller={() => {
-                      navigate(createPageUrl("Messages") + `?sellerId=${show?.seller_id}`);
-                    }}
-                  />
-                ) : (
-                  <LiveChat
-                    showId={showId}
-                    sellerId={show?.seller_id}
-                    isSeller={false}
-                    isEmbedded={true}
-                  />
-                )}
-              </>
+            {(() => { console.log("[AUTH DEBUG][LiveShow] rendering desktop chat with user:", user); return null; })()}
+            {(() => {
+              console.log("[CHAT PROPS DEBUG][LiveShow][DESKTOP]", {
+                showId,
+                sellerId: show?.seller_id,
+                isShowOwner,
+                userId: user?.id ?? null,
+                userRole: user?.role ?? null,
+              });
+              return null;
+            })()}
+            {useSupabaseChat ? (
+              <SupabaseLiveChat
+                showId={showId}
+                sellerId={show?.seller_id}
+                isSeller={isShowOwner}
+                user={user}
+                isOverlay={false}
+                onMessageSeller={() => {
+                  navigate(createPageUrl("Messages") + `?sellerId=${show?.seller_id}`);
+                }}
+              />
+            ) : (
+              <LiveChat
+                showId={showId}
+                sellerId={show?.seller_id}
+                isSeller={false}
+                isEmbedded={true}
+              />
             )}
           </div>
         </div>
       </div>
+      )}
 
       {/* Seller Profile Modal */}
       {showSellerProfile && seller && (
