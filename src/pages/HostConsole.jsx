@@ -58,6 +58,7 @@ import { FEATURES } from "@/config/features";
 import PickupVerification from "../components/fulfillment/PickupVerification";
 import BatchFulfillmentList from "../components/fulfillment/BatchFulfillmentList";
 import DailyBroadcaster from "@/components/streaming/DailyBroadcaster";
+import { useDeviceClass } from "@/hooks/useDeviceClass";
 
 export default function HostConsole() {
   const navigate = useNavigate();
@@ -94,48 +95,16 @@ export default function HostConsole() {
   const [showPurchaseBanner, setShowPurchaseBanner] = useState(false);
   
   // ═══════════════════════════════════════════════════════════════════════════
-  // REACTIVE VIEWPORT DETECTION
+  // DEVICE-LOCKED CLASSIFICATION (NO VIEWPORT FLIPS)
   // Prevents dual DailyBroadcaster AND dual SupabaseLiveChat mount.
-  // Updates on: mediaQuery change, resize, orientationchange.
+  // Classification is determined ONCE by device type, NOT viewport width.
+  // This ensures SDKs don't remount on orientation change.
   // ═══════════════════════════════════════════════════════════════════════════
-  const [isDesktop, setIsDesktop] = useState(() =>
-    window.matchMedia("(min-width: 640px)").matches
-  );
-
+  const { isMobileDevice, isDesktopDevice, reason: deviceClassReason } = useDeviceClass();
+  
+  // Log device classification for debugging
   useEffect(() => {
-    const mediaQuery = window.matchMedia("(min-width: 640px)");
-    
-    const handleChange = (e) => {
-      setIsDesktop(e.matches);
-    };
-
-    // Named handler for orientation change (must match add/remove for proper cleanup)
-    const handleOrientationChange = () => {
-      // Small delay to let viewport settle after rotation
-      setTimeout(() => {
-        setIsDesktop(window.matchMedia("(min-width: 640px)").matches);
-      }, 100);
-    };
-
-    // Modern browsers
-    if (mediaQuery.addEventListener) {
-      mediaQuery.addEventListener("change", handleChange);
-    } else {
-      // Fallback for older browsers
-      mediaQuery.addListener(handleChange);
-    }
-
-    // Also listen for orientation change (mobile rotation)
-    window.addEventListener("orientationchange", handleOrientationChange);
-
-    return () => {
-      if (mediaQuery.removeEventListener) {
-        mediaQuery.removeEventListener("change", handleChange);
-      } else {
-        mediaQuery.removeListener(handleChange);
-      }
-      window.removeEventListener("orientationchange", handleOrientationChange);
-    };
+    console.log("[HostConsole] Device classification:", { isMobileDevice, isDesktopDevice, reason: deviceClassReason });
   }, []);
   
   // ═══════════════════════════════════════════════════════════════════════════
@@ -160,21 +129,6 @@ export default function HostConsole() {
     }
   }, []); // Empty deps = only on mount
 
-  // Viewport listener for single DailyBroadcaster mount
-  useEffect(() => {
-    const mql = window.matchMedia("(min-width: 640px)");
-    const handler = (e) => setIsDesktop(e.matches);
-
-    if (mql.addEventListener) mql.addEventListener("change", handler);
-    else mql.addListener(handler);
-
-    setIsDesktop(mql.matches);
-
-    return () => {
-      if (mql.removeEventListener) mql.removeEventListener("change", handler);
-      else mql.removeListener(handler);
-    };
-  }, []);
 
   // ENHANCED: Load user and seller with better error handling
   useEffect(() => {
@@ -1140,8 +1094,8 @@ export default function HostConsole() {
         </div>
       )}
 
-      {/* GIVI Drawer - MOBILE ONLY - Gated by feature flag */}
-        {FEATURES.givi && currentSeller && showGiviDrawer && typeof window !== 'undefined' && window.innerWidth < 640 && (
+      {/* GIVI Drawer - MOBILE ONLY - Gated by feature flag + device class */}
+        {FEATURES.givi && currentSeller && showGiviDrawer && isMobileDevice && (
           <BottomDrawer
             isOpen={showGiviDrawer}
             onClose={() => {
@@ -1175,8 +1129,8 @@ export default function HostConsole() {
           </BottomDrawer>
         )}
 
-        {/* GIVI Dialog - DESKTOP ONLY - Gated by feature flag */}
-        {FEATURES.givi && currentSeller && showGiviDrawer && typeof window !== 'undefined' && window.innerWidth >= 640 && (
+        {/* GIVI Dialog - DESKTOP ONLY - Gated by feature flag + device class */}
+        {FEATURES.givi && currentSeller && showGiviDrawer && isDesktopDevice && (
           <Dialog open={true} onOpenChange={(open) => {
             if (!open) {
               setShowGiviDrawer(false);
@@ -1214,9 +1168,9 @@ export default function HostConsole() {
         )}
 
         {/* MOBILE: Fullscreen Video with Overlay Chat */}
-        {/* CONDITIONAL CONTAINER: Only mount mobile layout when !isDesktop.
-            This prevents ghost underlay and ensures exactly one layout tree exists. */}
-        {!isDesktop && (
+        {/* CONDITIONAL CONTAINER: Only mount mobile layout on mobile devices.
+            Device-locked classification prevents remount on rotation. */}
+        {isMobileDevice && (
         <div className="fixed inset-0 bg-black" style={{ zIndex: 1 }}>
           {/* Back Arrow - Top Left */}
           <Button
@@ -1236,8 +1190,8 @@ export default function HostConsole() {
           </div>
           
           {/* Video Background - Daily SDK Broadcaster or Placeholder */}
-          {/* CRITICAL: Only mount DailyBroadcaster when viewport is mobile to prevent duplicate Daily instances */}
-          {!isDesktop && dailyRoomUrl && dailyToken ? (
+          {/* CRITICAL: Only mount DailyBroadcaster on mobile devices to prevent duplicate Daily instances */}
+          {isMobileDevice && dailyRoomUrl && dailyToken ? (
             <DailyBroadcaster 
               roomUrl={dailyRoomUrl} 
               token={dailyToken} 
@@ -1265,10 +1219,10 @@ export default function HostConsole() {
           )}
           
           {/* Chat Overlay - Left Side, Transparent */}
-          {/* CONDITIONAL MOUNT: Only mount mobile chat when !isDesktop.
-              This prevents double polling and freeze under load by ensuring
-              only one chat instance mounts at any time. */}
-          {!isDesktop && (
+          {/* CONDITIONAL MOUNT: Only mount mobile chat on mobile devices.
+              Device-locked classification prevents double polling and freeze
+              under load by ensuring only one chat instance mounts at any time. */}
+          {isMobileDevice && (
             <div style={{ zIndex: 100 }}>
               {console.log("[HOSTCONSOLE AUTH DEBUG][MOBILE]", {
                 currentUserId: currentUser?.id ?? null,
@@ -1407,9 +1361,9 @@ export default function HostConsole() {
         )}
 
         {/* DESKTOP: 3-Column Whatnot-Style Layout */}
-        {/* CONDITIONAL CONTAINER: Only mount desktop layout when isDesktop.
-            This prevents ghost underlay and ensures exactly one layout tree exists. */}
-        {isDesktop && (
+        {/* CONDITIONAL CONTAINER: Only mount desktop layout on desktop devices.
+            Device-locked classification prevents remount on rotation. */}
+        {isDesktopDevice && (
         <div className="grid grid-cols-[25%_50%_25%] h-screen bg-black fixed inset-0" style={{ top: 0, paddingTop: 0 }}>
           {/* LEFT COLUMN - Host Tools & Products */}
           <div className="bg-gray-900 overflow-y-auto p-4 space-y-4">
