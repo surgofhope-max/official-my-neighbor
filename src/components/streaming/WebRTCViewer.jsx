@@ -456,14 +456,14 @@ export default function WebRTCViewer({ show, onViewerCountChange }) {
       <div className="w-full h-full bg-gradient-to-br from-purple-900 via-blue-900 to-gray-900 flex items-center justify-center">
         {/* Background: video preview or thumbnail */}
         <div className="absolute inset-0">
-          {show.video_preview_url ? (
+          {show.preview_video_url ? (
             <video
-              src={show.video_preview_url}
+              src={show.preview_video_url}
               className="w-full h-full object-cover"
-              autoPlay
-              loop
               muted
               playsInline
+              controls
+              preload="metadata"
             />
           ) : show.thumbnail_url ? (
             <img
