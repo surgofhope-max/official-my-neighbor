@@ -11,6 +11,9 @@ export default function LiveShowCard({ show, seller, onClick, isUpcoming = false
   const [user, setUser] = useState(null);
   const [isHovered, setIsHovered] = useState(false);
   const videoRef = useRef(null);
+  
+  // Detect mobile (no hover capability)
+  const isMobile = typeof window !== 'undefined' && window.matchMedia('(hover: none)').matches;
 
   useEffect(() => {
     loadUser();
@@ -81,8 +84,9 @@ export default function LiveShowCard({ show, seller, onClick, isUpcoming = false
   const badgeInfo = getBadgeInfo();
   const BadgeIcon = badgeInfo.icon;
 
-  // Handle video hover play/pause
+  // Handle video hover play/pause (desktop only - mobile uses autoPlay)
   useEffect(() => {
+    if (isMobile) return; // Skip for mobile - autoPlay handles it
     if (videoRef.current && show.preview_video_url) {
       if (isHovered) {
         videoRef.current.play().catch(err => {
@@ -93,7 +97,7 @@ export default function LiveShowCard({ show, seller, onClick, isUpcoming = false
         videoRef.current.currentTime = 0;
       }
     }
-  }, [isHovered, show.preview_video_url]);
+  }, [isHovered, show.preview_video_url, isMobile]);
 
   const getTimeUntilStart = () => {
     const scheduledAt = show.scheduled_start_time || show.started_at;
@@ -128,7 +132,8 @@ export default function LiveShowCard({ show, seller, onClick, isUpcoming = false
       <div className="relative h-56 bg-gradient-to-br from-purple-500 to-blue-600 overflow-hidden">
         {show.preview_video_url ? (
           <>
-            {show.thumbnail_url && (
+            {/* Thumbnail shown on desktop when not hovered, hidden on mobile */}
+            {show.thumbnail_url && !isMobile && (
               <img
                 src={show.thumbnail_url}
                 alt={show.title}
@@ -138,16 +143,18 @@ export default function LiveShowCard({ show, seller, onClick, isUpcoming = false
               />
             )}
             
+            {/* Video: autoPlay+loop on mobile, hover-controlled on desktop */}
             <video
               ref={videoRef}
               src={show.preview_video_url}
               className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${
-                isHovered ? 'opacity-100' : 'opacity-0'
+                isMobile || isHovered ? 'opacity-100' : 'opacity-0'
               }`}
               muted
               loop
               playsInline
               preload="metadata"
+              autoPlay={isMobile}
             />
           </>
         ) : show.thumbnail_url ? (

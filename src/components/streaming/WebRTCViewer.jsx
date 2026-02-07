@@ -460,9 +460,10 @@ export default function WebRTCViewer({ show, onViewerCountChange }) {
             <video
               src={show.preview_video_url}
               className="w-full h-full object-cover"
+              autoPlay
+              loop
               muted
               playsInline
-              controls
               preload="metadata"
             />
           ) : show.thumbnail_url ? (
@@ -475,8 +476,8 @@ export default function WebRTCViewer({ show, onViewerCountChange }) {
             <div className="w-full h-full bg-gradient-to-br from-purple-900 via-blue-900 to-gray-900"></div>
           )}
           
-          {/* Dark gradient overlay */}
-          <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent"></div>
+          {/* Dark gradient overlay - pointer-events-none to allow video interaction */}
+          <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent pointer-events-none"></div>
         </div>
 
         {/* Overlay text */}
