@@ -34,6 +34,7 @@ export const SHOWS_PUBLIC_FIELDS = `
   pickup_instructions,
   stream_status,
   thumbnail_url,
+  preview_video_url,
   sales_count
 `.replace(/\s+/g, '');
 
@@ -56,6 +57,7 @@ export const SHOWS_SELLER_FIELDS = `
   pickup_instructions,
   stream_status,
   thumbnail_url,
+  preview_video_url,
   created_at,
   updated_at,
   sales_count
@@ -539,6 +541,8 @@ export async function createShow(input: {
   community_id?: string | null;
   /** Optional thumbnail image URL */
   thumbnail_url?: string | null;
+  /** Optional preview video URL */
+  preview_video_url?: string | null;
 }) {
   try {
     // Fetch seller's IVS profile (non-blocking)
@@ -572,6 +576,7 @@ export async function createShow(input: {
       streaming_provider: null,  // Daily-first MVP: null allows HostConsole to set provider on Go Live
       community_id: input.community_id ?? null,  // STEP C4: Persist community_id
       thumbnail_url: input.thumbnail_url ?? null,  // PHASE S1: Persist thumbnail
+      preview_video_url: input.preview_video_url ?? null,  // Video preview URL
     };
 
     // Attach IVS channel if seller has one provisioned

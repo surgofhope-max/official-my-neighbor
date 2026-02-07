@@ -237,6 +237,7 @@ export default function SellerShows() {
         scheduled_start: showData.scheduled_start,
         community_id,  // STEP C4: Write community_id to DB
         thumbnail_url: showData.thumbnail_url || null,  // PHASE S1: Persist thumbnail
+        preview_video_url: showData.preview_video_url || null,  // Video preview URL
       });
 
       if (!createdShow) {
@@ -263,7 +264,7 @@ export default function SellerShows() {
   });
 
   const updateShowMutation = useMutation({
-    mutationFn: ({ id, showData }) => {
+    mutationFn: async ({ id, showData }) => {
       // CRITICAL: Never overwrite status in generic show updates.
       // Status changes are handled ONLY by goLive() and endShow().
       const { status, ...safeShowData } = showData;
@@ -271,7 +272,28 @@ export default function SellerShows() {
         console.warn("⚠️ Stripped 'status' from show update payload - use goLive()/endShow() instead");
       }
       console.log("✏️ SellerShows - Updating show:", id, safeShowData);
-      return base44.entities.Show.update(id, safeShowData);
+      
+      // Direct Supabase update (replaces base44.entities.Show.update)
+      const { data, error } = await supabase
+        .from('shows')
+        .update({
+          title: safeShowData.title,
+          description: safeShowData.description,
+          pickup_instructions: safeShowData.pickup_instructions,
+          scheduled_start_time: safeShowData.scheduled_start,
+          thumbnail_url: safeShowData.thumbnail_url || null,
+          preview_video_url: safeShowData.preview_video_url || null,
+        })
+        .eq('id', id)
+        .select()
+        .single();
+      
+      if (error) {
+        console.error("❌ SellerShows - Show update failed:", error.message);
+        throw error;
+      }
+      
+      return data;
     },
     onSuccess: (updatedShow) => {
       console.log("✅ SellerShows - Show updated:", updatedShow.id);
@@ -499,9 +521,9 @@ export default function SellerShows() {
                 <Card key={show.id} className="border-2 border-red-500 shadow-xl">
                   {/* FIXED: Video/Thumbnail Display */}
                   <div className="relative h-40 bg-gradient-to-br from-red-500 to-purple-600 overflow-hidden">
-                    {show.video_preview_url ? (
+                    {show.preview_video_url ? (
                       <video
-                        src={show.video_preview_url}
+                        src={show.preview_video_url}
                         className="w-full h-full object-cover"
                         autoPlay
                         loop
@@ -564,9 +586,9 @@ export default function SellerShows() {
                 <Card key={show.id} className="border-0 shadow-lg">
                   {/* FIXED: Video/Thumbnail Display */}
                   <div className="relative h-40 bg-gradient-to-br from-blue-500 to-purple-600 overflow-hidden">
-                    {show.video_preview_url ? (
+                    {show.preview_video_url ? (
                       <video
-                        src={show.video_preview_url}
+                        src={show.preview_video_url}
                         className="w-full h-full object-cover"
                         autoPlay
                         loop
@@ -664,9 +686,9 @@ export default function SellerShows() {
                   <Card key={show.id} className="border-0 shadow-lg opacity-75">
                     {/* FIXED: Video/Thumbnail Display */}
                     <div className="relative h-40 bg-gradient-to-br from-gray-400 to-gray-500 overflow-hidden">
-                      {show.video_preview_url ? (
+                      {show.preview_video_url ? (
                         <video
-                          src={show.video_preview_url}
+                          src={show.preview_video_url}
                           className="w-full h-full object-cover"
                           muted
                           playsInline

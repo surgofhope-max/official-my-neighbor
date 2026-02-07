@@ -83,7 +83,7 @@ export default function LiveShowCard({ show, seller, onClick, isUpcoming = false
 
   // Handle video hover play/pause
   useEffect(() => {
-    if (videoRef.current && show.video_preview_url) {
+    if (videoRef.current && show.preview_video_url) {
       if (isHovered) {
         videoRef.current.play().catch(err => {
           console.log("Video autoplay prevented:", err);
@@ -93,7 +93,7 @@ export default function LiveShowCard({ show, seller, onClick, isUpcoming = false
         videoRef.current.currentTime = 0;
       }
     }
-  }, [isHovered, show.video_preview_url]);
+  }, [isHovered, show.preview_video_url]);
 
   const getTimeUntilStart = () => {
     const scheduledAt = show.scheduled_start_time || show.started_at;
@@ -126,7 +126,7 @@ export default function LiveShowCard({ show, seller, onClick, isUpcoming = false
     >
       {/* Thumbnail/Video Container */}
       <div className="relative h-56 bg-gradient-to-br from-purple-500 to-blue-600 overflow-hidden">
-        {show.video_preview_url ? (
+        {show.preview_video_url ? (
           <>
             {show.thumbnail_url && (
               <img
@@ -140,7 +140,7 @@ export default function LiveShowCard({ show, seller, onClick, isUpcoming = false
             
             <video
               ref={videoRef}
-              src={show.video_preview_url}
+              src={show.preview_video_url}
               className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${
                 isHovered ? 'opacity-100' : 'opacity-0'
               }`}

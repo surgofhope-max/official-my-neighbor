@@ -23,6 +23,14 @@ const ALLOWED_IMAGE_TYPES = [
 
 const MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024; // 5MB
 
+export const ALLOWED_VIDEO_MIME_TYPES = [
+  "video/mp4",
+  "video/webm",
+  "video/quicktime",
+];
+
+export const MAX_VIDEO_SIZE_BYTES = 25 * 1024 * 1024; // 25MB
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // TYPES
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -197,5 +205,99 @@ export async function deleteShowThumbnail(showId: string): Promise<{ success: bo
     console.error("[showStorage] Delete unexpected error:", errorMessage);
     return { success: false, error: errorMessage };
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// VIDEO UPLOAD FUNCTION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Sanitize filename to safe characters only
+ */
+function sanitizeFileName(name: string): string {
+  return name
+    .replace(/[^a-zA-Z0-9._-]/g, '_')
+    .substring(0, 64);
+}
+
+/**
+ * Upload a preview video for a show.
+ * 
+ * - Validates file type (MP4, WebM, QuickTime)
+ * - Validates file size (≤ 25MB)
+ * - Uploads to: shows/{userId}-{timestamp}-{safeName}
+ * - Uses upsert (overwrites existing)
+ * - Returns public URL
+ * 
+ * @param params.file - The video file to upload
+ * @param params.userId - Optional user ID override (defaults to session user)
+ * @returns Promise with public URL string
+ * @throws Error if validation fails or upload fails
+ */
+export async function uploadShowPreviewVideo(
+  params: { file: File; userId?: string }
+): Promise<string> {
+  const { file, userId: paramUserId } = params;
+
+  // Validate file exists
+  if (!file) {
+    throw new Error("File is required");
+  }
+
+  // Validate file size
+  if (file.size > MAX_VIDEO_SIZE_BYTES) {
+    const sizeMB = (file.size / (1024 * 1024)).toFixed(2);
+    throw new Error(`File too large: ${sizeMB}MB. Maximum: 25MB`);
+  }
+
+  // Validate file type
+  if (!ALLOWED_VIDEO_MIME_TYPES.includes(file.type)) {
+    throw new Error(`Invalid file type: ${file.type}. Allowed: MP4, WebM, QuickTime`);
+  }
+
+  // Auth check
+  const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+  if (sessionError) {
+    throw new Error(`Auth error: ${sessionError.message}`);
+  }
+  
+  const session = sessionData?.session;
+  if (!session) {
+    throw new Error("Not authenticated");
+  }
+
+  // Determine effective user ID
+  const effectiveUserId = paramUserId ?? session.user.id;
+
+  // Build safe path
+  const safeName = sanitizeFileName(file.name);
+  const filePath = `${effectiveUserId}-${Date.now()}-${safeName}`;
+
+  console.log(`[showStorage] Uploading preview video to: ${SHOWS_BUCKET}/${filePath}`);
+
+  // Upload with upsert
+  const { error: uploadError } = await supabase.storage
+    .from(SHOWS_BUCKET)
+    .upload(filePath, file, {
+      upsert: true,
+      contentType: file.type,
+    });
+
+  if (uploadError) {
+    throw new Error(uploadError.message);
+  }
+
+  // Get public URL
+  const { data: pub } = supabase.storage
+    .from(SHOWS_BUCKET)
+    .getPublicUrl(filePath);
+
+  if (!pub?.publicUrl) {
+    throw new Error("Failed to get public URL");
+  }
+
+  console.log(`[showStorage] Video upload successful: ${pub.publicUrl}`);
+
+  return pub.publicUrl;
 }
 

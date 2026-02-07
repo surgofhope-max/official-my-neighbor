@@ -11,11 +11,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { supabase } from "@/lib/supabase/supabaseClient";
-import { supabaseApi as base44 } from "@/api/supabaseClient"; // Keep for video upload (legacy)
 import { useQuery } from "@tanstack/react-query";
 import { Upload, Loader2, Video, X as CloseIcon, AlertCircle, Image as ImageIcon } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { uploadShowThumbnail } from "@/api/storage/showStorage";
+import { uploadShowThumbnail, uploadShowPreviewVideo } from "@/api/storage/showStorage";
 
 export default function ShowForm({ show, onSave, onCancel, isSubmitting }) {
   const [formData, setFormData] = useState({
@@ -25,7 +24,7 @@ export default function ShowForm({ show, onSave, onCancel, isSubmitting }) {
     community: show?.community || "all",
     scheduled_start: show?.scheduled_start ? show.scheduled_start.substring(0, 16) : "",
     thumbnail_url: show?.thumbnail_url || "",
-    video_preview_url: show?.video_preview_url || ""
+    preview_video_url: show?.preview_video_url || ""
   });
   const [uploadingThumbnail, setUploadingThumbnail] = useState(false);
   const [uploadingVideo, setUploadingVideo] = useState(false);
@@ -93,28 +92,15 @@ export default function ShowForm({ show, onSave, onCancel, isSubmitting }) {
     const file = e.target.files[0];
     if (!file) return;
 
-    // Validate file type
-    const validTypes = ['video/mp4', 'video/quicktime', 'video/webm'];
-    if (!validTypes.includes(file.type)) {
-      setVideoError("Invalid file type. Please upload MP4, MOV, or WebM files only.");
-      return;
-    }
-
-    // Validate file size (25MB max)
-    const maxSize = 25 * 1024 * 1024; // 25MB in bytes
-    if (file.size > maxSize) {
-      setVideoError("File too large. Maximum size is 25MB.");
-      return;
-    }
-
     setVideoError("");
     setUploadingVideo(true);
     try {
-      const { file_url } = await base44.integrations.Core.UploadFile({ file });
-      setFormData(prev => ({ ...prev, video_preview_url: file_url }));
+      // Upload to Supabase Storage (validation happens inside uploadShowPreviewVideo)
+      const publicUrl = await uploadShowPreviewVideo({ file });
+      setFormData(prev => ({ ...prev, preview_video_url: publicUrl }));
     } catch (error) {
       console.error("Error uploading video:", error);
-      setVideoError("Failed to upload video. Please try again.");
+      setVideoError(error.message || "Failed to upload video. Please try again.");
     }
     setUploadingVideo(false);
   };
@@ -213,17 +199,17 @@ export default function ShowForm({ show, onSave, onCancel, isSubmitting }) {
           </Alert>
         )}
 
-        {formData.video_preview_url ? (
+        {formData.preview_video_url ? (
           <div className="relative">
             <video
-              src={formData.video_preview_url}
+              src={formData.preview_video_url}
               className="w-full h-48 object-cover rounded-lg"
               controls
               preload="metadata"
             />
             <button
               type="button"
-              onClick={() => setFormData(prev => ({ ...prev, video_preview_url: "" }))}
+              onClick={() => setFormData(prev => ({ ...prev, preview_video_url: "" }))}
               className="absolute top-2 right-2 bg-red-500 text-white rounded-full p-2 hover:bg-red-600 shadow-lg"
             >
               <CloseIcon className="w-4 h-4" />
