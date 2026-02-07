@@ -153,7 +153,7 @@ export default function LiveShowCard({ show, seller, onClick, isUpcoming = false
               muted
               loop
               playsInline
-              preload="auto"
+              preload="metadata"
               autoPlay={isMobile}
             />
           </>
