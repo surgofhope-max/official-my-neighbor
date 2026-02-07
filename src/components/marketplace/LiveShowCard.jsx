@@ -12,8 +12,14 @@ export default function LiveShowCard({ show, seller, onClick, isUpcoming = false
   const [isHovered, setIsHovered] = useState(false);
   const videoRef = useRef(null);
   
-  // Detect mobile (no hover capability)
-  const isMobile = typeof window !== 'undefined' && window.matchMedia('(hover: none)').matches;
+  // Detect mobile (robust: hover, pointer, or touch points)
+  const isMobile =
+    typeof window !== "undefined" &&
+    (
+      window.matchMedia("(hover: none)").matches ||
+      window.matchMedia("(pointer: coarse)").matches ||
+      (typeof navigator !== "undefined" && navigator.maxTouchPoints > 0)
+    );
 
   useEffect(() => {
     loadUser();
