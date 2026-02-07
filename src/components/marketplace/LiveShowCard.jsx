@@ -147,13 +147,13 @@ export default function LiveShowCard({ show, seller, onClick, isUpcoming = false
             <video
               ref={videoRef}
               src={show.preview_video_url}
-              className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${
-                isMobile || isHovered ? 'opacity-100' : 'opacity-0'
+              className={`absolute inset-0 w-full h-full object-cover ${
+                isMobile ? 'opacity-100' : isHovered ? 'opacity-100 transition-opacity duration-300' : 'opacity-0 transition-opacity duration-300'
               }`}
               muted
               loop
               playsInline
-              preload="metadata"
+              preload="auto"
               autoPlay={isMobile}
             />
           </>
