@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/lib/supabase/supabaseClient";
 import { createPageUrl } from "@/utils";
+import { PasswordInput } from "@/components/ui/password-input";
 
 export default function ResetPassword() {
   const navigate = useNavigate();
@@ -207,9 +208,8 @@ export default function ResetPassword() {
                 <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1">
                   New password
                 </label>
-                <input
+                <PasswordInput
                   id="password"
-                  type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   required
@@ -223,9 +223,8 @@ export default function ResetPassword() {
                 <label htmlFor="confirmPassword" className="block text-sm font-medium text-gray-700 mb-1">
                   Confirm password
                 </label>
-                <input
+                <PasswordInput
                   id="confirmPassword"
-                  type="password"
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
                   required
