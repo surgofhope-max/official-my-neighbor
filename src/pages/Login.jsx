@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { supabase } from "@/lib/supabase/supabaseClient";
 import { createPageUrl } from "@/utils";
 import { useSupabaseAuth } from "@/lib/auth/SupabaseAuthProvider";
+import { PasswordInput } from "@/components/ui/password-input";
 
 export default function Login() {
   const navigate = useNavigate();
@@ -171,9 +172,8 @@ export default function Login() {
                 <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1">
                   Password
                 </label>
-                <input
+                <PasswordInput
                   id="password"
-                  type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   required
