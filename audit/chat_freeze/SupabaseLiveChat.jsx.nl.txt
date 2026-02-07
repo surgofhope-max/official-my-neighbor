@@ -1,0 +1,646 @@
+﻿1	/**
+2	 * SupabaseLiveChat Component
+3	 *
+4	 * Ephemeral live chat for live shows using Supabase.
+5	 * Messages are scoped to a show and only accessible while the show is live.
+6	 *
+7	 * Features:
+8	 * - Polling-based updates (2-3 seconds)
+9	 * - Disabled when show is not live
+10	 * - No persistence after show ends (RLS enforced)
+11	 * - Separate from persistent messaging system
+12	 *
+13	 * This replaces the Base44-based LiveChatOverlay for Supabase migration.
+14	 */
+15	
+16	import React, { useState, useEffect, useRef, useCallback } from "react";
+17	import { supabase } from "@/lib/supabase/supabaseClient";
+18	import { useQuery } from "@tanstack/react-query";
+19	import {
+20	  getLiveShowMessages,
+21	  sendLiveShowMessage,
+22	  isLiveChatAvailable,
+23	} from "@/api/liveChat";
+24	import { Input } from "@/components/ui/input";
+25	import { Button } from "@/components/ui/button";
+26	import { Badge } from "@/components/ui/badge";
+27	import { Send, MessageCircle, X, Radio, User, Ban, MoreVertical } from "lucide-react";
+28	import { format } from "date-fns";
+29	import { checkAccountActiveAsync } from "@/lib/auth/accountGuards";
+30	import {
+31	  DropdownMenu,
+32	  DropdownMenuContent,
+33	  DropdownMenuItem,
+34	  DropdownMenuTrigger,
+35	} from "@/components/ui/dropdown-menu";
+36	import ViewerBanDialog from "../host/ViewerBanDialog";
+37	
+38	/**
+39	 * SupabaseLiveChat Component
+40	 *
+41	 * @param {Object} props
+42	 * @param {string} props.showId - The show ID
+43	 * @param {string} props.sellerId - The seller ID (for seller detection)
+44	 * @param {boolean} props.isSeller - Whether the current user is the seller
+45	 * @param {Object} props.user - The canonical authenticated user (from SupabaseAuthProvider)
+46	 * @param {Function} props.onClose - Callback to close the chat panel
+47	 * @param {boolean} props.isOverlay - Whether to render as transparent overlay
+48	 * @param {Function} props.onMessageSeller - Callback for "Message Seller" CTA when show ends
+49	 */
+50	export default function SupabaseLiveChat({
+51	  showId,
+52	  sellerId,
+53	  isSeller = false,
+54	  user,
+55	  onClose,
+56	  isOverlay = true,
+57	  onMessageSeller,
+58	}) {
+59	  console.log("[CHAT PROPS DEBUG][SupabaseLiveChat]", {
+60	    showId,
+61	    sellerId,
+62	    isSeller,
+63	    userId: user?.id ?? null,
+64	    userRole: user?.role ?? null,
+65	  });
+66	
+67	  // Chat state
+68	  const [messages, setMessages] = useState([]);
+69	  const [newMessage, setNewMessage] = useState("");
+70	  const [isSending, setIsSending] = useState(false);
+71	  const [sendError, setSendError] = useState(null);
+72	
+73	  // Show state
+74	  const [isChatAvailable, setIsChatAvailable] = useState(true);
+75	  const [showEnded, setShowEnded] = useState(false);
+76	
+77	  // UI state
+78	  const [isMinimized, setIsMinimized] = useState(false);
+79	  const [fadeMessages, setFadeMessages] = useState(false);
+80	
+81	  // Moderation state
+82	  const [banningViewer, setBanningViewer] = useState(null);
+83	
+84	  // Buyer profile names cache (keyed by sender_id)
+85	  const [buyerNames, setBuyerNames] = useState({});
+86	
+87	  // Refs
+88	  const messagesEndRef = useRef(null);
+89	  const pollingIntervalRef = useRef(null);
+90	  const fadeTimeoutRef = useRef(null);
+91	  const lastMessageIdRef = useRef(null);
+92	  const knownMessageIdsRef = useRef(new Set()); // Track IDs we've already processed
+93	  const mountedRef = useRef(true);
+94	
+95	  // Poll interval (ms)
+96	  const POLL_INTERVAL = 2500;
+97	
+98	  // Cleanup ref on unmount
+99	  useEffect(() => {
+100	    return () => {
+101	      mountedRef.current = false;
+102	    };
+103	  }, []);
+104	
+105	  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+106	  // FETCH BUYER NAMES FOR VIEWER MESSAGES
+107	  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+108	  const fetchBuyerNames = useCallback(async (messageList) => {
+109	    // Get unique viewer sender_ids that we don't have names for yet
+110	    const viewerIds = messageList
+111	      .filter(m => m.sender_role === 'viewer' && !buyerNames[m.sender_id])
+112	      .map(m => m.sender_id);
+113	    
+114	    const uniqueIds = [...new Set(viewerIds)];
+115	    if (uniqueIds.length === 0) return;
+116	
+117	    try {
+118	      const { data, error } = await supabase
+119	        .from('buyer_profiles')
+120	        .select('user_id, full_name')
+121	        .in('user_id', uniqueIds);
+122	
+123	      if (error || !data) return;
+124	
+125	      // Build name map
+126	      const newNames = {};
+127	      data.forEach(profile => {
+128	        newNames[profile.user_id] = profile.full_name || 'Buyer';
+129	      });
+130	
+131	      // Merge with existing cache
+132	      if (Object.keys(newNames).length > 0 && mountedRef.current) {
+133	        setBuyerNames(prev => ({ ...prev, ...newNames }));
+134	      }
+135	    } catch (err) {
+136	      // Silently fail - names are non-critical
+137	    }
+138	  }, [buyerNames]);
+139	
+140	  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+141	  // CHECK VIEWER BAN STATUS
+142	  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+143	  const enabled = !!sellerId && !!user && !isSeller;
+144	  const viewerBanQueryKey = ['viewer-ban-check', sellerId, user?.id];
+145	  const viewerBanQuery = useQuery({
+146	    queryKey: viewerBanQueryKey,
+147	    queryFn: async () => {
+148	      if (!sellerId || !user?.id) return null;
+149	      const { data, error } = await supabase
+150	        .from('viewer_bans')
+151	        .select('id, ban_type, reason')
+152	        .eq('seller_id', sellerId)
+153	        .eq('viewer_id', user.id)
+154	        .maybeSingle();
+155	      
+156	      if (error) {
+157	        console.warn('[CHAT] Failed to check ban status:', error.message);
+158	        return null;
+159	      }
+160	      return data;
+161	    },
+162	    enabled,
+163	    staleTime: 300000, // 5 minutes - ban status rarely changes
+164	    refetchInterval: false,
+165	    refetchOnWindowFocus: false,
+166	    // Debug callbacks
+167	    onSuccess: (data) => {
+168	      console.log("[VB QUERY][SUCCESS]", { key: viewerBanQueryKey, data, fetchedAt: Date.now() });
+169	    },
+170	    onError: (error) => {
+171	      console.log("[VB QUERY][ERROR]", { key: viewerBanQueryKey, error });
+172	    },
+173	  });
+174	  const viewerBan = viewerBanQuery.data;
+175	
+176	  // Debug: observe query state changes
+177	  useEffect(() => {
+178	    console.log("[VB QUERY][STATE]", {
+179	      key: viewerBanQueryKey,
+180	      enabled,
+181	      status: viewerBanQuery.status,
+182	      fetchStatus: viewerBanQuery.fetchStatus,
+183	      isFetching: viewerBanQuery.isFetching,
+184	      dataUpdatedAt: viewerBanQuery.dataUpdatedAt,
+185	    });
+186	  }, [viewerBanQuery.status, viewerBanQuery.fetchStatus]);
+187	
+188	  // Compute ban state (matches legacy behavior: chat, view, or full blocks chat)
+189	  const isChatBanned = viewerBan && (
+190	    viewerBan.ban_type === 'chat' || 
+191	    viewerBan.ban_type === 'view' || 
+192	    viewerBan.ban_type === 'full'
+193	  );
+194	
+195	  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+196	  // CHECK CHAT AVAILABILITY
+197	  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+198	  const checkAvailability = useCallback(async () => {
+199	    const available = await isLiveChatAvailable(showId);
+200	    if (mountedRef.current) {
+201	      setIsChatAvailable(available);
+202	      if (!available) {
+203	        setShowEnded(true);
+204	      }
+205	    }
+206	  }, [showId]);
+207	
+208	  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+209	  // POLL FOR MESSAGES
+210	  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+211	  const pollMessages = useCallback(async () => {
+212	    if (!showId) return;
+213	
+214	    const { messages: serverMessages, error } = await getLiveShowMessages(showId, {
+215	      limit: 100,
+216	    });
+217	
+218	    if (mountedRef.current && !error && serverMessages.length > 0) {
+219	      const lastServerId = serverMessages[serverMessages.length - 1].id;
+220	
+221	      // Only process if there are new messages (compare last ID)
+222	      if (lastServerId !== lastMessageIdRef.current) {
+223	        lastMessageIdRef.current = lastServerId;
+224	
+225	        // INCREMENTAL APPEND: Find only truly new messages using ref for O(1) lookup
+226	        const onlyNew = serverMessages.filter((m) => !knownMessageIdsRef.current.has(m.id));
+227	        
+228	        if (onlyNew.length > 0) {
+229	          // Update known IDs ref BEFORE state update
+230	          onlyNew.forEach((m) => knownMessageIdsRef.current.add(m.id));
+231	          
+232	          // Trim ref if it grows too large (keep last ~150 to allow some buffer)
+233	          if (knownMessageIdsRef.current.size > 150) {
+234	            const idsArray = Array.from(knownMessageIdsRef.current);
+235	            knownMessageIdsRef.current = new Set(idsArray.slice(-100));
+236	          }
+237	
+238	          // Update state with only new messages appended
+239	          setMessages((prev) => {
+240	            const merged = [...prev, ...onlyNew];
+241	            // Keep only last 100 messages (trim oldest)
+242	            return merged.length > 100 ? merged.slice(-100) : merged;
+243	          });
+244	
+245	          // Fetch buyer names ONLY for newly appended messages
+246	          fetchBuyerNames(onlyNew);
+247	          resetFadeTimer();
+248	        }
+249	      }
+250	    }
+251	
+252	    // Also check availability periodically
+253	    await checkAvailability();
+254	  }, [showId, checkAvailability, fetchBuyerNames]);
+255	
+256	  // Start/stop polling
+257	  useEffect(() => {
+258	    if (!showId) return;
+259	
+260	    // Initial load
+261	    pollMessages();
+262	
+263	    // Start polling
+264	    pollingIntervalRef.current = setInterval(pollMessages, POLL_INTERVAL);
+265	
+266	    return () => {
+267	      if (pollingIntervalRef.current) {
+268	        clearInterval(pollingIntervalRef.current);
+269	      }
+270	    };
+271	  }, [showId, pollMessages]);
+272	
+273	  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+274	  // AUTO-SCROLL TO BOTTOM
+275	  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+276	  useEffect(() => {
+277	    if (messagesEndRef.current && !isMinimized) {
+278	      messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
+279	    }
+280	  }, [messages, isMinimized]);
+281	
+282	  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+283	  // FADE EFFECT FOR OVERLAY
+284	  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+285	  const resetFadeTimer = () => {
+286	    if (!isOverlay) return;
+287	
+288	    setFadeMessages(false);
+289	    if (fadeTimeoutRef.current) {
+290	      clearTimeout(fadeTimeoutRef.current);
+291	    }
+292	    fadeTimeoutRef.current = setTimeout(() => {
+293	      if (mountedRef.current) {
+294	        setFadeMessages(true);
+295	      }
+296	    }, 5000);
+297	  };
+298	
+299	  useEffect(() => {
+300	    return () => {
+301	      if (fadeTimeoutRef.current) {
+302	        clearTimeout(fadeTimeoutRef.current);
+303	      }
+304	    };
+305	  }, []);
+306	
+307	  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+308	  // SEND MESSAGE
+309	  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+310	  const handleSend = async (e) => {
+311	    e?.preventDefault();
+312	
+313	    const trimmedMessage = newMessage.trim();
+314	    if (!trimmedMessage || !user || isSending) return;
+315	
+316	    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+317	    // SUSPENSION CHECK: Block chat for suspended accounts
+318	    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+319	    const { canProceed, error: guardError } = await checkAccountActiveAsync(supabase, user.id);
+320	    if (!canProceed) {
+321	      setSendError(guardError);
+322	      return;
+323	    }
+324	
+325	    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+326	    // BAN CHECK: Block chat for banned viewers (matches legacy behavior)
+327	    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+328	    if (isChatBanned) {
+329	      setSendError("You have been banned from chatting in this seller's shows.");
+330	      return;
+331	    }
+332	
+333	    // Prevent sending if chat is not available
+334	    if (!isChatAvailable) {
+335	      setSendError("Chat is only available during live shows");
+336	      return;
+337	    }
+338	
+339	    setIsSending(true);
+340	    setSendError(null);
+341	
+342	    const senderRole = isSeller ? "seller" : "viewer";
+343	
+344	    const { message, error } = await sendLiveShowMessage(
+345	      showId,
+346	      trimmedMessage,
+347	      senderRole
+348	    );
+349	
+350	    if (mountedRef.current) {
+351	      setIsSending(false);
+352	
+353	      if (error) {
+354	        setSendError(error);
+355	      } else if (message) {
+356	        // Add to local messages immediately for responsiveness
+357	        setMessages((prev) => [...prev, message]);
+358	        knownMessageIdsRef.current.add(message.id);
+359	        setNewMessage("");
+360	        resetFadeTimer();
+361	      }
+362	    }
+363	  };
+364	
+365	  // Handle Enter key
+366	  const handleKeyPress = (e) => {
+367	    if (e.key === "Enter" && !e.shiftKey) {
+368	      e.preventDefault();
+369	      handleSend();
+370	    }
+371	  };
+372	
+373	  // Handle ban viewer action
+374	  const handleBanViewer = (msg) => {
+375	    setBanningViewer({
+376	      user_id: msg.sender_id,
+377	      user_name: buyerNames[msg.sender_id] || "Buyer"
+378	    });
+379	  };
+380	
+381	  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+382	  // RENDER - SHOW ENDED STATE
+383	  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+384	  if (showEnded && !isChatAvailable) {
+385	    return (
+386	      <div className={`${isOverlay ? "fixed bottom-20 left-4 right-4 z-40" : ""}`}>
+387	        <div className="bg-black/80 backdrop-blur-md rounded-xl p-4 text-center border border-white/10">
+388	          <MessageCircle className="w-8 h-8 text-gray-400 mx-auto mb-2" />
+389	          <p className="text-white text-sm mb-3">Show has ended</p>
+390	          {onMessageSeller && user && !isSeller && (
+391	            <Button
+392	              onClick={onMessageSeller}
+393	              variant="outline"
+394	              size="sm"
+395	              className="text-white border-white/30 hover:bg-white/10"
+396	            >
+397	              <MessageCircle className="w-4 h-4 mr-2" />
+398	              Message Seller
+399	            </Button>
+400	          )}
+401	        </div>
+402	      </div>
+403	    );
+404	  }
+405	
+406	  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+407	  // RENDER - MINIMIZED STATE
+408	  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+409	  if (isMinimized) {
+410	    return (
+411	      <div className={`${isOverlay ? "fixed bottom-20 left-4 z-40" : ""}`}>
+412	        <Button
+413	          onClick={() => setIsMinimized(false)}
+414	          className="bg-black/80 backdrop-blur-md hover:bg-black/90 text-white rounded-full p-3"
+415	        >
+416	          <MessageCircle className="w-5 h-5" />
+417	          {messages.length > 0 && (
+418	            <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+419	              {messages.length > 99 ? "99+" : messages.length}
+420	            </span>
+421	          )}
+422	        </Button>
+423	      </div>
+424	    );
+425	  }
+426	
+427	  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+428	  // RENDER - MAIN CHAT
+429	  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+430	  
+431	  // AUDIT LOG - max-h-[50vh] debug
+432	  const wrapperClassName = `${isOverlay ? "fixed bottom-2 left-4 right-4 z-40 max-w-md" : "w-full h-full"} flex flex-col`;
+433	  const messageBoxClassName = `${isOverlay ? "max-h-[50vh] pb-20" : "flex-1"} overflow-y-auto mb-2 opacity-100 transition-opacity duration-500`;
+434	  console.log("[CHAT HEIGHT AUDIT]", {
+435	    isOverlay,
+436	    wrapperClassName,
+437	    messageBoxClassName,
+438	    hasMaxH50vh: messageBoxClassName.includes("max-h-[50vh]"),
+439	    wrapperHasFlexCol: wrapperClassName.includes("flex flex-col"),
+440	  });
+441	
+442	  return (
+443	    <div
+444	      className={`
+445	        ${isOverlay ? "fixed bottom-2 left-4 right-4 z-40 max-w-md" : "w-full h-full"}
+446	        flex flex-col
+447	      `}
+448	    >
+449	      {/* Messages Container */}
+450	      <div
+451	        className={`
+452	          ${isOverlay ? "max-h-[50vh] pb-20" : "flex-1"}
+453	          overflow-y-auto mb-2
+454	          opacity-100
+455	          transition-opacity duration-500
+456	        `}
+457	        onMouseEnter={() => setFadeMessages(false)}
+458	        onTouchStart={() => setFadeMessages(false)}
+459	      >
+460	        {messages.length === 0 ? (
+461	          <div className="text-center py-4">
+462	            <p className="text-white/50 text-sm">
+463	              {isChatAvailable ? "No messages yet. Say hello!" : "Chat loading..."}
+464	            </p>
+465	          </div>
+466	        ) : (
+467	          <div className="space-y-2 px-1">
+468	            {messages.map((msg) => (
+469	              <div key={msg.id} className="group flex items-start gap-1">
+470	                <ChatMessage
+471	                  message={msg}
+472	                  isCurrentUser={msg.sender_id === user?.id}
+473	                  isOverlay={isOverlay}
+474	                  buyerName={buyerNames[msg.sender_id]}
+475	                />
+476	
+477	                {isSeller && msg.sender_role !== "seller" && (
+478	                  <DropdownMenu>
+479	                    <DropdownMenuTrigger asChild>
+480	                      <button className="p-1 opacity-0 group-hover:opacity-100 hover:bg-white/20 rounded">
+481	                        <MoreVertical className="w-4 h-4 text-white/60" />
+482	                      </button>
+483	                    </DropdownMenuTrigger>
+484	                    <DropdownMenuContent align="end">
+485	                      <DropdownMenuItem
+486	                        className="text-red-600"
+487	                        onClick={() => handleBanViewer(msg)}
+488	                      >
+489	                        <Ban className="w-4 h-4 mr-2" />
+490	                        Mute from chat
+491	                      </DropdownMenuItem>
+492	                    </DropdownMenuContent>
+493	                  </DropdownMenu>
+494	                )}
+495	              </div>
+496	            ))}
+497	            <div ref={messagesEndRef} />
+498	          </div>
+499	        )}
+500	      </div>
+501	
+502	      {/* Input Form */}
+503	      {console.log("[CHAT DEBUG] viewer user:", user)}
+504	      {console.log("[CHAT DEBUG] sellerId:", sellerId)}
+505	      {console.log("[CHAT DEBUG] showId:", showId)}
+506	      {user ? (
+507	        isChatBanned ? (
+508	          <div 
+509	            className={`
+510	              flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl w-full
+511	              ${isOverlay 
+512	                ? "bg-red-600/90 backdrop-blur-md border border-white/30" 
+513	                : "bg-red-600/80"
+514	              }
+515	            `}
+516	          >
+517	            <Ban className="w-4 h-4 text-white" />
+518	            <p className="text-xs text-white font-medium">You are banned from chatting</p>
+519	          </div>
+520	        ) : (
+521	          <form onSubmit={handleSend} className="flex gap-2">
+522	            <div className="flex-1 relative">
+523	              <Input
+524	                value={newMessage}
+525	                onChange={(e) => setNewMessage(e.target.value)}
+526	                onKeyPress={handleKeyPress}
+527	                placeholder={isChatAvailable ? "Type a message..." : "Chat ended"}
+528	                disabled={isSending || !isChatAvailable}
+529	                maxLength={500}
+530	                className={`
+531	                  ${isOverlay
+532	                    ? "bg-black/60 backdrop-blur-md border-white/20 text-white placeholder:text-white/50"
+533	                    : "bg-white/10 border-gray-600 text-white"
+534	                  }
+535	                  pr-12
+536	                `}
+537	              />
+538	              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-white/40">
+539	                {newMessage.length}/500
+540	              </span>
+541	            </div>
+542	          <Button
+543	            type="button"
+544	            onClick={handleSend}
+545	            disabled={!newMessage.trim() || isSending || !isChatAvailable}
+546	            className={`
+547	              ${isOverlay
+548	                ? "bg-purple-600 hover:bg-purple-700"
+549	                : "bg-purple-600 hover:bg-purple-700"
+550	              }
+551	              text-white
+552	            `}
+553	          >
+554	            <Send className="w-4 h-4" />
+555	          </Button>
+556	        </form>
+557	        )
+558	      ) : (
+559	        <div className="text-center py-2">
+560	          <p className="text-white/60 text-sm">Log in to chat</p>
+561	        </div>
+562	      )}
+563	
+564	      {/* Error Display */}
+565	      {sendError && (
+566	        <p className="text-red-400 text-xs mt-1 text-center">{sendError}</p>
+567	      )}
+568	
+569	      {/* Live Indicator */}
+570	      {isChatAvailable && (
+571	        <div className="flex items-center justify-center gap-1 mt-2">
+572	          <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
+573	          <span className="text-white/50 text-xs">Live Chat</span>
+574	        </div>
+575	      )}
+576	
+577	      {/* Viewer Ban Dialog */}
+578	      <ViewerBanDialog
+579	        open={!!banningViewer}
+580	        onOpenChange={() => setBanningViewer(null)}
+581	        viewer={banningViewer}
+582	        sellerId={sellerId}
+583	        showId={showId}
+584	      />
+585	    </div>
+586	  );
+587	}
+588	
+589	/**
+590	 * Individual Chat Message Component
+591	 */
+592	function ChatMessage({ message, isCurrentUser, isOverlay, buyerName }) {
+593	  const isSeller = message.sender_role === "seller";
+594	  const displayName = isSeller ? "Host" : (buyerName || "Buyer");
+595	
+596	  return (
+597	    <div
+598	      className={`
+599	        flex items-start gap-2
+600	        ${isCurrentUser ? "flex-row-reverse" : ""}
+601	      `}
+602	    >
+603	      {/* Message Text - Simple overlay style (no bubbles) */}
+604	      <div
+605	        className={`
+606	          ${isOverlay
+607	            ? "text-sm leading-tight"
+608	            : "max-w-[80%] rounded-lg px-3 py-1.5 " + (isCurrentUser ? "bg-purple-600" : "bg-gray-700")
+609	          }
+610	        `}
+611	      >
+612	        {/* Sender Name & Badge */}
+613	        <div className="flex items-center gap-1 mb-0.5">
+614	          {isSeller ? (
+615	            <Badge className="bg-purple-500/30 text-purple-200 text-[10px] px-1 py-0">
+616	              Host
+617	            </Badge>
+618	          ) : (
+619	            <span className="text-white/70 text-[10px] font-medium">
+620	              {displayName}
+621	            </span>
+622	          )}
+623	          <span className="text-white/50 text-[10px]">
+624	            {format(new Date(message.created_at), "h:mm a")}
+625	          </span>
+626	        </div>
+627	
+628	        {/* Message Text */}
+629	        <p className="text-white text-sm break-words">{message.message}</p>
+630	      </div>
+631	    </div>
+632	  );
+633	}
+634	
+635	// Named export for PLAYER_STATE equivalent
+636	export const CHAT_STATE = {
+637	  LOADING: "loading",
+638	  ACTIVE: "active",
+639	  ENDED: "ended",
+640	  ERROR: "error",
+641	};
+642	
+643	
+644	
+645	
+646	

@@ -1,0 +1,37 @@
+=== createLiveChatPoller ===
+src\api\liveChat.ts:251: * const { start, stop } = createLiveChatPoller(
+src\api\liveChat.ts:262:export function createLiveChatPoller(
+NOTE: createLiveChatPoller is NOT imported by any component. DEAD CODE.
+
+=== getLiveShowMessages ===
+src\api\liveChat.ts:62: * const { messages, error } = await getLiveShowMessages("show-uuid");
+src\api\liveChat.ts:65:export async function getLiveShowMessages(
+src\api\liveChat.ts:72:  console.log("[CHAT DEBUG] getLiveShowMessages - auth user:", await supabase.auth.getUser());
+src\api\liveChat.ts:73:  console.log("[CHAT DEBUG] getLiveShowMessages - showId:", showId);
+src\api\liveChat.ts:104:    console.log("[CHAT DEBUG] getLiveShowMessages - query result:", { data, error });
+src\api\liveChat.ts:282:      const { messages } = await getLiveShowMessages(showId, {
+src\components\chat\LiveChat.jsx:3:import { getLiveShowMessages, sendLiveShowMessage } from "@/api/liveChat";
+src\components\chat\LiveChat.jsx:72:      const result = await getLiveShowMessages(showId, { limit: 200 });
+src\components\chat\SupabaseLiveChat.jsx:20:  getLiveShowMessages,
+src\components\chat\SupabaseLiveChat.jsx:214:    const { messages: serverMessages, error } = await getLiveShowMessages(showId, {
+
+=== sendLiveShowMessage ===
+src\api\liveChat.ts:140: * const { message, error } = await sendLiveShowMessage(
+src\api\liveChat.ts:147:export async function sendLiveShowMessage(
+src\api\liveChat.ts:152:  console.log("[CHAT DEBUG] sendLiveShowMessage - auth user:", await supabase.auth.getUser());
+src\api\liveChat.ts:153:  console.log("[CHAT DEBUG] sendLiveShowMessage - showId:", showId, "senderRole:", senderRole);
+src\api\liveChat.ts:189:    console.log("[CHAT DEBUG] sendLiveShowMessage - insert result:", { data, error });
+src\components\chat\LiveChat.jsx:3:import { getLiveShowMessages, sendLiveShowMessage } from "@/api/liveChat";
+src\components\chat\LiveChat.jsx:84:      return await sendLiveShowMessage(showId, trimmedMessage, senderRole);
+src\components\chat\SupabaseLiveChat.jsx:21:  sendLiveShowMessage,
+src\components\chat\SupabaseLiveChat.jsx:344:    const { message, error } = await sendLiveShowMessage(
+
+=== liveChat.ts imports ===
+src\components\chat\LiveChat.jsx:3:import { getLiveShowMessages, sendLiveShowMessage } from "@/api/liveChat";
+src\components\chat\SupabaseLiveChat.jsx:19-23:import { getLiveShowMessages, sendLiveShowMessage, isLiveChatAvailable } from "@/api/liveChat";
+
+=== SUMMARY: Who polls / fetches? ===
+1. LiveChat: useQuery queryKey ['chat-messages', showId] -> queryFn calls getLiveShowMessages (React Query, no refetchInterval, staleTime 3000)
+2. SupabaseLiveChat: setInterval(pollMessages, 2500) -> pollMessages calls getLiveShowMessages directly (custom polling)
+3. LiveChatOverlay: useQuery queryKey ['chat-messages', showId] -> base44.entities.ChatMessage.filter (NOT liveChat API - different table!)
+4. createLiveChatPoller: UNUSED - no component imports it

@@ -1,0 +1,322 @@
+﻿1	/**
+2	 * Live Show Chat API
+3	 *
+4	 * Provides ephemeral chat functionality for live shows.
+5	 *
+6	 * Features:
+7	 * - Messages scoped to a show
+8	 * - Only accessible while show is live
+9	 * - No persistence after show ends (enforced by RLS)
+10	 * - Simple text messages only
+11	 *
+12	 * This is separate from the persistent messaging system.
+13	 */
+14	
+15	import { supabase } from "@/lib/supabase/supabaseClient";
+16	
+17	/**
+18	 * Live chat message
+19	 */
+20	export interface LiveChatMessage {
+21	  id: string;
+22	  show_id: string;
+23	  sender_id: string;
+24	  sender_role: "seller" | "viewer";
+25	  message: string;
+26	  created_at: string;
+27	  // Enriched fields (added client-side)
+28	  sender_name?: string;
+29	  sender_avatar?: string;
+30	}
+31	
+32	/**
+33	 * Result of fetching messages
+34	 */
+35	export interface GetMessagesResult {
+36	  messages: LiveChatMessage[];
+37	  error: string | null;
+38	}
+39	
+40	/**
+41	 * Result of sending a message
+42	 */
+43	export interface SendMessageResult {
+44	  message: LiveChatMessage | null;
+45	  error: string | null;
+46	}
+47	
+48	/**
+49	 * Get live chat messages for a show.
+50	 *
+51	 * Returns empty array if:
+52	 * - Show is not live (RLS blocks access)
+53	 * - No messages exist
+54	 * - Error occurs
+55	 *
+56	 * @param showId - The show ID to get messages for
+57	 * @param options - Optional query options
+58	 * @returns Messages sorted chronologically (oldest first)
+59	 *
+60	 * Example:
+61	 * ```typescript
+62	 * const { messages, error } = await getLiveShowMessages("show-uuid");
+63	 * ```
+64	 */
+65	export async function getLiveShowMessages(
+66	  showId: string | null,
+67	  options: {
+68	    limit?: number;
+69	    afterId?: string;
+70	  } = {}
+71	): Promise<GetMessagesResult> {
+72	  console.log("[CHAT DEBUG] getLiveShowMessages - auth user:", await supabase.auth.getUser());
+73	  console.log("[CHAT DEBUG] getLiveShowMessages - showId:", showId);
+74	
+75	  if (!showId) {
+76	    return { messages: [], error: null };
+77	  }
+78	
+79	  const { limit = 100, afterId } = options;
+80	
+81	  try {
+82	    let query = supabase
+83	      .from("live_show_messages")
+84	      .select("*")
+85	      .eq("show_id", showId)
+86	      .order("created_at", { ascending: true })
+87	      .limit(limit);
+88	
+89	    // If afterId provided, only get messages after that one
+90	    if (afterId) {
+91	      // Get the created_at of the after message first
+92	      const { data: afterMsg } = await supabase
+93	        .from("live_show_messages")
+94	        .select("created_at")
+95	        .eq("id", afterId)
+96	        .single();
+97	
+98	      if (afterMsg) {
+99	        query = query.gt("created_at", afterMsg.created_at);
+100	      }
+101	    }
+102	
+103	    const { data, error } = await query;
+104	    console.log("[CHAT DEBUG] getLiveShowMessages - query result:", { data, error });
+105	
+106	    if (error) {
+107	      // RLS error when show is not live - expected, return empty
+108	      if (error.code === "PGRST301" || error.message.includes("RLS")) {
+109	        return { messages: [], error: null };
+110	      }
+111	      console.warn("Failed to fetch live chat messages:", error.message);
+112	      return { messages: [], error: error.message };
+113	    }
+114	
+115	    return {
+116	      messages: (data as LiveChatMessage[]) || [],
+117	      error: null,
+118	    };
+119	  } catch (err) {
+120	    console.warn("Unexpected error fetching live chat messages:", err);
+121	    return { messages: [], error: "Failed to load messages" };
+122	  }
+123	}
+124	
+125	/**
+126	 * Send a message to the live chat.
+127	 *
+128	 * Will fail if:
+129	 * - User is not authenticated
+130	 * - Show is not live (RLS blocks)
+131	 * - Message is empty or too long
+132	 *
+133	 * @param showId - The show ID to send message to
+134	 * @param message - The message text (max 500 chars)
+135	 * @param senderRole - Role of the sender
+136	 * @returns The sent message or error
+137	 *
+138	 * Example:
+139	 * ```typescript
+140	 * const { message, error } = await sendLiveShowMessage(
+141	 *   "show-uuid",
+142	 *   "Hello everyone!",
+143	 *   "viewer"
+144	 * );
+145	 * ```
+146	 */
+147	export async function sendLiveShowMessage(
+148	  showId: string,
+149	  message: string,
+150	  senderRole: "seller" | "viewer"
+151	): Promise<SendMessageResult> {
+152	  console.log("[CHAT DEBUG] sendLiveShowMessage - auth user:", await supabase.auth.getUser());
+153	  console.log("[CHAT DEBUG] sendLiveShowMessage - showId:", showId, "senderRole:", senderRole);
+154	
+155	  // Validate input
+156	  const trimmedMessage = message.trim();
+157	  
+158	  if (!trimmedMessage) {
+159	    return { message: null, error: "Message cannot be empty" };
+160	  }
+161	
+162	  if (trimmedMessage.length > 500) {
+163	    return { message: null, error: "Message too long (max 500 characters)" };
+164	  }
+165	
+166	  if (!showId) {
+167	    return { message: null, error: "Show ID is required" };
+168	  }
+169	
+170	  try {
+171	    // Get current user
+172	    const { data: { user }, error: userError } = await supabase.auth.getUser();
+173	
+174	    if (userError || !user) {
+175	      return { message: null, error: "You must be logged in to chat" };
+176	    }
+177	
+178	    // Insert message
+179	    const { data, error } = await supabase
+180	      .from("live_show_messages")
+181	      .insert({
+182	        show_id: showId,
+183	        sender_id: user.id,
+184	        sender_role: senderRole,
+185	        message: trimmedMessage,
+186	      })
+187	      .select()
+188	      .single();
+189	    console.log("[CHAT DEBUG] sendLiveShowMessage - insert result:", { data, error });
+190	
+191	    if (error) {
+192	      // RLS error when show is not live
+193	      if (error.code === "PGRST301" || error.message.includes("RLS")) {
+194	        return { message: null, error: "Chat is only available during live shows" };
+195	      }
+196	      console.warn("Failed to send live chat message:", error.message);
+197	      return { message: null, error: "Failed to send message" };
+198	    }
+199	
+200	    return {
+201	      message: data as LiveChatMessage,
+202	      error: null,
+203	    };
+204	  } catch (err) {
+205	    console.warn("Unexpected error sending live chat message:", err);
+206	    return { message: null, error: "Failed to send message" };
+207	  }
+208	}
+209	
+210	/**
+211	 * Check if live chat is available for a show.
+212	 *
+213	 * AUTHORITATIVE: stream_status === "live" is the ONLY rule.
+214	 *
+215	 * @param showId - The show ID to check
+216	 * @returns True if chat is available (stream_status === "live")
+217	 */
+218	export async function isLiveChatAvailable(showId: string): Promise<boolean> {
+219	  if (!showId) {
+220	    return false;
+221	  }
+222	
+223	  try {
+224	    const { data, error } = await supabase
+225	      .from("shows")
+226	      .select("stream_status")
+227	      .eq("id", showId)
+228	      .single();
+229	
+230	    if (error || !data) {
+231	      return false;
+232	    }
+233	
+234	    // AUTHORITATIVE: Chat available during "starting" or "live"
+235	    return data.stream_status === "live" || data.stream_status === "starting";
+236	  } catch {
+237	    return false;
+238	  }
+239	}
+240	
+241	/**
+242	 * Create a live chat poller.
+243	 *
+244	 * @param showId - The show ID to poll
+245	 * @param onMessages - Callback when new messages arrive
+246	 * @param options - Polling options
+247	 * @returns Control functions
+248	 *
+249	 * Example:
+250	 * ```typescript
+251	 * const { start, stop } = createLiveChatPoller(
+252	 *   "show-uuid",
+253	 *   (messages) => setMessages(prev => [...prev, ...messages]),
+254	 *   { interval: 2000 }
+255	 * );
+256	 *
+257	 * start();
+258	 * // On unmount:
+259	 * stop();
+260	 * ```
+261	 */
+262	export function createLiveChatPoller(
+263	  showId: string,
+264	  onMessages: (messages: LiveChatMessage[]) => void,
+265	  options: { interval?: number } = {}
+266	): {
+267	  start: () => void;
+268	  stop: () => void;
+269	  poll: () => Promise<void>;
+270	} {
+271	  const { interval = 2000 } = options;
+272	
+273	  let timer: number | null = null;
+274	  let lastMessageId: string | null = null;
+275	  let isPolling = false;
+276	
+277	  const poll = async () => {
+278	    if (isPolling) return;
+279	    isPolling = true;
+280	
+281	    try {
+282	      const { messages } = await getLiveShowMessages(showId, {
+283	        limit: 50,
+284	        afterId: lastMessageId || undefined,
+285	      });
+286	
+287	      if (messages.length > 0) {
+288	        lastMessageId = messages[messages.length - 1].id;
+289	        onMessages(messages);
+290	      }
+291	    } catch (err) {
+292	      // Ignore polling errors
+293	    } finally {
+294	      isPolling = false;
+295	    }
+296	  };
+297	
+298	  const start = () => {
+299	    if (timer !== null) return;
+300	
+301	    // Poll immediately for initial messages
+302	    poll();
+303	
+304	    // Then poll on interval
+305	    timer = setInterval(poll, interval) as unknown as number;
+306	  };
+307	
+308	  const stop = () => {
+309	    if (timer !== null) {
+310	      clearInterval(timer);
+311	      timer = null;
+312	    }
+313	    lastMessageId = null;
+314	  };
+315	
+316	  return { start, stop, poll };
+317	}
+318	
+319	
+320	
+321	
+322	

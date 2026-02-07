@@ -1,0 +1,299 @@
+﻿1	import React, { useState, useEffect, useRef } from "react";
+2	import { supabase } from "@/lib/supabase/supabaseClient";
+3	import { getLiveShowMessages, sendLiveShowMessage } from "@/api/liveChat";
+4	import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+5	import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+6	import { Input } from "@/components/ui/input";
+7	import { Button } from "@/components/ui/button";
+8	import { Badge } from "@/components/ui/badge";
+9	import { Send, Users, MoreVertical, Ban, AlertCircle } from "lucide-react";
+10	import { format } from "date-fns";
+11	import {
+12	  DropdownMenu,
+13	  DropdownMenuContent,
+14	  DropdownMenuItem,
+15	  DropdownMenuTrigger,
+16	} from "@/components/ui/dropdown-menu";
+17	import ViewerBanDialog from "../host/ViewerBanDialog";
+18	import { Alert, AlertDescription } from "@/components/ui/alert";
+19	
+20	export default function LiveChat({ showId, isSeller = false, isEmbedded = false, sellerId = null }) {
+21	  const [message, setMessage] = useState("");
+22	  const [user, setUser] = useState(null);
+23	  const [banningViewer, setBanningViewer] = useState(null);
+24	  const messagesEndRef = useRef(null);
+25	  const queryClient = useQueryClient();
+26	
+27	  useEffect(() => {
+28	    loadUser();
+29	  }, []);
+30	
+31	  const loadUser = async () => {
+32	    try {
+33	      const { data, error } = await supabase.auth.getUser();
+34	      if (error) {
+35	        // Gracefully handle auth errors - user just can't chat
+36	        setUser(null);
+37	        return;
+38	      }
+39	      setUser(data?.user ?? null);
+40	    } catch (error) {
+41	      // Swallow errors - chat is non-critical, don't block rendering
+42	      setUser(null);
+43	    }
+44	  };
+45	
+46	  const { data: userBan } = useQuery({
+47	    queryKey: ['viewer-ban-check', sellerId, user?.id],
+48	    queryFn: async () => {
+49	      if (!sellerId || !user?.id) return null;
+50	      const { data, error } = await supabase
+51	        .from('viewer_bans')
+52	        .select('id, ban_type, reason')
+53	        .eq('seller_id', sellerId)
+54	        .eq('viewer_id', user.id)
+55	        .maybeSingle();
+56	
+57	      if (error) {
+58	        console.warn('[CHAT] Failed to check ban status:', error.message);
+59	        return null;
+60	      }
+61	      return data;
+62	    },
+63	    enabled: !!sellerId && !!user && !isSeller,
+64	    staleTime: 300000, // 5 minutes - ban status rarely changes
+65	    refetchInterval: false, // DO NOT poll continuously
+66	    refetchOnWindowFocus: false
+67	  });
+68	
+69	  const { data: messagesResult } = useQuery({
+70	    queryKey: ['chat-messages', showId],
+71	    queryFn: async () => {
+72	      const result = await getLiveShowMessages(showId, { limit: 200 });
+73	      return result;
+74	    },
+75	    enabled: !!showId,
+76	    staleTime: 3000
+77	  });
+78	
+79	  const messages = messagesResult?.messages || [];
+80	
+81	  const sendMessageMutation = useMutation({
+82	    mutationFn: async (trimmedMessage) => {
+83	      const senderRole = isSeller ? "seller" : "viewer";
+84	      return await sendLiveShowMessage(showId, trimmedMessage, senderRole);
+85	    },
+86	    onSuccess: (result) => {
+87	      if (!result.error) {
+88	        queryClient.invalidateQueries({ queryKey: ['chat-messages', showId] });
+89	        setMessage("");
+90	      }
+91	    },
+92	  });
+93	
+94	  const handleSend = (e) => {
+95	    e.preventDefault();
+96	    const trimmedMessage = message.trim();
+97	    if (!trimmedMessage || !user) return;
+98	
+99	    if (userBan && (userBan.ban_type === 'chat' || userBan.ban_type === 'view' || userBan.ban_type === 'full')) {
+100	      alert("You have been banned from chatting in this seller's shows.");
+101	      return;
+102	    }
+103	
+104	    sendMessageMutation.mutate(trimmedMessage);
+105	  };
+106	
+107	  const handleBanViewer = (msg) => {
+108	    console.log("ðŸš« Ban viewer clicked for message:", msg);
+109	    setBanningViewer({
+110	      user_id: msg.sender_id,
+111	      user_name: msg.sender_name || msg.sender_id
+112	    });
+113	  };
+114	
+115	  useEffect(() => {
+116	    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+117	  }, [messages]);
+118	
+119	  // Note: live_show_messages table doesn't support pinning
+120	  const regularMessages = messages;
+121	  const isChatBanned = userBan && (userBan.ban_type === 'chat' || userBan.ban_type === 'view' || userBan.ban_type === 'full');
+122	
+123	  if (isEmbedded) {
+124	    return (
+125	      <div className="flex flex-col h-full bg-white rounded-lg shadow-lg overflow-hidden">
+126	        <div className="flex-1 overflow-y-auto p-3 space-y-2 bg-gray-50 pb-4">
+127	          {regularMessages.map((msg) => (
+128	            <div key={msg.id} className="flex items-start gap-2 text-sm">
+129	              <div className="w-6 h-6 rounded-full bg-gradient-to-r from-purple-600 to-blue-600 flex items-center justify-center text-white font-semibold text-xs flex-shrink-0">
+130	                {(msg.sender_name || msg.sender_id)?.[0]?.toUpperCase() || '?'}
+131	              </div>
+132	              <div className="flex-1 min-w-0">
+133	                <div className="flex items-baseline gap-1">
+134	                  <span className={`font-semibold text-xs ${msg.sender_role === 'seller' ? 'text-purple-600' : 'text-gray-900'}`}>
+135	                    {msg.sender_name || msg.sender_id}
+136	                  </span>
+137	                  {msg.sender_role === 'seller' && (
+138	                    <Badge className="bg-purple-100 text-purple-800 border-purple-200 border text-[10px] px-1 py-0">
+139	                      Seller
+140	                    </Badge>
+141	                  )}
+142	                </div>
+143	                <p className="text-xs text-gray-700 break-words">{msg.message}</p>
+144	              </div>
+145	            </div>
+146	          ))}
+147	          <div ref={messagesEndRef} />
+148	        </div>
+149	
+150	        <form onSubmit={handleSend} className="p-4 bg-white border-t border-gray-200 flex-shrink-0 mb-2">
+151	          {isChatBanned ? (
+152	            <div className="text-center text-red-600 py-2 text-xs">
+153	              You are banned from chatting
+154	            </div>
+155	          ) : user ? (
+156	            <>
+157	            {console.log("[CHAT DEBUG DESKTOP] user:", user)}
+158	            {console.log("[CHAT DEBUG DESKTOP] isSeller:", isSeller)}
+159	            {console.log("[CHAT DEBUG DESKTOP] showId:", showId)}
+160	            <div className="flex gap-2">
+161	              <Input
+162	                value={message}
+163	                onChange={(e) => setMessage(e.target.value)}
+164	                placeholder="Message..."
+165	                className="flex-1 text-sm h-10"
+166	                maxLength={500}
+167	              />
+168	              <Button
+169	                type="submit"
+170	                size="sm"
+171	                className="bg-gradient-to-r from-purple-600 to-blue-600 h-10 px-4"
+172	                disabled={!message.trim()}
+173	              >
+174	                <Send className="w-4 h-4" />
+175	              </Button>
+176	            </div>
+177	            </>
+178	          ) : (
+179	            <div className="text-center text-gray-500 py-2 text-xs">
+180	              Log in to chat
+181	            </div>
+182	          )}
+183	        </form>
+184	      </div>
+185	    );
+186	  }
+187	
+188	  return (
+189	    <Card className="flex flex-col h-full border-0 shadow-lg">
+190	      <CardHeader className="bg-gradient-to-r from-purple-600 to-blue-600 text-white p-4">
+191	        <CardTitle className="flex items-center gap-2 text-lg">
+192	          <Users className="w-5 h-5" />
+193	          Live Chat
+194	          <Badge className="bg-white/20 text-white border-0 ml-auto">
+195	            {messages.length} messages
+196	          </Badge>
+197	        </CardTitle>
+198	      </CardHeader>
+199	
+200	      <CardContent className="flex-1 flex flex-col p-0 overflow-hidden">
+201	        <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-gray-50">
+202	          {regularMessages.length === 0 && (
+203	            <div className="text-center text-gray-500 py-8">
+204	              <Users className="w-12 h-12 text-gray-400 mx-auto mb-2" />
+205	              <p>No messages yet. Be the first to say hello!</p>
+206	            </div>
+207	          )}
+208	
+209	          {regularMessages.map((msg) => (
+210	            <div key={msg.id} className="flex items-start gap-3 group">
+211	              <div className="w-8 h-8 rounded-full bg-gradient-to-r from-purple-600 to-blue-600 flex items-center justify-center text-white font-semibold text-sm flex-shrink-0">
+212	                {(msg.sender_name || msg.sender_id)?.[0]?.toUpperCase() || '?'}
+213	              </div>
+214	
+215	              <div className="flex-1 min-w-0">
+216	                <div className="flex items-baseline gap-2 flex-wrap">
+217	                  <span className={`font-semibold text-sm ${msg.sender_role === 'seller' ? 'text-purple-600' : 'text-gray-900'}`}>
+218	                    {msg.sender_name || msg.sender_id}
+219	                  </span>
+220	                  {msg.sender_role === 'seller' && (
+221	                    <Badge className="bg-purple-100 text-purple-800 border-purple-200 border text-xs">
+222	                      Seller
+223	                    </Badge>
+224	                  )}
+225	                  <span className="text-xs text-gray-500">
+226	                    {format(new Date(msg.created_at), 'h:mm a')}
+227	                  </span>
+228	                </div>
+229	                <p className="text-sm text-gray-700 break-words">{msg.message}</p>
+230	              </div>
+231	
+232	              {isSeller && msg.sender_role !== 'seller' && (
+233	                <div className="opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
+234	                  <DropdownMenu>
+235	                    <DropdownMenuTrigger asChild>
+236	                      <button className="p-1 hover:bg-gray-200 rounded" title="More options">
+237	                        <MoreVertical className="w-4 h-4 text-gray-600" />
+238	                      </button>
+239	                    </DropdownMenuTrigger>
+240	                    <DropdownMenuContent align="end">
+241	                      <DropdownMenuItem
+242	                        className="text-red-600"
+243	                        onClick={() => handleBanViewer(msg)}
+244	                      >
+245	                        <Ban className="w-4 h-4 mr-2" />
+246	                        Mute from chat
+247	                      </DropdownMenuItem>
+248	                    </DropdownMenuContent>
+249	                  </DropdownMenu>
+250	                </div>
+251	              )}
+252	            </div>
+253	          ))}
+254	          <div ref={messagesEndRef} />
+255	        </div>
+256	
+257	        <form onSubmit={handleSend} className="p-4 bg-white border-t border-gray-200">
+258	          {isChatBanned ? (
+259	            <Alert className="border-red-500 bg-red-50">
+260	              <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0" />
+261	              <AlertDescription className="text-red-900 text-xs sm:text-sm">
+262	                You have been banned from chatting in this seller's shows.
+263	              </AlertDescription>
+264	            </Alert>
+265	          ) : user ? (
+266	            <div className="flex gap-2">
+267	              <Input
+268	                value={message}
+269	                onChange={(e) => setMessage(e.target.value)}
+270	                placeholder="Type a message..."
+271	                className="flex-1"
+272	                maxLength={500}
+273	              />
+274	              <Button
+275	                type="submit"
+276	                className="bg-gradient-to-r from-purple-600 to-blue-600"
+277	                disabled={!message.trim() || sendMessageMutation.isPending}
+278	              >
+279	                <Send className="w-4 h-4" />
+280	              </Button>
+281	            </div>
+282	          ) : (
+283	            <div className="text-center text-gray-500 py-2">
+284	              <p className="text-sm">Please log in to chat</p>
+285	            </div>
+286	          )}
+287	        </form>
+288	      </CardContent>
+289	
+290	      <ViewerBanDialog
+291	        open={!!banningViewer}
+292	        onOpenChange={() => setBanningViewer(null)}
+293	        viewer={banningViewer}
+294	        sellerId={sellerId}
+295	        showId={showId}
+296	      />
+297	    </Card>
+298	  );
+299	}

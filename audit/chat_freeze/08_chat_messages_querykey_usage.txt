@@ -1,0 +1,16 @@
+=== queryKey: ['chat-messages' ... (definition) ===
+src\components\chat\LiveChatOverlay.jsx:77:    queryKey: ['chat-messages', showId],
+src\components\chat\LiveChat.jsx:70:    queryKey: ['chat-messages', showId],
+
+=== invalidateQueries({ queryKey: ['chat-messages' ... ===
+src\components\chat\LiveChatOverlay.jsx:86:      queryClient.invalidateQueries({ queryKey: ['chat-messages', showId] });
+src\components\chat\LiveChatOverlay.jsx:95:      queryClient.invalidateQueries({ queryKey: ['chat-messages', showId] });
+src\components\chat\LiveChat.jsx:88:        queryClient.invalidateQueries({ queryKey: ['chat-messages', showId] });
+src\components\host\ViewerBanDialog.jsx:102:      queryClient.invalidateQueries({ queryKey: ['chat-messages'] });
+
+=== DUPLICATION ANALYSIS ===
+- LiveChatOverlay: queryKey ['chat-messages', showId] - fetches base44.entities.ChatMessage (different table!)
+- LiveChat: queryKey ['chat-messages', showId] - fetches getLiveShowMessages (live_show_messages)
+- BOTH use same queryKey but DIFFERENT data sources -> cache collision possible if both mount for same showId
+- ViewerBanDialog: invalidates ['chat-messages'] (predicate match, no showId) -> affects ALL chat-messages queries
+- SupabaseLiveChat: NO React Query - uses local state + setInterval. Does NOT use 'chat-messages' queryKey.

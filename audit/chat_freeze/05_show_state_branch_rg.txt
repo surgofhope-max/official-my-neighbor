@@ -1,0 +1,34 @@
+src\pages\LiveShow.jsx:132:  // SupabaseLiveChat renders when show is starting or live (lifecycle-based)
+src\pages\LiveShow.jsx:135:    show?.stream_status === 'starting' ||
+src\pages\LiveShow.jsx:136:    show?.stream_status === 'live';
+src\pages\LiveShow.jsx:512:        streamStatus: show?.stream_status,
+src\pages\LiveShow.jsx:516:      console.warn("[LiveShow] Buy blocked - show is not live (stream_status !== 'live')");
+src\pages\LiveShow.jsx:666:  // AUTHORITATIVE: stream_status === "live" is the ONLY rule for "is live"
+src\pages\LiveShow.jsx:670:  // - canShowProducts: Show products during "starting" and "live" (NOT "ended")
+src\pages\LiveShow.jsx:671:  // - canBuy: Only allow purchasing when stream_status === "live"
+src\pages\LiveShow.jsx:672:  const canShowProducts = show?.stream_status === "starting" || show?.stream_status === "live";
+src\pages\LiveShow.jsx:673:  const canBuy = isShowActuallyLive; // stream_status === "live"
+src\pages\LiveShow.jsx:675:  // Show ended or cancelled - graceful handling (no video, no buying)
+src\pages\LiveShow.jsx:676:  if (show.status === "ended" || show.status === "cancelled") {
+src\pages\LiveShow.jsx:683:              {show.status === "ended" ? "Show Has Ended" : "Show Cancelled"}
+src\pages\LiveShow.jsx:686:              {show.status === "ended"
+src\pages\LiveShow.jsx:687:                ? "This live show has ended. Check out other shows on the marketplace!"
+src\pages\LiveShow.jsx:704:  // Only show preview when there is NO stream_status yet; once "starting" or "live", render full stage UI
+src\pages\LiveShow.jsx:705:  if (show.status === "scheduled" && !show.stream_status) {
+src\pages\HostConsole.jsx:258:      // CRITICAL: If show is ended, redirect immediately
+src\pages\HostConsole.jsx:259:      if (fetchedShow.status === "ended" || fetchedShow.status === "cancelled") {
+src\pages\HostConsole.jsx:287:  // SupabaseLiveChat renders when show is starting or live (lifecycle-based)
+src\pages\HostConsole.jsx:290:    show?.stream_status === 'starting' ||
+src\pages\HostConsole.jsx:291:    show?.stream_status === 'live';
+src\pages\HostConsole.jsx:667:  const isBroadcastBlocked = show?.status === "ended" || show?.status === "cancelled";
+src\pages\HostConsole.jsx:670:  const isAlreadyLive = show?.stream_status === "live";
+src\api\liveChat.ts:213: * AUTHORITATIVE: stream_status === "live" is the ONLY rule.
+src\api\liveChat.ts:226:      .select("stream_status")
+src\api\liveChat.ts:234:    // AUTHORITATIVE: Chat available during "starting" or "live"
+src\api\liveChat.ts:235:    return data.stream_status === "live" || data.stream_status === "starting";
+supabase\migrations\20241214010000_live_show_messages.sql:37:CREATE OR REPLACE FUNCTION is_show_live(p_show_id UUID)
+supabase\migrations\20241214010000_live_show_messages.sql:44:      (stream_status = 'live' OR stream_status = 'starting')
+supabase\migrations\20241214010000_live_show_messages.sql:45:      OR is_streaming = true
+supabase\migrations\20241214010000_live_show_messages.sql:70:      is_show_live(show_id)
+supabase\migrations\20241214010000_live_show_messages.sql:82:    AND is_show_live(show_id)
+supabase\migrations\20241215010000_viewer_bans.sql:71:    AND is_show_live(show_id)

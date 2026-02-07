@@ -1,0 +1,26 @@
+src\components\chat\LiveChatOverlay.jsx:32:  useEffect(() => {
+src\components\chat\LiveChatOverlay.jsx:109:  useEffect(() => {
+src\components\chat\LiveChatOverlay.jsx:154:  useEffect(() => {
+src\components\chat\LiveChatOverlay.jsx:155:    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+src\components\chat\LiveChatOverlay.jsx:160:  const visibleMessages = regularMessages.slice(-5);
+src\components\chat\LiveChat.jsx:27:  useEffect(() => {
+src\components\chat\LiveChat.jsx:115:  useEffect(() => {
+src\components\chat\LiveChat.jsx:116:    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+src\components\chat\SupabaseLiveChat.jsx:68:  const [messages, setMessages] = useState([]);
+src\components\chat\SupabaseLiveChat.jsx:92:  const knownMessageIdsRef = useRef(new Set()); // Track IDs we've already processed
+src\components\chat\SupabaseLiveChat.jsx:99:  useEffect(() => {
+src\components\chat\SupabaseLiveChat.jsx:177:  useEffect(() => {
+src\components\chat\SupabaseLiveChat.jsx:226:        const onlyNew = serverMessages.filter((m) => !knownMessageIdsRef.current.has(m.id));
+src\components\chat\SupabaseLiveChat.jsx:230:          onlyNew.forEach((m) => knownMessageIdsRef.current.add(m.id));
+src\components\chat\SupabaseLiveChat.jsx:233:          if (knownMessageIdsRef.current.size > 150) {
+src\components\chat\SupabaseLiveChat.jsx:234:            const idsArray = Array.from(knownMessageIdsRef.current);
+src\components\chat\SupabaseLiveChat.jsx:235:            knownMessageIdsRef.current = new Set(idsArray.slice(-100));
+src\components\chat\SupabaseLiveChat.jsx:239:          setMessages((prev) => {
+src\components\chat\SupabaseLiveChat.jsx:242:            return merged.length > 100 ? merged.slice(-100) : merged;
+src\components\chat\SupabaseLiveChat.jsx:257:  useEffect(() => {
+src\components\chat\SupabaseLiveChat.jsx:276:  useEffect(() => {
+src\components\chat\SupabaseLiveChat.jsx:278:      messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
+src\components\chat\SupabaseLiveChat.jsx:299:  useEffect(() => {
+src\components\chat\SupabaseLiveChat.jsx:357:        setMessages((prev) => [...prev, message]);
+src\components\chat\SupabaseLiveChat.jsx:358:        knownMessageIdsRef.current.add(message.id);
+src\pages\Messages.jsx:194:    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });

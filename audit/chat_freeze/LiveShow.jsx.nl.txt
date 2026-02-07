@@ -1,0 +1,1591 @@
+﻿1	import React, { useState, useEffect, useRef, useCallback } from "react";
+1	import { supabase } from "@/lib/supabase/supabaseClient";
+1	import { useQuery } from "@tanstack/react-query";
+1	import { getProductById } from "@/api/products";
+1	import { getShowProductsByShowId } from "@/api/showProducts";
+1	import { adaptShowProductsForBuyer } from "@/lib/adapters/buyerShowProductsAdapter";
+1	import { getShowByIdWithStats } from "@/api/shows";
+1	import { getSellerById } from "@/api/sellers";
+1	import { getBuyerProfileByUserId } from "@/api/buyers";
+1	import { getEffectiveUserContext } from "@/lib/auth/effectiveUser";
+1	import { isAdmin } from "@/lib/auth/routeGuards";
+1	import { useSupabaseAuth } from "@/lib/auth/SupabaseAuthProvider";
+1	import { isShowLive } from "@/api/streamSync";
+1	import { Card, CardContent } from "@/components/ui/card";
+1	import { Button } from "@/components/ui/button";
+1	import { Badge } from "@/components/ui/badge";
+1	import {
+1	  Dialog,
+1	  DialogContent,
+1	  DialogHeader,
+1	  DialogTitle,
+1	} from "@/components/ui/dialog";
+1	import {
+1	  Radio,
+1	  Users,
+1	  MapPin,
+1	  ShoppingBag,
+1	  Lock,
+1	  ArrowLeft,
+1	  AlertCircle,
+1	  X as XIcon,
+1	  MessageCircle,
+1	  Minimize2,
+1	  Maximize2,
+1	  ChevronLeft,
+1	  ChevronRight,
+1	  Fingerprint,
+1	} from "lucide-react";
+1	import CheckoutOverlay from "../components/checkout/CheckoutOverlay";
+1	import WebRTCViewer from "../components/streaming/WebRTCViewer";
+1	import IVSPlayer, { PLAYER_STATE } from "../components/streaming/IVSPlayer";
+1	import { useNavigate } from "react-router-dom";
+1	import { createPageUrl } from "@/utils";
+1	import GiviTracker from "../components/sharing/GiviTracker";
+1	import ShareButton from "../components/sharing/ShareButton";
+1	import LiveChatOverlay from "../components/chat/LiveChatOverlay";
+1	import LiveChat from "../components/chat/LiveChat";
+1	import SupabaseLiveChat from "../components/chat/SupabaseLiveChat";
+1	import GIVIViewerOverlay from "../components/givi/GIVIViewerOverlay";
+1	import PickupInstructionsBubble from "../components/streaming/PickupInstructionsBubble";
+1	import SellerProfileModal from "../components/liveshow/SellerProfileModal";
+1	import GIVIWinnerBanner from "../components/givi/GIVIWinnerBanner";
+1	import FollowButton from "../components/marketplace/FollowButton";
+1	import { FEATURES } from "@/config/features";
+1	import { useDeviceClass } from "@/hooks/useDeviceClass";
+1	import { useMobilePortraitLock } from "@/hooks/useMobilePortraitLock";
+1	
+1	export default function LiveShow() {
+1	  const navigate = useNavigate();
+1	  const urlParams = new URLSearchParams(window.location.search);
+1	  const showId = urlParams.get('showId') || urlParams.get('showid');
+1	  
+1	  // Use canonical auth from SupabaseAuthProvider (single source of truth)
+1	  const { user, isLoadingAuth } = useSupabaseAuth();
+1	  console.log("[AUTH DEBUG][LiveShow] isLoadingAuth:", isLoadingAuth, "user:", user);
+1	
+1	  // Wait for auth to hydrate before rendering to prevent user=null flash
+1	  if (isLoadingAuth) {
+1	    return (
+1	      <div className="w-full h-full flex items-center justify-center text-white/70 text-sm">
+1	        Loading…
+1	      </div>
+1	    );
+1	  }
+1	  
+1	  const [buyerProfile, setBuyerProfile] = useState(null);
+1	  const [selectedProduct, setSelectedProduct] = useState(null);
+1	  const [showCheckout, setShowCheckout] = useState(false);
+1	  const [previousPrice, setPreviousPrice] = useState(null);
+1	  const [priceJustChanged, setPriceJustChanged] = useState(false);
+1	  const [expandedProduct, setExpandedProduct] = useState(null);
+1	  const [currentImageIndex, setCurrentImageIndex] = useState(0);
+1	  const [showChatOverlay, setShowChatOverlay] = useState(true);
+1	  const [showSellerProfile, setShowSellerProfile] = useState(false);
+1	  const [showWinnerBanner, setShowWinnerBanner] = useState(false);
+1	  const [showPurchaseBanner, setShowPurchaseBanner] = useState(false);
+1	  const [__auditSalesCount, set__auditSalesCount] = useState(null);
+1	  const carouselRef = useRef(null);
+1	  const lastSalesCountRef = useRef(null); // null = not initialized yet
+1	  
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  // SDK VIEWER COUNT REF: Stores latest viewer_count from Daily SDK
+1	  // Used as merge guard to prevent polling from overwriting live SDK value
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  const sdkViewerCountRef = useRef(null);
+1	
+1	  // Product state (replacing React Query)
+1	  const [allShowProducts, setAllShowProducts] = useState([]);
+1	  const [featuredProduct, setFeaturedProduct] = useState(null);
+1	
+1	  // Show and Seller state (replacing React Query)
+1	  const [show, setShow] = useState(null);
+1	  const [seller, setSeller] = useState(null);
+1	  const [showLoading, setShowLoading] = useState(true);
+1	  const [sellerLoading, setSellerLoading] = useState(false);
+1	  const [showError, setShowError] = useState(null);
+1	
+1	  // Role detection
+1	  const [isShowOwner, setIsShowOwner] = useState(false);
+1	  const [isAdminUser, setIsAdminUser] = useState(false);
+1	
+1	  // IVS Player state
+1	  const [ivsPlayerState, setIvsPlayerState] = useState(null);
+1	  const [ivsError, setIvsError] = useState(null);
+1	
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  // DEVICE-LOCKED CLASSIFICATION (NO VIEWPORT FLIPS)
+1	  // Prevents dual WebRTCViewer AND dual SupabaseLiveChat mount.
+1	  // Classification is determined ONCE by device type, NOT viewport width.
+1	  // This ensures SDKs don't remount on orientation change.
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  const { isMobileDevice, isDesktopDevice } = useDeviceClass();
+1	  useMobilePortraitLock(isMobileDevice);
+1	
+1	  // Determine which player to use based on streaming_provider field:
+1	  // - "ivs" with ivs_playback_url → IVSPlayer (OBS/external encoder)
+1	  // - "daily" → WebRTCViewer (tokenized per-show rooms)
+1	  // - fallback → WebRTCViewer (waiting state if not configured)
+1	  const useIvsPlayer = show?.streaming_provider === "ivs" && Boolean(show?.ivs_playback_url);
+1	
+1	  // Determine which chat system to use:
+1	  // SupabaseLiveChat renders when show is starting or live (lifecycle-based)
+1	  // Legacy chat is fallback for other states
+1	  const useSupabaseChat =
+1	    show?.stream_status === 'starting' ||
+1	    show?.stream_status === 'live';
+1	
+1	  useEffect(() => {
+1	    console.log("🎬 [LiveShow] MOUNT - showId:", showId);
+1	    
+1	    // AUDIT LOG - TEMPORARY: Verify Supabase client origin
+1	    console.log("[SUPABASE_CLIENT_AUDIT]", {
+1	      clientFile: "LiveShow.jsx imports from @/lib/supabase/supabaseClient",
+1	      hasServiceRole: false,
+1	      showId: showId
+1	    });
+1	    
+1	    window.scrollTo(0, 0);
+1	    
+1	    // Minimal overscroll prevention
+1	    document.body.style.overscrollBehavior = 'none';
+1	    document.documentElement.style.overscrollBehavior = 'none';
+1	    
+1	    return () => {
+1	      console.log("🧹 [LiveShow] UNMOUNT - showId:", showId);
+1	      document.body.style.overscrollBehavior = '';
+1	      document.documentElement.style.overscrollBehavior = '';
+1	    };
+1	  }, [showId]);
+1	
+1	  // Load buyer profile when canonical user becomes available
+1	  useEffect(() => {
+1	    console.log("[AUTH DEBUG][LiveShow] buyerProfile effect fired. user?.id:", user?.id);
+1	    const loadBuyerProfile = async () => {
+1	      if (!user) {
+1	        setBuyerProfile(null);
+1	        setIsAdminUser(false);
+1	        return;
+1	      }
+1	
+1	      setIsAdminUser(isAdmin(user));
+1	
+1	      // Get effective user context for impersonation support
+1	      const { effectiveUserId } = getEffectiveUserContext(user);
+1	
+1	      // Load buyer profile using Supabase API
+1	      try {
+1	        const profile = await getBuyerProfileByUserId(effectiveUserId);
+1	        setBuyerProfile(profile);
+1	      } catch (error) {
+1	        console.warn("[LiveShow] Failed to load buyer profile:", error);
+1	        setBuyerProfile(null);
+1	      }
+1	    };
+1	
+1	    loadBuyerProfile();
+1	  }, [user?.id]);
+1	
+1	  useEffect(() => {
+1	    if (expandedProduct) {
+1	      setCurrentImageIndex(0);
+1	    }
+1	  }, [expandedProduct?.id]);
+1	
+1	  // IVS Player event handlers
+1	  const handleIvsStateChange = (state) => {
+1	    setIvsPlayerState(state);
+1	    console.log("[LiveShow] IVS player state:", state);
+1	  };
+1	
+1	  const handleIvsError = (error) => {
+1	    setIvsError(error);
+1	    console.error("[LiveShow] IVS player error:", error);
+1	  };
+1	
+1	  // Load show data using Supabase API
+1	  const loadShow = async () => {
+1	    if (!showId) return;
+1	
+1	    try {
+1	      const showData = await getShowByIdWithStats(showId);
+1	      if (!showData) {
+1	        setShowError({ message: "Show not found", status: 404 });
+1	        setShowLoading(false);
+1	        return;
+1	      }
+1	
+1	      console.log("[SHOW_FETCH]", {
+1	        showId,
+1	        gotId: showData?.id,
+1	        sales_count: showData?.sales_count,
+1	        updated_at: showData?.updated_at
+1	      });
+1	
+1	      // ═══════════════════════════════════════════════════════════════════════
+1	      // MERGE GUARD: Preserve SDK viewer_count when server returns stale 0
+1	      // - If SDK has set a non-null count AND server returns 0, keep SDK value
+1	      // - Otherwise use server value (allows server authority when webhooks work)
+1	      // ═══════════════════════════════════════════════════════════════════════
+1	      setShow((prev) => {
+1	        const serverCount = showData?.viewer_count ?? 0;
+1	        const sdkCount = sdkViewerCountRef.current;
+1	        const shouldPreserveSdk = (sdkCount != null) && (serverCount === 0);
+1	        const mergedViewerCount = shouldPreserveSdk ? sdkCount : serverCount;
+1	
+1	        const prevMax = prev?.max_viewers ?? 0;
+1	        const serverMax = showData?.max_viewers ?? 0;
+1	        const mergedMax = Math.max(prevMax, serverMax, mergedViewerCount);
+1	
+1	        return {
+1	          ...(prev ?? {}),
+1	          ...showData,
+1	          viewer_count: mergedViewerCount,
+1	          max_viewers: mergedMax,
+1	        };
+1	      });
+1	      set__auditSalesCount(showData?.sales_count ?? null);
+1	      setShowError(null);
+1	      setShowLoading(false);
+1	
+1	      // Detect if current user is show owner
+1	      if (user && showData.seller_id) {
+1	        const { impersonatedSellerId } = getEffectiveUserContext(user);
+1	        const effectiveSellerId = impersonatedSellerId || null;
+1	
+1	        // User owns this show if they are the seller or impersonating the seller
+1	        if (effectiveSellerId === showData.seller_id) {
+1	          setIsShowOwner(true);
+1	        }
+1	      }
+1	    } catch (err) {
+1	      setShowError(err);
+1	      setShowLoading(false);
+1	    }
+1	  };
+1	
+1	  // Load seller data using Supabase API
+1	  const loadSeller = async () => {
+1	    if (!show?.seller_id) return;
+1	
+1	    setSellerLoading(true);
+1	    try {
+1	      const sellerData = await getSellerById(show.seller_id);
+1	      setSeller(sellerData);
+1	
+1	      // Check if current user owns this show (via seller_id match)
+1	      if (user) {
+1	        const { impersonatedSellerId } = getEffectiveUserContext(user);
+1	        const userSeller = impersonatedSellerId || null;
+1	        
+1	        // Also check if user's own seller profile matches
+1	        if (sellerData && sellerData.user_id === user.id) {
+1	          setIsShowOwner(true);
+1	        } else if (userSeller === show.seller_id) {
+1	          setIsShowOwner(true);
+1	        }
+1	      }
+1	    } catch (err) {
+1	      // Keep previous seller data on error
+1	    } finally {
+1	      setSellerLoading(false);
+1	    }
+1	  };
+1	
+1	  // Load show on mount and poll every 5 seconds (for sales_count updates / purchase banner)
+1	  useEffect(() => {
+1	    if (!showId) return;
+1	
+1	    loadShow();
+1	
+1	    const interval = setInterval(() => {
+1	      loadShow();
+1	    }, 5000);
+1	
+1	    return () => clearInterval(interval);
+1	  }, [showId]);
+1	
+1	  // Load seller when show changes
+1	  useEffect(() => {
+1	    if (show?.seller_id) {
+1	      loadSeller();
+1	    }
+1	  }, [show?.seller_id]);
+1	
+1	  // Check if current user is banned from viewing this seller's shows
+1	  const { data: viewerBan } = useQuery({
+1	    queryKey: ['viewer-ban-check', show?.seller_id, user?.id],
+1	    queryFn: async () => {
+1	      if (!show?.seller_id || !user?.id) return null;
+1	      const { data } = await supabase
+1	        .from('viewer_bans')
+1	        .select('id, ban_type, reason')
+1	        .eq('seller_id', show.seller_id)
+1	        .eq('viewer_id', user.id)
+1	        .maybeSingle();
+1	      return data;
+1	    },
+1	    enabled: !!show?.seller_id && !!user?.id
+1	  });
+1	
+1	  // Load products using show_products table (via adapter for compatibility)
+1	  const loadProducts = async () => {
+1	    if (!showId) return;
+1	
+1	    try {
+1	      // Fetch from show_products JOIN products (ordered by box_number)
+1	      const showProductsRaw = await getShowProductsByShowId(showId);
+1	      
+1	      // Adapt to flattened shape matching existing UI expectations
+1	      const allProducts = adaptShowProductsForBuyer(showProductsRaw);
+1	
+1	      // Filter to available products:
+1	      // - Not a GIVI product (now read from show_products.is_givi)
+1	      // - Has quantity > 0
+1	      // - Not sold out or hidden
+1	      const availableProducts = allProducts.filter(product => {
+1	        const isGIVI = product.is_givi === true;
+1	        const hasQuantity = (product.quantity || 0) > 0;
+1	        const isAvailable = product.status === "active";
+1	        return !isGIVI && hasQuantity && isAvailable;
+1	      });
+1	
+1	      setAllShowProducts(availableProducts);
+1	    } catch (error) {
+1	      // Keep previous data on error
+1	    }
+1	  };
+1	
+1	  // Load featured product
+1	  const loadFeaturedProduct = async () => {
+1	    if (!show?.featured_product_id) {
+1	      setFeaturedProduct(null);
+1	      return;
+1	    }
+1	
+1	    try {
+1	      const product = await getProductById(show.featured_product_id);
+1	      setFeaturedProduct(product);
+1	    } catch (error) {
+1	      // Keep previous data on error
+1	    }
+1	  };
+1	
+1	  // Poll for products every 20 seconds
+1	  useEffect(() => {
+1	    if (!showId) return;
+1	
+1	    loadProducts();
+1	
+1	    const interval = setInterval(() => {
+1	      loadProducts();
+1	    }, 20000);
+1	
+1	    return () => clearInterval(interval);
+1	  }, [showId]);
+1	
+1	  // Listen for instant inventory refresh signal (from checkout success)
+1	  useEffect(() => {
+1	    const handler = () => loadProducts();
+1	    window.addEventListener("lm:inventory_updated", handler);
+1	    return () => window.removeEventListener("lm:inventory_updated", handler);
+1	  }, [showId]);
+1	
+1	  // Detect sales_count changes and show global purchase banner
+1	  useEffect(() => {
+1	    if (!show || typeof show.sales_count !== "number") return;
+1	
+1	    // Initialize on first load
+1	    if (lastSalesCountRef.current === null) {
+1	      lastSalesCountRef.current = show.sales_count;
+1	      console.log("[BANNER] init sales_count:", show.sales_count);
+1	      return;
+1	    }
+1	
+1	    // Detect increment
+1	    if (show.sales_count > lastSalesCountRef.current) {
+1	      console.log("[BANNER] sales_count changed:", { from: lastSalesCountRef.current, to: show.sales_count });
+1	      setShowPurchaseBanner(true);
+1	      setTimeout(() => setShowPurchaseBanner(false), 2000);
+1	    }
+1	
+1	    lastSalesCountRef.current = show.sales_count;
+1	  }, [show?.sales_count]);
+1	
+1	  // Poll for featured product every 8 seconds
+1	  useEffect(() => {
+1	    if (!show?.featured_product_id) {
+1	      setFeaturedProduct(null);
+1	      return;
+1	    }
+1	
+1	    loadFeaturedProduct();
+1	
+1	    const interval = setInterval(() => {
+1	      loadFeaturedProduct();
+1	    }, 8000);
+1	
+1	    return () => clearInterval(interval);
+1	  }, [show?.featured_product_id]);
+1	
+1	  // Watch for GIVI winner selection - REDUCED polling to prevent 429
+1	  const { data: activeGIVI } = useQuery({
+1	    queryKey: ['viewer-givi-banner-trigger', show?.id],
+1	    queryFn: async () => {
+1	      if (!show?.id) return null;
+1	      try {
+1	        const events = await base44.entities.GIVIEvent.filter({
+1	          show_id: show.id,
+1	          status: "result"
+1	        }, '-created_date');
+1	        return events.length > 0 ? events[0] : null;
+1	      } catch (err) {
+1	        if (err?.response?.status === 429 || err?.message?.includes('429')) {
+1	          console.warn("⚠️ GIVI banner check rate limited");
+1	          return undefined;
+1	        }
+1	        throw err;
+1	      }
+1	    },
+1	    enabled: !!show?.id,
+1	    refetchInterval: 10000, // INCREASED from 3s to 10s
+1	    staleTime: 8000,
+1	    refetchOnWindowFocus: false,
+1	    keepPreviousData: true
+1	  });
+1	
+1	  // Trigger banner when winner is selected
+1	  useEffect(() => {
+1	    if (activeGIVI?.status === "result" && activeGIVI?.winner_ids?.length > 0) {
+1	      const bannerShownKey = `givi_banner_shown_${activeGIVI.id}`;
+1	      if (localStorage.getItem(bannerShownKey) !== 'true') {
+1	        console.log("🎊 Showing winner banner for viewer");
+1	        console.log("   Winner Names:", activeGIVI.winner_names);
+1	        setShowWinnerBanner(true);
+1	        localStorage.setItem(bannerShownKey, 'true');
+1	      }
+1	    }
+1	  }, [activeGIVI?.id, activeGIVI?.status, activeGIVI?.winner_ids]);
+1	
+1	  useEffect(() => {
+1	    if (featuredProduct && previousPrice !== null && featuredProduct.price !== previousPrice) {
+1	      setPriceJustChanged(true);
+1	
+1	      setTimeout(() => {
+1	        setPriceJustChanged(false);
+1	      }, 3000);
+1	    }
+1	
+1	    if (featuredProduct) {
+1	      setPreviousPrice(featuredProduct.price);
+1	    }
+1	  }, [featuredProduct?.price]);
+1	
+1	  // Auto-expand featured product when it changes
+1	  useEffect(() => {
+1	    if (featuredProduct?.id) {
+1	      // Check if we already expanded this specific product ID to avoid annoying re-opens if user closed it
+1	      // But since "Push to Live" implies forcing attention, we'll expand it.
+1	      // To prevent loop if user closes it and data refetches:
+1	      // We only expand if the expandedProduct is DIFFERENT (or null).
+1	      if (expandedProduct?.id !== featuredProduct.id) {
+1	         setExpandedProduct(featuredProduct);
+1	      }
+1	    }
+1	  }, [featuredProduct?.id]);
+1	
+1	  const handleBuyNow = (product) => {
+1	    // ═══════════════════════════════════════════════════════════════════════════
+1	    // DIAGNOSTIC LOGGING: Trace product ID at buy click
+1	    // ═══════════════════════════════════════════════════════════════════════════
+1	    console.log("[BUY NOW CLICK] product.id:", product?.id);
+1	    console.log("[BUY NOW CLICK] product.show_product_id:", product?.show_product_id);
+1	    console.log("[BUY NOW CLICK] product.product_id:", product?.product_id);
+1	    console.log("[BUY NOW CLICK] product.title:", product?.title);
+1	    console.log("[BUY NOW CLICK] full product:", product);
+1	
+1	    // ═══════════════════════════════════════════════════════════════════════════
+1	    // LIFECYCLE GATING: Only allow buying when show is actually live
+1	    // ═══════════════════════════════════════════════════════════════════════════
+1	    if (!isShowLive(show)) {
+1	      console.log("[GATE BLOCKED] reason: show not live", {
+1	        streamStatus: show?.stream_status,
+1	        showStatus: show?.status,
+1	        productId: product?.id,
+1	      });
+1	      console.warn("[LiveShow] Buy blocked - show is not live (stream_status !== 'live')");
+1	      return;
+1	    }
+1	    
+1	    if (!user) {
+1	      console.log("[GATE BLOCKED] reason: no user logged in", {
+1	        productId: product?.id,
+1	      });
+1	      // Store return URL for post-login redirect
+1	      sessionStorage.setItem('login_return_url', window.location.href);
+1	      navigate(createPageUrl("Login"));
+1	      return;
+1	    }
+1	
+1	    // Validate product is still available
+1	    if (product.status === "sold_out" || product.status === "locked") {
+1	      console.log("[GATE BLOCKED] reason: product status blocked", {
+1	        productStatus: product?.status,
+1	        productQuantity: product?.quantity,
+1	        productId: product?.id,
+1	        productTitle: product?.title,
+1	      });
+1	      return;
+1	    }
+1	    if ((product.quantity || 0) <= 0) {
+1	      console.log("[GATE BLOCKED] reason: product quantity <= 0", {
+1	        productQuantity: product?.quantity,
+1	        productStatus: product?.status,
+1	        productId: product?.id,
+1	        productTitle: product?.title,
+1	      });
+1	      return;
+1	    }
+1	
+1	    console.log("[SET selectedProduct]", {
+1	      selectedProductId: product?.id,
+1	      selectedTitle: product?.title,
+1	      selectedShowProductId: product?.show_product_id,
+1	    });
+1	    setSelectedProduct(product);
+1	    setExpandedProduct(null);
+1	    setShowCheckout(true);
+1	  };
+1	
+1	  // Daily SDK viewer count callback (UI-only, no DB writes)
+1	  // Also stores in ref for merge guard protection against polling overwrite
+1	  const handleViewerCountChange = useCallback((count) => {
+1	    // Store in ref for merge guard (protects against polling overwrite)
+1	    sdkViewerCountRef.current = Number.isFinite(count) ? count : sdkViewerCountRef.current;
+1	    // Update state for UI display
+1	    setShow((prev) => (prev ? { ...prev, viewer_count: count } : prev));
+1	  }, []);
+1	
+1	  const scrollCarousel = (direction) => {
+1	    if (carouselRef.current) {
+1	      const scrollAmount = 200;
+1	      const newPosition = direction === 'left'
+1	        ? carouselRef.current.scrollLeft - scrollAmount
+1	        : carouselRef.current.scrollLeft + scrollAmount;
+1	
+1	      carouselRef.current.scrollTo({
+1	        left: newPosition,
+1	        behavior: 'smooth'
+1	      });
+1	    }
+1	  };
+1	
+1	  const handlePrevImage = () => {
+1	    if (!expandedProduct?.image_urls) return;
+1	    setCurrentImageIndex((prev) => 
+1	      prev === 0 ? expandedProduct.image_urls.length - 1 : prev - 1
+1	    );
+1	  };
+1	
+1	  const handleNextImage = () => {
+1	    if (!expandedProduct?.image_urls) return;
+1	    setCurrentImageIndex((prev) => 
+1	      prev === expandedProduct.image_urls.length - 1 ? 0 : prev + 1
+1	    );
+1	  };
+1	
+1	  // CRITICAL: Check showId FIRST - if missing after params load, redirect
+1	  // But don't redirect during initial navigation - wait for params to resolve
+1	  if (!showId && !showLoading) {
+1	    console.log("❌ LiveShow - No showId after params loaded, redirecting");
+1	    navigate(createPageUrl("Marketplace"), { replace: true });
+1	    return null;
+1	  }
+1	
+1	  // CRITICAL: Only show loading on INITIAL load, not on refetch
+1	  const isInitialLoad = !show && showLoading;
+1	  const isInitialSellerLoad = show && !seller && sellerLoading;
+1	  
+1	  if (!showId) {
+1	    return null; // Will redirect via the effect above
+1	  }
+1	  
+1	  if (isInitialLoad || isInitialSellerLoad) {
+1	    return (
+1	      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-900 via-purple-900 to-blue-900">
+1	        <div className="text-center">
+1	          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white mx-auto mb-4"></div>
+1	          <p className="text-white text-lg">Loading show...</p>
+1	        </div>
+1	      </div>
+1	    );
+1	  }
+1	  
+1	  // Show not found error
+1	  if (showError?.status === 404 && !show) {
+1	    return (
+1	      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-900 via-purple-900 to-blue-900 p-4">
+1	        <Card className="max-w-md w-full">
+1	          <CardContent className="p-8 text-center">
+1	            <AlertCircle className="w-16 h-16 text-red-500 mx-auto mb-4" />
+1	            <h3 className="text-lg font-semibold text-white mb-2">Show Not Found</h3>
+1	            <p className="text-white/70 mb-4">
+1	              The show you're looking for doesn't exist or has been removed.
+1	            </p>
+1	            <Button
+1	              onClick={() => navigate(createPageUrl("Marketplace"), { replace: true })}
+1	              className="w-full"
+1	            >
+1	              Back to Marketplace
+1	            </Button>
+1	          </CardContent>
+1	        </Card>
+1	      </div>
+1	    );
+1	  }
+1	
+1	  // If we have show data (even stale), render the UI - don't flash loading
+1	  if (!show || !seller) {
+1	    // Only reached if initial load failed - show error
+1	    return (
+1	      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-900 via-purple-900 to-blue-900">
+1	        <div className="text-center">
+1	          <p className="text-white text-lg">Unable to load show</p>
+1	          <Button onClick={() => navigate(createPageUrl("Marketplace"))} className="mt-4">
+1	            Back to Marketplace
+1	          </Button>
+1	        </div>
+1	      </div>
+1	    );
+1	  }
+1	
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  // LIFECYCLE GATING: Explicit handling of show states
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  
+1	  // AUTHORITATIVE: stream_status === "live" is the ONLY rule for "is live"
+1	  const isShowActuallyLive = isShowLive(show);
+1	  
+1	  // UI FLAGS (derived, not stored):
+1	  // - canShowProducts: Show products during "starting" and "live" (NOT "ended")
+1	  // - canBuy: Only allow purchasing when stream_status === "live"
+1	  const canShowProducts = show?.stream_status === "starting" || show?.stream_status === "live";
+1	  const canBuy = isShowActuallyLive; // stream_status === "live"
+1	  
+1	  // Show ended or cancelled - graceful handling (no video, no buying)
+1	  if (show.status === "ended" || show.status === "cancelled") {
+1	    return (
+1	      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-900 via-purple-900 to-blue-900 p-4">
+1	        <Card className="max-w-md w-full">
+1	          <CardContent className="p-8 text-center">
+1	            <AlertCircle className="w-16 h-16 text-yellow-500 mx-auto mb-4" />
+1	            <h3 className="text-lg font-semibold text-white mb-2">
+1	              {show.status === "ended" ? "Show Has Ended" : "Show Cancelled"}
+1	            </h3>
+1	            <p className="text-white/70 mb-4">
+1	              {show.status === "ended" 
+1	                ? "This live show has ended. Check out other shows on the marketplace!"
+1	                : "This show has been cancelled by the seller."
+1	              }
+1	            </p>
+1	            <Button
+1	              onClick={() => navigate(createPageUrl("Marketplace"), { replace: true })}
+1	              className="w-full"
+1	            >
+1	              Browse Marketplace
+1	            </Button>
+1	          </CardContent>
+1	        </Card>
+1	      </div>
+1	    );
+1	  }
+1	  
+1	  // Scheduled show - preview-only UI (no video player, no product rail, no buying)
+1	  // Only show preview when there is NO stream_status yet; once "starting" or "live", render full stage UI
+1	  if (show.status === "scheduled" && !show.stream_status) {
+1	    return (
+1	      <div className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-blue-900 p-4">
+1	        <GiviTracker type="show" id={showId} />
+1	        
+1	        {/* Header */}
+1	        <div className="fixed top-0 left-0 right-0 z-50 bg-gradient-to-b from-black/80 via-black/40 to-transparent p-3">
+1	          <div className="flex items-center justify-between max-w-7xl mx-auto">
+1	            <Button
+1	              variant="ghost"
+1	              size="icon"
+1	              className="text-white hover:bg-white/20 rounded-full h-9 w-9 flex-shrink-0"
+1	              onClick={() => navigate(createPageUrl("Marketplace"))}
+1	            >
+1	              <ArrowLeft className="w-4 h-4" />
+1	            </Button>
+1	            <div className="flex-1 text-center px-2">
+1	              <h1 className="text-white font-bold text-sm line-clamp-1 leading-tight">{show.title}</h1>
+1	              <p className="text-purple-300 text-xs font-medium">
+1	                {seller?.business_name || "Loading..."}
+1	              </p>
+1	            </div>
+1	            <div className="w-9" /> {/* Spacer for alignment */}
+1	          </div>
+1	        </div>
+1	        
+1	        {/* Preview Content */}
+1	        <div className="flex flex-col items-center justify-center min-h-screen pt-16 pb-8">
+1	          {/* Show Preview Image */}
+1	          <div className="relative w-full max-w-2xl aspect-video rounded-2xl overflow-hidden mb-8">
+1	            {show.thumbnail_url ? (
+1	              <img
+1	                src={show.thumbnail_url}
+1	                alt={show.title}
+1	                className="w-full h-full object-cover"
+1	              />
+1	            ) : (
+1	              <div className="w-full h-full bg-gradient-to-br from-purple-800 to-blue-800 flex items-center justify-center">
+1	                <Radio className="w-20 h-20 text-white/30" />
+1	              </div>
+1	            )}
+1	            <div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent" />
+1	            
+1	            {/* Scheduled Badge */}
+1	            <div className="absolute top-4 left-4">
+1	              <Badge className="bg-blue-500/90 text-white border-0 px-3 py-1">
+1	                <Radio className="w-3 h-3 mr-1" />
+1	                SCHEDULED
+1	              </Badge>
+1	            </div>
+1	          </div>
+1	          
+1	          {/* Show Details */}
+1	          <Card className="max-w-md w-full bg-white/10 backdrop-blur-md border-white/20">
+1	            <CardContent className="p-6 text-center">
+1	              <h2 className="text-2xl font-bold text-white mb-2">{show.title}</h2>
+1	              <p className="text-white/70 mb-4">{show.description || "No description provided"}</p>
+1	              
+1	              {/* Seller Info */}
+1	              <div className="flex items-center justify-center gap-3 mb-6">
+1	                {seller?.profile_image_url && (
+1	                  <img
+1	                    src={seller.profile_image_url}
+1	                    alt={seller.business_name}
+1	                    className="w-10 h-10 rounded-full object-cover"
+1	                  />
+1	                )}
+1	                <div className="text-left">
+1	                  <p className="text-white font-medium">{seller?.business_name}</p>
+1	                  {seller?.pickup_city && (
+1	                    <p className="text-white/60 text-xs flex items-center gap-1">
+1	                      <MapPin className="w-3 h-3" />
+1	                      {seller.pickup_city}, {seller.pickup_state}
+1	                    </p>
+1	                  )}
+1	                </div>
+1	              </div>
+1	              
+1	              {/* Scheduled Time */}
+1	              {show.scheduled_start_time && (
+1	                <div className="bg-white/10 rounded-lg p-4 mb-4">
+1	                  <p className="text-white/60 text-sm mb-1">Starting at</p>
+1	                  <p className="text-white font-bold text-lg">
+1	                    {new Date(show.scheduled_start_time).toLocaleString()}
+1	                  </p>
+1	                </div>
+1	              )}
+1	              
+1	              <p className="text-white/60 text-sm">
+1	                Products and buying will be available once the show goes live.
+1	              </p>
+1	            </CardContent>
+1	          </Card>
+1	        </div>
+1	      </div>
+1	    );
+1	  }
+1	
+1	  // Check if user is banned from viewing this seller's shows
+1	  if (viewerBan && (viewerBan.ban_type === 'view' || viewerBan.ban_type === 'full')) {
+1	    return (
+1	      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-900 via-purple-900 to-blue-900 p-4">
+1	        <Card className="max-w-md w-full border-2 border-red-500">
+1	          <CardContent className="p-8 text-center">
+1	            <AlertCircle className="w-16 h-16 text-red-500 mx-auto mb-4" />
+1	            <h3 className="text-lg font-semibold text-white mb-2">Access Restricted</h3>
+1	            <p className="text-white/70 mb-4">
+1	              You have been banned from viewing shows from {seller.business_name}.
+1	            </p>
+1	            {viewerBan.reason && (
+1	              <div className="bg-red-500/20 border border-red-500/30 rounded-lg p-3 mb-4">
+1	                <p className="text-sm text-red-200">
+1	                  <strong>Reason:</strong> {viewerBan.reason}
+1	                </p>
+1	              </div>
+1	            )}
+1	            <Button
+1	              onClick={() => navigate(createPageUrl("Marketplace"))}
+1	              className="w-full"
+1	            >
+1	              Back to Marketplace
+1	            </Button>
+1	          </CardContent>
+1	        </Card>
+1	      </div>
+1	    );
+1	  }
+1	
+1	  const productImages = expandedProduct?.image_urls || [];
+1	  const hasMultipleImages = productImages.length > 1;
+1	
+1	  return (
+1	    <div style={{ 
+1	      overscrollBehavior: 'none',
+1	      touchAction: 'pan-y'
+1	    }}>
+1	      <GiviTracker type="show" id={showId} />
+1	
+1	      {/* GIVI Winner Banner - Gated by feature flag */}
+1	      {FEATURES.givi && (
+1	        <GIVIWinnerBanner 
+1	          show={showWinnerBanner}
+1	          winnerName={activeGIVI?.winner_names?.[0]}
+1	          onDismiss={() => setShowWinnerBanner(false)}
+1	        />
+1	      )}
+1	
+1	      {/* Global Purchase Confirmation Banner */}
+1	      {showPurchaseBanner && (
+1	        <div
+1	          style={{
+1	            position: "fixed",
+1	            top: "16px",
+1	            left: "50%",
+1	            transform: "translateX(-50%)",
+1	            zIndex: 99999,
+1	            pointerEvents: "none"
+1	          }}
+1	          className="bg-green-600 text-white px-5 py-2 rounded-full shadow-lg text-sm font-semibold"
+1	        >
+1	          🎉 New purchase just made!
+1	        </div>
+1	      )}
+1	
+1	      {/* CRITICAL: GIVI Overlay - Rendered BEFORE stream elements with high z-index */}
+1	      {/* Must appear even when "Waiting for Stream" is shown */}
+1	      {/* Gated by feature flag */}
+1	      {FEATURES.givi && show && seller && (
+1	        <GIVIViewerOverlay show={show} seller={seller} />
+1	      )}
+1	
+1	      {/* Pickup Instructions Bubble */}
+1	      <PickupInstructionsBubble pickupInstructions={show.pickup_instructions} />
+1	
+1	      {/* MOBILE VIEW - Original Layout */}
+1	      {/* CONTAINER GATED BY DEVICE CLASS: Only mount on mobile devices.
+1	          This prevents desktop layout from appearing on phones in landscape. */}
+1	      {isMobileDevice && (
+1	      <div>
+1	        <div className="fixed inset-0 z-0">
+1	          {/* Conditional video player: IVS for AWS IVS streams, WebRTC for Daily.co */}
+1	          {/* Container is device-gated, so we only need to check IVS vs Daily */}
+1	          {useIvsPlayer ? (
+1	            <IVSPlayer
+1	              show={show}
+1	              onStateChange={handleIvsStateChange}
+1	              onError={handleIvsError}
+1	              autoplay={true}
+1	              muted={false}
+1	            />
+1	          ) : (
+1	            <WebRTCViewer
+1	              show={show}
+1	              onViewerCountChange={handleViewerCountChange}
+1	            />
+1	          )}
+1	        </div>
+1	
+1	        {/* Share + Follow Overlay - Buyer Only */}
+1	        {!isShowOwner && seller && (
+1	          <div className="fixed top-16 right-3 z-40 flex flex-col gap-3">
+1	            <FollowButton
+1	              seller={seller}
+1	              variant="ghost"
+1	              size="icon"
+1	              className="text-white hover:bg-white/20 rounded-full h-10 w-10 p-0 bg-black/40 backdrop-blur-sm [&_svg]:w-5 [&_svg]:h-5"
+1	            />
+1	            <ShareButton
+1	              type="show"
+1	              id={showId}
+1	              title={show?.title}
+1	              description={show?.description}
+1	              imageUrl={show?.thumbnail_url}
+1	              variant="ghost"
+1	              size="icon"
+1	              showLabel={false}
+1	              className="text-white hover:bg-white/20 rounded-full h-10 w-10 p-0 bg-black/40 backdrop-blur-sm"
+1	            />
+1	          </div>
+1	        )}
+1	
+1	        {/* Header */}
+1	        <div className="fixed top-0 left-0 right-0 z-50 bg-gradient-to-b from-black/80 via-black/40 to-transparent p-3">
+1	          <div className="flex items-center justify-between max-w-7xl mx-auto">
+1	            <Button
+1	              variant="ghost"
+1	              size="icon"
+1	              className="text-white hover:bg-white/20 rounded-full h-9 w-9 flex-shrink-0"
+1	              onClick={() => navigate(createPageUrl("Marketplace"))}
+1	            >
+1	              <ArrowLeft className="w-4 h-4" />
+1	            </Button>
+1	
+1	            <button
+1	              onClick={() => setShowSellerProfile(true)}
+1	              className="text-white hover:bg-white/20 rounded-full h-9 w-9 flex items-center justify-center transition-colors flex-shrink-0 mx-3"
+1	            >
+1	              <Users className="w-4 h-4" />
+1	            </button>
+1	
+1	            <div className="flex-1 text-center px-2">
+1	              <h1 className="text-white font-bold text-sm line-clamp-1 leading-tight">{show.title}</h1>
+1	              <button
+1	                onClick={() => setShowSellerProfile(true)}
+1	                className="text-purple-300 hover:text-purple-100 text-xs font-medium"
+1	              >
+1	                {seller?.business_name || "Loading..."}
+1	              </button>
+1	            </div>
+1	
+1	            <div className="flex items-center gap-2">
+1	              <Badge className="bg-black/60 backdrop-blur-sm text-white border-white/30 text-xs px-2 py-0.5">
+1	                <Users className="w-3 h-3 mr-1" />
+1	                {show.viewer_count || 0}
+1	              </Badge>
+1	              {isShowActuallyLive && (
+1	                <Badge className="bg-red-500 text-white border-0 animate-pulse text-xs px-2 py-0.5">
+1	                  <Radio className="w-3 h-3 mr-1" />
+1	                  LIVE
+1	                </Badge>
+1	              )}
+1	            </div>
+1	          </div>
+1	        </div>
+1	
+1	        {/* Chat Messages Overlay */}
+1	        {/* Container is device-gated (isMobileDevice), so chat mounts only on mobile.
+1	            This prevents double polling and freeze under load. */}
+1	        {(() => { console.log("[AUTH DEBUG][LiveShow] rendering mobile chat with user:", user); return null; })()}
+1	        {(() => {
+1	          console.log("[CHAT PROPS DEBUG][LiveShow][MOBILE]", {
+1	            showId,
+1	            sellerId: show?.seller_id,
+1	            isShowOwner,
+1	            userId: user?.id ?? null,
+1	            userRole: user?.role ?? null,
+1	          });
+1	          return null;
+1	        })()}
+1	        {showChatOverlay && (
+1	          useSupabaseChat ? (
+1	            <SupabaseLiveChat
+1	              showId={showId}
+1	              sellerId={show?.seller_id}
+1	              isSeller={isShowOwner}
+1	              user={user}
+1	              isOverlay={true}
+1	              onClose={() => setShowChatOverlay(false)}
+1	              onMessageSeller={() => {
+1	                // Navigate to messages page with seller context
+1	                navigate(createPageUrl("Messages") + `?sellerId=${show?.seller_id}`);
+1	              }}
+1	            />
+1	          ) : (
+1	            <LiveChatOverlay
+1	              showId={showId}
+1	              sellerId={show?.seller_id}
+1	              isSeller={false}
+1	              onClose={() => setShowChatOverlay(false)}
+1	            />
+1	          )
+1	        )}
+1	
+1	        {/* Product Carousel - Show during "starting" and "live", hide when "ended" */}
+1	        {canShowProducts && allShowProducts.length > 0 && (
+1	          <div 
+1	            className="fixed left-0 right-0 z-[90] animate-fade-in"
+1	            style={{ 
+1	              bottom: '60px', // Moved down slightly
+1	            }}
+1	          >
+1	            <div className="relative px-3">
+1	              <div
+1	                ref={carouselRef}
+1	                className="flex gap-2 overflow-x-auto scrollbar-hide pb-2"
+1	                style={{
+1	                  scrollSnapType: 'x mandatory',
+1	                  WebkitOverflowScrolling: 'touch'
+1	                }}
+1	              >
+1	              {allShowProducts.map((product) => {
+1	                const isFeatured = product.id === featuredProduct?.id;
+1	                const isPriceChanging = isFeatured && priceJustChanged;
+1	                
+1	                return (
+1	                  <div
+1	                    key={product.id}
+1	                    onClick={() => setExpandedProduct(product)}
+1	                    className={`flex-shrink-0 cursor-pointer transition-all duration-200 hover:scale-105 ${
+1	                      isFeatured ? 'animate-glow-yellow' : ''
+1	                    }`}
+1	                    style={{
+1	                      width: '70px',  // Reduced size by ~22%
+1	                      height: '70px', // Reduced size by ~22%
+1	                      scrollSnapAlign: 'start',
+1	                      ...(isFeatured && {
+1	                        filter: 'drop-shadow(0 0 12px rgba(250, 204, 21, 0.8)) drop-shadow(0 0 20px rgba(250, 204, 21, 0.5))'
+1	                      })
+1	                    }}
+1	                  >
+1	                    <div className="relative w-full h-full rounded-2xl overflow-hidden shadow-2xl bg-white/95 backdrop-blur-sm">
+1	                      {product.image_urls?.[0] ? (
+1	                        <img
+1	                          src={product.image_urls[0]}
+1	                          alt={product.title}
+1	                          className="w-full h-full object-cover"
+1	                        />
+1	                      ) : (
+1	                        <div className="w-full h-full flex items-center justify-center bg-gray-100">
+1	                          <ShoppingBag className="w-8 h-8 text-gray-400" />
+1	                        </div>
+1	                      )}
+1	
+1	                      {/* Box Number Bubble */}
+1	                      {product.box_number && (
+1	                        <div className="absolute -top-1 -left-1 w-6 h-6 rounded-full bg-purple-600 text-white flex items-center justify-center text-[10px] font-black shadow-lg">
+1	                          {product.box_number}
+1	                        </div>
+1	                      )}
+1	
+1	                      <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 to-transparent p-1.5">
+1	                        <p className="text-white text-xs font-bold text-center leading-none">
+1	                          ${product.price?.toFixed(2)}
+1	                        </p>
+1	                      </div>
+1	
+1	                      {isFeatured && (
+1	                        <div className="absolute top-1 right-1">
+1	                          <Badge className="bg-yellow-400 text-gray-900 text-[9px] px-1.5 py-0.5 h-auto leading-none">
+1	                            ⭐
+1	                          </Badge>
+1	                        </div>
+1	                      )}
+1	
+1	                      {isPriceChanging && (
+1	                        <div className="absolute inset-0 bg-gradient-to-r from-yellow-400/50 to-orange-500/50 animate-pulse"></div>
+1	                      )}
+1	                    </div>
+1	                  </div>
+1	                );
+1	              })}
+1	            </div>
+1	
+1	              <div className="absolute left-0 top-0 bottom-2 w-8 bg-gradient-to-r from-black/40 to-transparent pointer-events-none"></div>
+1	              <div className="absolute right-0 top-0 bottom-2 w-8 bg-gradient-to-l from-black/40 to-transparent pointer-events-none"></div>
+1	            </div>
+1	          </div>
+1	        )}
+1	
+1	        {/* FIXED SIZE Product Detail Card */}
+1	        {expandedProduct && (
+1	        <div 
+1	          className="fixed left-4 right-4 z-[100] animate-slide-up flex justify-center"
+1	          style={{ bottom: '150px' }}
+1	        >
+1	          <div 
+1	            className="backdrop-blur-md rounded-2xl shadow-xl w-full max-w-sm border border-white/10 overflow-hidden bg-black/30"
+1	            style={{ height: '220px' }} // FIXED HEIGHT ENFORCED
+1	          >
+1	            {/* Close Button - Absolute positioning */}
+1	            <div className="absolute top-2 right-2 z-30">
+1	              <Button
+1	                variant="ghost"
+1	                size="icon"
+1	                onClick={() => setExpandedProduct(null)}
+1	                className="text-white hover:bg-black/30 h-8 w-8 rounded-full bg-black/10 backdrop-blur-sm"
+1	              >
+1	                <XIcon className="w-5 h-5" />
+1	              </Button>
+1	            </div>
+1	
+1	            <div className="flex h-full">
+1	              {/* Left - Full Height Image (40%) */}
+1	              <div className="w-[40%] relative bg-black/20 border-r border-white/10">
+1	                {productImages.length > 0 ? (
+1	                  <>
+1	                    <img
+1	                      src={productImages[currentImageIndex]}
+1	                      alt={expandedProduct.title}
+1	                      className="absolute inset-0 w-full h-full object-cover"
+1	                    />
+1	                    {hasMultipleImages && (
+1	                      <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex gap-1 z-10">
+1	                        {productImages.map((_, index) => (
+1	                          <button
+1	                            key={index}
+1	                            onClick={(e) => {
+1	                              e.stopPropagation();
+1	                              setCurrentImageIndex(index);
+1	                            }}
+1	                            className={`h-1 rounded-full transition-all shadow-sm ${
+1	                              index === currentImageIndex ? 'bg-white w-3' : 'bg-white/50 w-1'
+1	                            }`}
+1	                          />
+1	                        ))}
+1	                      </div>
+1	                    )}
+1	                    {/* Simple nav arrows if needed, but dots usually suffice for small cards */}
+1	                    {hasMultipleImages && (
+1	                      <button
+1	                         onClick={(e) => { e.stopPropagation(); handleNextImage(); }}
+1	                         className="absolute inset-0 w-full h-full z-0"
+1	                         aria-label="Next Image"
+1	                      />
+1	                    )}
+1	                  </>
+1	                ) : (
+1	                  <div className="absolute inset-0 flex items-center justify-center">
+1	                    <ShoppingBag className="w-10 h-10 text-white/30" />
+1	                  </div>
+1	                )}
+1	              </div>
+1	
+1	              {/* Right - Fixed Content (60%) */}
+1	              <div className="w-[60%] p-3 flex flex-col relative">
+1	                
+1	                {/* Top Section: Price & Title */}
+1	                <div className="flex-1 min-h-0 flex flex-col">
+1	                  {/* Price - Prominent */}
+1	                  <div className="flex items-baseline justify-between mb-1">
+1	                    <div className="flex flex-col">
+1	                       <p className="text-3xl font-black text-white leading-none drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]">
+1	                        ${expandedProduct.price?.toFixed(0)}
+1	                        <span className="text-lg align-top opacity-80">
+1	                          {(expandedProduct.price % 1).toFixed(2).substring(1)}
+1	                        </span>
+1	                      </p>
+1	                      <p className="text-[10px] font-bold text-green-400 uppercase tracking-wider mt-0.5">
+1	                        {expandedProduct.quantity} Available
+1	                      </p>
+1	                    </div>
+1	                  </div>
+1	
+1	                  {/* Title - STRICT 1 Line */}
+1	                  <h4 className="font-bold text-white text-lg leading-tight truncate mb-1 drop-shadow-md pr-6">
+1	                    {expandedProduct.title}
+1	                  </h4>
+1	                  
+1	                  {/* Description - STRICT 2 Lines */}
+1	                  <p className="text-xs text-white/80 leading-snug line-clamp-2 drop-shadow-md">
+1	                    {expandedProduct.description || "No description provided."}
+1	                  </p>
+1	                  {/* Optional 'More' indicator if description is long */}
+1	                  {expandedProduct.description?.length > 60 && (
+1	                     <span className="text-[10px] text-blue-300 mt-0.5">more info &rarr;</span>
+1	                  )}
+1	                </div>
+1	
+1	                {/* Bottom Section: Thumbprint Button */}
+1	                <div className="mt-2 relative z-20">
+1	                  <button
+1	                    className={`w-full h-12 relative group flex items-center justify-center gap-3 transition-all rounded-xl overflow-hidden
+1	                      ${!canBuy ? 'bg-gray-800/80 cursor-not-allowed' :
+1	                        expandedProduct.status === 'locked' ? 'bg-gray-800/80 cursor-not-allowed' : 
+1	                        expandedProduct.status === 'sold_out' ? 'bg-gray-800/80 cursor-not-allowed' : 
+1	                        'hover:scale-[1.02] active:scale-95'
+1	                      }`}
+1	                    onClick={() => handleBuyNow(expandedProduct)}
+1	                    disabled={!canBuy || expandedProduct.status === "locked" || expandedProduct.status === "sold_out"}
+1	                  >
+1	                    {/* Background Aura for Active State */}
+1	                    {canBuy && expandedProduct.status !== 'locked' && expandedProduct.status !== 'sold_out' && (
+1	                       <div className="absolute inset-0 bg-gradient-to-r from-[#00FF2A]/10 to-[#4D9FFF]/10 animate-pulse-slow"></div>
+1	                    )}
+1	
+1	                    {!canBuy ? (
+1	                       <span className="text-gray-400 font-bold text-sm">Waiting for host to go live...</span>
+1	                    ) : expandedProduct.status === "locked" ? (
+1	                       <span className="text-gray-400 font-bold flex items-center gap-2"><Lock className="w-4 h-4"/> LOCKED</span>
+1	                    ) : expandedProduct.status === "sold_out" ? (
+1	                       <span className="text-gray-400 font-bold">SOLD OUT</span>
+1	                    ) : (
+1	                      <>
+1	                        {/* Radiant Thumbprint */}
+1	                        <div className="relative">
+1	                           <div className="absolute inset-0 bg-[#00FF2A] rounded-full blur-md opacity-40 animate-pulse"></div>
+1	                           <Fingerprint className="w-8 h-8 text-[#00FF2A] relative z-10 drop-shadow-[0_0_8px_rgba(0,255,42,0.8)]" />
+1	                        </div>
+1	                        
+1	                        {/* Buy Text */}
+1	                        <span className="text-xl font-black text-white tracking-widest drop-shadow-lg italic">
+1	                          BUY NOW
+1	                        </span>
+1	                      </>
+1	                    )}
+1	                  </button>
+1	                </div>
+1	
+1	              </div>
+1	            </div>
+1	          </div>
+1	        </div>
+1	        )}
+1	
+1	        {/* Bottom Action Bar */}
+1	        <div 
+1	          className="fixed left-0 right-0 z-[100] animate-fade-in"
+1	          style={{ 
+1	            bottom: '8px',
+1	          }}
+1	        >
+1	          <div className="flex items-center gap-2 px-2">
+1	            <div className="flex-1">
+1	              {!useSupabaseChat && (
+1	                <LiveChatOverlay
+1	                  showId={showId}
+1	                  sellerId={show?.seller_id}
+1	                  isSeller={false}
+1	                  inputOnly={true}
+1	                />
+1	              )}
+1	            </div>
+1	
+1	          </div>
+1	        </div>
+1	      </div>
+1	      )}
+1	
+1	      {/* DESKTOP VIEW - 3-Column Whatnot Layout */}
+1	      {/* CONTAINER GATED BY DEVICE CLASS: Only mount on desktop devices.
+1	          This prevents desktop layout from appearing on phones in landscape. */}
+1	      {isDesktopDevice && (
+1	      <div className="grid grid-cols-[25%_50%_25%] h-screen bg-black">
+1	        {/* LEFT COLUMN - Products Panel - GATED: Only show when live */}
+1	        <div className="bg-gray-900 overflow-y-auto p-4 space-y-4">
+1	          <h2 className="text-white font-bold text-lg mb-4">Products</h2>
+1	          
+1	          {/* Show waiting message if show ended */}
+1	          {!canShowProducts && (
+1	            <div className="text-center py-8">
+1	              <ShoppingBag className="w-12 h-12 text-gray-500 mx-auto mb-3" />
+1	              <p className="text-gray-400 text-sm">This show has ended</p>
+1	            </div>
+1	          )}
+1	          
+1	          {canShowProducts && allShowProducts.map((product) => {
+1	            console.log("[RENDER PRODUCT CARD] (desktop list)", {
+1	              cardProductId: product?.id,
+1	              cardTitle: product?.title,
+1	              cardShowProductId: product?.show_product_id,
+1	              cardQuantity: product?.quantity,
+1	              cardStatus: product?.status,
+1	            });
+1	            const isFeatured = product.id === featuredProduct?.id;
+1	            return (
+1	              <div
+1	                key={product.id}
+1	                onClick={() => setExpandedProduct(product)}
+1	                className={`cursor-pointer rounded-lg p-2 transition-all ${
+1	                  isFeatured ? 'bg-yellow-500/20 border-2 border-yellow-500' : 'bg-gray-800 hover:bg-gray-700'
+1	                }`}
+1	              >
+1	                <div className="flex gap-3">
+1	                  <div className="relative w-20 h-20 flex-shrink-0">
+1	                    {product.image_urls?.[0] ? (
+1	                      <img
+1	                        src={product.image_urls[0]}
+1	                        alt={product.title}
+1	                        className="w-full h-full object-cover rounded"
+1	                      />
+1	                    ) : (
+1	                      <div className="w-full h-full flex items-center justify-center bg-gray-700 rounded">
+1	                        <ShoppingBag className="w-8 h-8 text-gray-500" />
+1	                      </div>
+1	                    )}
+1	                    {product.box_number && (
+1	                      <div className="absolute -top-1 -left-1 w-6 h-6 rounded-full bg-purple-600 text-white flex items-center justify-center text-xs font-black">
+1	                        {product.box_number}
+1	                      </div>
+1	                    )}
+1	                  </div>
+1	                  <div className="flex-1 min-w-0">
+1	                    <h3 className="text-white font-semibold text-sm line-clamp-2">{product.title}</h3>
+1	                    <p className="text-green-400 font-bold mt-1">${product.price?.toFixed(2)}</p>
+1	                    <p className="text-gray-400 text-xs">{product.quantity} left</p>
+1	                    {isFeatured && (
+1	                      <Badge className="bg-yellow-400 text-gray-900 text-xs mt-1">⭐ Featured</Badge>
+1	                    )}
+1	
+1	                    {/* Desktop Buy Button */}
+1	                    <button
+1	                      className={`w-full mt-2 h-9 relative group flex items-center justify-center gap-2 transition-all rounded-lg overflow-hidden border border-white/10
+1	                        ${(product.status === 'locked' || product.status === 'sold_out') ? 'bg-gray-700/50 cursor-not-allowed' : 
+1	                          'hover:scale-[1.02] active:scale-95 bg-black/20'
+1	                        }`}
+1	                      onClick={(e) => {
+1	                        e.stopPropagation();
+1	                        handleBuyNow(product);
+1	                      }}
+1	                      disabled={product.status === "locked" || product.status === "sold_out"}
+1	                    >
+1	                      {/* Background Aura */}
+1	                      {product.status !== 'locked' && product.status !== 'sold_out' && (
+1	                          <div className="absolute inset-0 bg-gradient-to-r from-[#00FF2A]/10 to-[#4D9FFF]/10 animate-pulse-slow"></div>
+1	                      )}
+1	
+1	                      {(product.status === "locked" || product.status === "sold_out") ? (
+1	                          <span className="text-gray-400 text-xs font-bold flex items-center gap-1">
+1	                            {product.status === 'locked' ? <Lock className="w-3 h-3"/> : null}
+1	                            {product.status === 'locked' ? 'LOCKED' : 'SOLD'}
+1	                          </span>
+1	                      ) : (
+1	                        <>
+1	                          {/* Radiant Thumbprint */}
+1	                          <div className="relative">
+1	                              <div className="absolute inset-0 bg-[#00FF2A] rounded-full blur-[2px] opacity-40 animate-pulse"></div>
+1	                              <Fingerprint className="w-5 h-5 text-[#00FF2A] relative z-10 drop-shadow-[0_0_4px_rgba(0,255,42,0.8)]" />
+1	                          </div>
+1	                          
+1	                          {/* Buy Text */}
+1	                          <span className="text-sm font-black text-white tracking-wide italic drop-shadow-md">
+1	                            BUY NOW
+1	                          </span>
+1	                        </>
+1	                      )}
+1	                    </button>
+1	                  </div>
+1	                </div>
+1	              </div>
+1	            );
+1	          })}
+1	        </div>
+1	
+1	        {/* CENTER COLUMN - Live Video */}
+1	        <div className="relative bg-black h-full">
+1	          {/* Conditional video player: IVS for AWS IVS streams, WebRTC for Daily.co */}
+1	          {/* Container is device-gated, so we only need to check IVS vs Daily */}
+1	          {useIvsPlayer ? (
+1	            <IVSPlayer
+1	              show={show}
+1	              onStateChange={handleIvsStateChange}
+1	              onError={handleIvsError}
+1	              autoplay={true}
+1	              muted={false}
+1	            />
+1	          ) : (
+1	            <WebRTCViewer
+1	              show={show}
+1	              onViewerCountChange={handleViewerCountChange}
+1	            />
+1	          )}
+1	          
+1	          {/* Header overlay on video */}
+1	          <div className="absolute top-0 left-0 right-0 z-50 bg-gradient-to-b from-black/80 via-black/40 to-transparent p-4">
+1	            <div className="flex items-center justify-between">
+1	              <Button
+1	                variant="ghost"
+1	                size="icon"
+1	                className="text-white hover:bg-white/20 rounded-full"
+1	                onClick={() => navigate(createPageUrl("Marketplace"))}
+1	              >
+1	                <ArrowLeft className="w-5 h-5" />
+1	              </Button>
+1	
+1	              <div className="text-center">
+1	                <h1 className="text-white font-bold text-lg">{show.title}</h1>
+1	                <button
+1	                  onClick={() => setShowSellerProfile(true)}
+1	                  className="text-purple-300 hover:text-purple-100 text-sm font-medium"
+1	                >
+1	                  {seller?.business_name}
+1	                </button>
+1	              </div>
+1	
+1	              <div className="flex items-center gap-2">
+1	                <Badge className="bg-black/60 backdrop-blur-sm text-white border-white/30">
+1	                  <Users className="w-4 h-4 mr-1" />
+1	                  {show.viewer_count || 0}
+1	                </Badge>
+1	                {isShowActuallyLive && (
+1	                  <Badge className="bg-red-500 text-white border-0 animate-pulse">
+1	                    <Radio className="w-4 h-4 mr-1" />
+1	                    LIVE
+1	                  </Badge>
+1	                )}
+1	              </div>
+1	            </div>
+1	          </div>
+1	
+1	          {/* Share + Follow Overlay - Buyer Only */}
+1	          {!isShowOwner && seller && (
+1	            <div className="absolute top-20 right-4 z-40 flex flex-col gap-3">
+1	              <FollowButton
+1	                seller={seller}
+1	                variant="ghost"
+1	                size="icon"
+1	                className="text-white hover:bg-white/20 rounded-full h-10 w-10 p-0 bg-black/40 backdrop-blur-sm [&_svg]:w-5 [&_svg]:h-5"
+1	              />
+1	              <ShareButton
+1	                type="show"
+1	                id={showId}
+1	                title={show?.title}
+1	                description={show?.description}
+1	                imageUrl={show?.thumbnail_url}
+1	                variant="ghost"
+1	                size="icon"
+1	                showLabel={false}
+1	                className="text-white hover:bg-white/20 rounded-full h-10 w-10 p-0 bg-black/40 backdrop-blur-sm"
+1	              />
+1	            </div>
+1	          )}
+1	        </div>
+1	
+1	        {/* RIGHT COLUMN - Chat & Metrics */}
+1	        <div className="bg-gray-900 flex flex-col h-full overflow-hidden">
+1	          {/* Metrics Section */}
+1	          <div className="p-4 border-b border-gray-800 flex-shrink-0">
+1	            <h2 className="text-white font-bold mb-3">Show Info</h2>
+1	            <div className="space-y-2 text-sm">
+1	              <div className="flex items-center gap-2 text-gray-300">
+1	                <Users className="w-4 h-4" />
+1	                <span>{show.viewer_count || 0} viewers</span>
+1	              </div>
+1	              <div className="flex items-center gap-2 text-gray-300">
+1	                <ShoppingBag className="w-4 h-4" />
+1	                <span>{allShowProducts.length} products</span>
+1	              </div>
+1	            </div>
+1	          </div>
+1	
+1	          {/* Chat Component - Full Height */}
+1	          {/* Container is device-gated (isDesktopDevice), so chat mounts only on desktop.
+1	              This prevents double polling and freeze under load. */}
+1	          <div className="flex-1 flex flex-col min-h-0">
+1	            {(() => { console.log("[AUTH DEBUG][LiveShow] rendering desktop chat with user:", user); return null; })()}
+1	            {(() => {
+1	              console.log("[CHAT PROPS DEBUG][LiveShow][DESKTOP]", {
+1	                showId,
+1	                sellerId: show?.seller_id,
+1	                isShowOwner,
+1	                userId: user?.id ?? null,
+1	                userRole: user?.role ?? null,
+1	              });
+1	              return null;
+1	            })()}
+1	            {useSupabaseChat ? (
+1	              <SupabaseLiveChat
+1	                showId={showId}
+1	                sellerId={show?.seller_id}
+1	                isSeller={isShowOwner}
+1	                user={user}
+1	                isOverlay={false}
+1	                onMessageSeller={() => {
+1	                  navigate(createPageUrl("Messages") + `?sellerId=${show?.seller_id}`);
+1	                }}
+1	              />
+1	            ) : (
+1	              <LiveChat
+1	                showId={showId}
+1	                sellerId={show?.seller_id}
+1	                isSeller={false}
+1	                isEmbedded={true}
+1	              />
+1	            )}
+1	          </div>
+1	        </div>
+1	      </div>
+1	      )}
+1	
+1	      {/* Seller Profile Modal */}
+1	      {showSellerProfile && seller && (
+1	        <SellerProfileModal
+1	          seller={seller}
+1	          user={user}
+1	          onClose={() => setShowSellerProfile(false)}
+1	        />
+1	      )}
+1	
+1	      {/* Checkout Overlay - GATED: Only render when canBuy (stream_status === "live") */}
+1	      {canBuy && showCheckout && selectedProduct && seller && (() => {
+1	        console.log("[CHECKOUT RECEIVES PRODUCT]", {
+1	          checkoutProductId: selectedProduct?.id,
+1	          checkoutTitle: selectedProduct?.title,
+1	          checkoutShowProductId: selectedProduct?.show_product_id,
+1	          checkoutQuantity: selectedProduct?.quantity,
+1	          checkoutStatus: selectedProduct?.status,
+1	        });
+1	        return (
+1	          <div className="fixed inset-0 z-[200]">
+1	            <CheckoutOverlay
+1	              product={selectedProduct}
+1	              seller={seller}
+1	              show={show}
+1	              buyerProfile={buyerProfile}
+1	              onClose={() => {
+1	                setShowCheckout(false);
+1	                setSelectedProduct(null);
+1	              }}
+1	            />
+1	          </div>
+1	        );
+1	      })()}
+1	
+1	      <style>{`
+1	        .scrollbar-hide::-webkit-scrollbar {
+1	          display: none;
+1	        }
+1	        .scrollbar-hide {
+1	          -ms-overflow-style: none;
+1	          scrollbar-width: none;
+1	        }
+1	        @keyframes slide-up {
+1	          from {
+1	            opacity: 0;
+1	            transform: translateY(20px);
+1	          }
+1	          to {
+1	            opacity: 1;
+1	            transform: translateY(0);
+1	          }
+1	        }
+1	        @keyframes fade-in {
+1	          from {
+1	            opacity: 0;
+1	          }
+1	          to {
+1	            opacity: 1;
+1	          }
+1	        }
+1	        @keyframes glow-yellow {
+1	          0%, 100% {
+1	            filter: drop-shadow(0 0 12px rgba(250, 204, 21, 0.8)) drop-shadow(0 0 20px rgba(250, 204, 21, 0.5));
+1	          }
+1	          50% {
+1	            filter: drop-shadow(0 0 16px rgba(250, 204, 21, 1)) drop-shadow(0 0 28px rgba(250, 204, 21, 0.7));
+1	          }
+1	        }
+1	        .animate-slide-up {
+1	          animation: slide-up 0.3s ease-out;
+1	        }
+1	        .animate-fade-in {
+1	          animation: fade-in 0.3s ease-out;
+1	        }
+1	        .animate-glow-yellow {
+1	          animation: glow-yellow 2s ease-in-out infinite;
+1	        }
+1	        @keyframes pulse-slow {
+1	          0%, 100% { opacity: 1; transform: scale(1); }
+1	          50% { opacity: 0.9; transform: scale(1.02); }
+1	        }
+1	        .animate-pulse-slow {
+1	          animation: pulse-slow 3s ease-in-out infinite;
+1	        }
+1	      `}</style>
+1	    </div>
+1	  );
+1	}

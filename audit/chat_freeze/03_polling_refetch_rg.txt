@@ -1,0 +1,23 @@
+src\components\chat\LiveChatOverlay.jsx:71:    staleTime: 300000, // 5 minutes - ban status rarely changes
+src\components\chat\LiveChatOverlay.jsx:72:    refetchInterval: false, // DO NOT poll - prevents loop
+src\components\chat\LiveChatOverlay.jsx:77:    queryKey: ['chat-messages', showId],
+src\components\chat\LiveChatOverlay.jsx:79:    refetchInterval: 2000,
+src\components\chat\LiveChatOverlay.jsx:86:      queryClient.invalidateQueries({ queryKey: ['chat-messages', showId] });
+src\components\chat\LiveChatOverlay.jsx:95:      queryClient.invalidateQueries({ queryKey: ['chat-messages', showId] });
+src\components\chat\LiveChat.jsx:64:    staleTime: 300000, // 5 minutes - ban status rarely changes
+src\components\chat\LiveChat.jsx:65:    refetchInterval: false, // DO NOT poll continuously
+src\components\chat\LiveChat.jsx:70:    queryKey: ['chat-messages', showId],
+src\components\chat\LiveChat.jsx:76:    staleTime: 3000
+src\components\chat\LiveChat.jsx:88:        queryClient.invalidateQueries({ queryKey: ['chat-messages', showId] });
+src\components\chat\SupabaseLiveChat.jsx:163:    staleTime: 300000, // 5 minutes - ban status rarely changes
+src\components\chat\SupabaseLiveChat.jsx:164:    refetchInterval: false,
+src\components\chat\SupabaseLiveChat.jsx:211:  const pollMessages = useCallback(async () => {
+src\components\chat\SupabaseLiveChat.jsx:261:    pollMessages();
+src\components\chat\SupabaseLiveChat.jsx:264:    pollingIntervalRef.current = setInterval(pollMessages, POLL_INTERVAL);
+src\components\chat\SupabaseLiveChat.jsx:268:        clearInterval(pollingIntervalRef.current);
+src\components\chat\SupabaseLiveChat.jsx:271:  }, [showId, pollMessages]);
+src\components\host\ViewerBanDialog.jsx:101:      queryClient.invalidateQueries({ queryKey: ['viewer-bans'] });
+src\components\host\ViewerBanDialog.jsx:102:      queryClient.invalidateQueries({ queryKey: ['chat-messages'] });
+src\components\host\ViewerBanDialog.jsx:103:      queryClient.invalidateQueries({ queryKey: ['viewer-ban-check'] });
+src\api\liveChat.ts:305:    timer = setInterval(poll, interval) as unknown as number;
+src\api\liveChat.ts:310:      clearInterval(timer);

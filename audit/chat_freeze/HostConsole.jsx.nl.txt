@@ -1,0 +1,1903 @@
+﻿1	import React, { useState, useEffect, useRef } from "react";
+1	import { supabaseApi as base44 } from "@/api/supabaseClient";
+1	import { supabase } from "@/lib/supabase/supabaseClient";
+1	import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+1	import { isSuperAdmin, requireSellerAsync, isAdmin } from "@/lib/auth/routeGuards";
+1	import { checkAccountActiveAsync } from "@/lib/auth/accountGuards";
+1	import { getShowByIdWithStats } from "@/api/shows";
+1	import { isShowLive } from "@/api/streamSync";
+1	import { createProduct, updateProduct } from "@/api/products";
+1	import { getShowProductsByShowId, createShowProduct, updateShowProductByIds, clearFeaturedForShow, deleteShowProductByIds } from "@/api/showProducts";
+1	import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+1	import { Button } from "@/components/ui/button";
+1	import { Badge } from "@/components/ui/badge";
+1	import { Input } from "@/components/ui/input";
+1	import { Alert, AlertDescription } from "@/components/ui/alert";
+1	import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+1	import {
+1	  Dialog,
+1	  DialogContent,
+1	  DialogHeader,
+1	  DialogTitle,
+1	} from "@/components/ui/dialog";
+1	import {
+1	  Radio,
+1	  Users,
+1	  DollarSign,
+1	  Package,
+1	  Search,
+1	  Star,
+1	  Video,
+1	  Monitor,
+1	  AlertTriangle,
+1	  XCircle,
+1	  Edit2,
+1	  Check,
+1	  X as XIcon,
+1	  Plus,
+1	  ArrowLeft,
+1	  Trash2,
+1	  Sparkles,
+1	  MessageCircle,
+1	  ClipboardCheck,
+1	  QrCode,
+1	  ShoppingBag
+1	} from "lucide-react";
+1	import HostBottomControls from "../components/host/HostBottomControls";
+1	import SellerProductDetailCard from "../components/host/SellerProductDetailCard";
+1	import LiveChat from "../components/chat/LiveChat";
+1	import LiveChatOverlay from "../components/chat/LiveChatOverlay";
+1	import SupabaseLiveChat from "../components/chat/SupabaseLiveChat";
+1	import { useNavigate } from "react-router-dom";
+1	import { createPageUrl } from "@/utils";
+1	import ProductForm from "../components/products/ProductForm";
+1	import GIVIHostPanel from "../components/givi/GIVIHostPanel";
+1	import GIVIWinnerBanner from "../components/givi/GIVIWinnerBanner";
+1	import BottomDrawer from "../components/host/BottomDrawer";
+1	import { FEATURES } from "@/config/features";
+1	import PickupVerification from "../components/fulfillment/PickupVerification";
+1	import BatchFulfillmentList from "../components/fulfillment/BatchFulfillmentList";
+1	import DailyBroadcaster from "@/components/streaming/DailyBroadcaster";
+1	import { useDeviceClass } from "@/hooks/useDeviceClass";
+1	import { useMobilePortraitLock } from "@/hooks/useMobilePortraitLock";
+1	
+1	export default function HostConsole() {
+1	  const navigate = useNavigate();
+1	  const queryClient = useQueryClient();
+1	  const urlParams = new URLSearchParams(window.location.search);
+1	  const showId = urlParams.get('showId');
+1	  const [searchTerm, setSearchTerm] = useState("");
+1	  // Daily In-App Camera State
+1	  const [dailyRoomUrl, setDailyRoomUrl] = useState(null);
+1	  const [dailyToken, setDailyToken] = useState(null);
+1	  const [dailyLoading, setDailyLoading] = useState(false);
+1	  const [dailyError, setDailyError] = useState(null);
+1	  const [currentUser, setCurrentUser] = useState(null);
+1	  const [currentSeller, setCurrentSeller] = useState(null);
+1	  const [accessError, setAccessError] = useState(null);
+1	  const [editingPriceProductId, setEditingPriceProductId] = useState(null);
+1	  const [newPrice, setNewPrice] = useState("");
+1	  const [showProductDialog, setShowProductDialog] = useState(false);
+1	  const [debugInfo, setDebugInfo] = useState(null);
+1	  const [userLoading, setUserLoading] = useState(true);
+1	  const [editingQuantityProductId, setEditingQuantityProductId] = useState(null);
+1	  const [newQuantity, setNewQuantity] = useState("");
+1	  const [showWinnerBanner, setShowWinnerBanner] = useState(false);
+1	  const [winnerName, setWinnerName] = useState("");
+1	  const [showGiviDrawer, setShowGiviDrawer] = useState(false);
+1	  const [showAddProductDrawer, setShowAddProductDrawer] = useState(false);
+1	  const [giviDrawerMode, setGiviDrawerMode] = useState("form"); // "form" or "console"
+1	  const [isBroadcasting, setIsBroadcasting] = useState(false);
+1	  const [showRecentOrders, setShowRecentOrders] = useState(false);
+1	  const [selectedProduct, setSelectedProduct] = useState(null);
+1	  const [bottomBarMode, setBottomBarMode] = useState("products"); // "products" or "message"
+1	  const [showFulfillmentDrawer, setShowFulfillmentDrawer] = useState(false);
+1	  const [showFulfillmentDialog, setShowFulfillmentDialog] = useState(false);
+1	  const [showPurchaseBanner, setShowPurchaseBanner] = useState(false);
+1	  
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  // DEVICE-LOCKED CLASSIFICATION (NO VIEWPORT FLIPS)
+1	  // Prevents dual DailyBroadcaster AND dual SupabaseLiveChat mount.
+1	  // Classification is determined ONCE by device type, NOT viewport width.
+1	  // This ensures SDKs don't remount on orientation change.
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  const { isMobileDevice, isDesktopDevice, reason: deviceClassReason } = useDeviceClass();
+1	  useMobilePortraitLock(isMobileDevice);
+1	  
+1	  // Log device classification for debugging
+1	  useEffect(() => {
+1	    console.log("[HostConsole] Device classification:", { isMobileDevice, isDesktopDevice, reason: deviceClassReason });
+1	  }, []);
+1	  
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  // MVP PHASE-1: Seller viewer count sourced from Daily SDK (UI-only)
+1	  // This provides real-time updates without waiting for server polling.
+1	  // Falls back to show.viewer_count when SDK count is not available.
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  const [liveViewerCount, setLiveViewerCount] = useState(null);
+1	  
+1	  // Ref to prevent NO_SHOWID guard from re-triggering after initial mount
+1	  const noShowIdGuardRan = useRef(false);
+1	  const lastSalesCountRef = useRef(null);
+1	
+1	  // CRITICAL: Immediate redirect if no showId - prevent "No Show ID" error from appearing
+1	  // Only runs ONCE on initial mount
+1	  useEffect(() => {
+1	    if (noShowIdGuardRan.current) return; // Already ran, don't repeat
+1	    if (!showId) {
+1	      noShowIdGuardRan.current = true;
+1	      navigate(createPageUrl("SellerShows"), { replace: true });
+1	      return;
+1	    }
+1	  }, []); // Empty deps = only on mount
+1	
+1	
+1	  // ENHANCED: Load user and seller with better error handling
+1	  useEffect(() => {
+1	    loadUserAndSeller();
+1	    
+1	    // Minimal overscroll prevention
+1	    document.body.style.overscrollBehavior = 'none';
+1	    document.documentElement.style.overscrollBehavior = 'none';
+1	    
+1	    return () => {
+1	      document.body.style.overscrollBehavior = '';
+1	      document.documentElement.style.overscrollBehavior = '';
+1	    };
+1	  }, []);
+1	
+1	  const loadUserAndSeller = async () => {
+1	    try {
+1	      // Get current user from Supabase auth
+1	      const { data: authData, error: authError } = await supabase.auth.getUser();
+1	      if (authError || !authData?.user) {
+1	        console.error("No authenticated user found");
+1	        setUserLoading(false);
+1	        return;
+1	      }
+1	      const user = authData.user;
+1	      setCurrentUser(user);
+1	
+1	      // ═══════════════════════════════════════════════════════════════════════════
+1	      // OPTION B SELLER GATING (STEP 3 REFACTOR)
+1	      // User is seller IFF: public.users.role='seller' AND sellers.status='approved'
+1	      // ═══════════════════════════════════════════════════════════════════════════
+1	
+1	      // 🔐 SUPER_ADMIN BYPASS: Full system authority
+1	      if (isSuperAdmin(user)) {
+1	        console.log("[SellerGate] SUPER_ADMIN bypass - full access");
+1	        const { data: seller } = await supabase
+1	          .from("sellers")
+1	          .select("*")
+1	          .eq("user_id", user.id)
+1	          .maybeSingle();
+1	        if (seller) {
+1	          setCurrentSeller(seller);
+1	        }
+1	        setUserLoading(false);
+1	        return;
+1	      }
+1	
+1	      // 🔐 ADMIN BYPASS: Admins can access seller routes
+1	      if (isAdmin(user)) {
+1	        console.log("[SellerGate] Admin bypass - access granted");
+1	        const { data: seller } = await supabase
+1	          .from("sellers")
+1	          .select("*")
+1	          .eq("user_id", user.id)
+1	          .maybeSingle();
+1	        if (seller) {
+1	          setCurrentSeller(seller);
+1	        }
+1	        setUserLoading(false);
+1	        return;
+1	      }
+1	
+1	      // ═══════════════════════════════════════════════════════════════════════════
+1	      // SUSPENSION CHECK: Block seller routes for suspended accounts
+1	      // ═══════════════════════════════════════════════════════════════════════════
+1	      const { canProceed: accountActive, error: suspendedReason } = await checkAccountActiveAsync(supabase, user.id);
+1	      if (!accountActive) {
+1	        console.log("[SellerGate] Account suspended - redirecting to BuyerProfile");
+1	        navigate(createPageUrl("BuyerProfile"), { 
+1	          replace: true, 
+1	          state: { suspended: true, reason: suspendedReason } 
+1	        });
+1	        return;
+1	      }
+1	
+1	      // ═══════════════════════════════════════════════════════════════════════════
+1	      // OPTION B CHECK: Query DB for role + seller status
+1	      // ═══════════════════════════════════════════════════════════════════════════
+1	      const sellerCheck = await requireSellerAsync(user.id);
+1	      
+1	      console.log("[SellerGate] HostConsole check:", {
+1	        ok: sellerCheck.ok,
+1	        role: sellerCheck.role,
+1	        sellerStatus: sellerCheck.sellerStatus,
+1	        reason: sellerCheck.reason
+1	      });
+1	
+1	      if (!sellerCheck.ok) {
+1	        // NOT an approved seller - redirect based on reason
+1	        if (sellerCheck.reason === "seller_onboarding_incomplete" || sellerCheck.reason === "seller_safety_not_agreed") {
+1	          // Onboarding incomplete - send to BuyerProfile to continue onboarding
+1	          console.log("[SellerGate] Onboarding incomplete - redirecting to BuyerProfile");
+1	          navigate(createPageUrl("BuyerProfile"), { replace: true });
+1	        } else {
+1	          // Other failure (no seller row, not approved, etc.) - redirect to SellerShows
+1	          console.log("[SellerGate] Not approved seller - redirecting to SellerShows");
+1	          navigate(createPageUrl("SellerShows"), { replace: true });
+1	        }
+1	        return;
+1	      }
+1	
+1	      // ═══════════════════════════════════════════════════════════════════════════
+1	      // APPROVED SELLER - Load host console
+1	      // ═══════════════════════════════════════════════════════════════════════════
+1	      console.log("[SellerGate] Approved seller verified:", sellerCheck.sellerRow?.business_name);
+1	      setCurrentSeller(sellerCheck.sellerRow);
+1	
+1	    } catch (error) {
+1	      console.error("Error loading user/seller:", error);
+1	    } finally {
+1	      setUserLoading(false);
+1	    }
+1	  };
+1	
+1	  // CRITICAL: Reduced show polling from 5s to 15s
+1	  const { data: show, isLoading: showLoading, error: showError } = useQuery({
+1	    queryKey: ['show', showId],
+1	    queryFn: async () => {
+1	      const fetchedShow = await getShowByIdWithStats(showId);
+1	      
+1	      if (!fetchedShow) {
+1	        throw new Error("Show not found");
+1	      }
+1	      
+1	      // CRITICAL: If show is ended, redirect immediately
+1	      if (fetchedShow.status === "ended" || fetchedShow.status === "cancelled") {
+1	        navigate(createPageUrl("SellerShows"), { replace: true });
+1	        return null;
+1	      }
+1	      
+1	      return fetchedShow;
+1	    },
+1	    enabled: !!showId,
+1	    refetchInterval: 15000, // REDUCED from 5s to 15s
+1	    staleTime: 10000
+1	  });
+1	
+1	  const { data: showSeller, isLoading: sellerLoading } = useQuery({
+1	    queryKey: ['show-seller', show?.seller_id],
+1	    queryFn: async () => {
+1	      // NORMALIZED: show.seller_id = sellers.id
+1	      const { data: fetchedSeller, error } = await supabase
+1	        .from("sellers")
+1	        .select("*")
+1	        .eq("id", show.seller_id)
+1	        .maybeSingle();
+1	      if (error) throw error;
+1	      return fetchedSeller || null;
+1	    },
+1	    enabled: !!show?.seller_id
+1	  });
+1	
+1	  // Determine which chat system to use:
+1	  // SupabaseLiveChat renders when show is starting or live (lifecycle-based)
+1	  // Legacy chat is fallback for other states
+1	  const useSupabaseChat =
+1	    show?.stream_status === 'starting' ||
+1	    show?.stream_status === 'live';
+1	
+1	  // Sync Daily room URL from show data when it loads/changes
+1	  useEffect(() => {
+1	    if (show?.daily_room_url) {
+1	      setDailyRoomUrl(show.daily_room_url);
+1	    }
+1	  }, [show?.daily_room_url]);
+1	
+1	  // Access control
+1	  useEffect(() => {
+1	    // Only run access control after user, show, and showSeller are loaded and not in a loading state
+1	    if (!userLoading && !showLoading && !sellerLoading && currentUser && show && showSeller) {
+1	      // Admin bypass
+1	      if (currentUser.role === "admin") {
+1	        setAccessError(null);
+1	        setDebugInfo({
+1	          userEmail: currentUser.email,
+1	          userRole: currentUser.role,
+1	          currentSellerId: currentSeller?.id,
+1	          showSellerId: show.seller_id,
+1	          accessGranted: true,
+1	          reason: "Admin user"
+1	        });
+1	        return;
+1	      }
+1	      
+1	      // Seller must exist
+1	      if (!currentSeller) {
+1	        setAccessError("You need a seller profile to access Host Console.");
+1	        setDebugInfo({
+1	          userEmail: currentUser.email,
+1	          userRole: currentUser.role,
+1	          currentSellerId: null,
+1	          showSellerId: show.seller_id,
+1	          accessGranted: false,
+1	          reason: "No seller profile"
+1	        });
+1	        return;
+1	      }
+1	      
+1	      // Seller ID must match (shows.seller_id = sellers.id)
+1	      const isOwner = currentSeller.id === show.seller_id;
+1	      
+1	      if (!isOwner) {
+1	        setAccessError(`This show belongs to ${showSeller.business_name}. You cannot access their Host Console.`);
+1	        setDebugInfo({
+1	          userEmail: currentUser.email,
+1	          userRole: currentUser.role,
+1	          currentSeller: currentSeller.business_name,
+1	          currentSellerId: currentSeller.id,
+1	          showSeller: showSeller.business_name,
+1	          showSellerId: show.seller_id,
+1	          accessGranted: false,
+1	          reason: "Seller ID mismatch"
+1	        });
+1	        return;
+1	      }
+1	      
+1	      setAccessError(null);
+1	      setDebugInfo({
+1	        userEmail: currentUser.email,
+1	        userRole: currentUser.role,
+1	        currentSeller: currentSeller.business_name,
+1	        currentSellerId: currentSeller.id,
+1	        showSeller: showSeller.business_name,
+1	        showSellerId: show.seller_id,
+1	        accessGranted: true,
+1	        reason: "Seller owns show"
+1	      });
+1	    }
+1	  }, [userLoading, showLoading, sellerLoading, currentUser, currentSeller, show, showSeller]);
+1	
+1	  // Reduced product polling from 2s to 10s
+1	  // Now fetches from show_products joined with products
+1	  const { data: showProductsRaw = [] } = useQuery({
+1	    queryKey: ['show-products', showId],
+1	    queryFn: async () => {
+1	      const showProducts = await getShowProductsByShowId(showId);
+1	      return showProducts;
+1	    },
+1	    enabled: !!show && !!showId,
+1	    refetchInterval: 10000,
+1	    staleTime: 5000
+1	  });
+1	
+1	  // Transform show_products into a products-like array for rendering
+1	  // Each item has product fields + show_product fields (box_number, is_featured, is_givi)
+1	  const products = showProductsRaw.map(sp => ({
+1	    ...sp.product,
+1	    show_product_id: sp.id,
+1	    box_number: sp.box_number,
+1	    is_featured: sp.is_featured,
+1	    is_givi_in_show: sp.is_givi,
+1	  })).filter(p => p.id); // Filter out any with missing product data
+1	
+1	  // Reduced orders polling from 5s to 15s
+1	  const { data: orders = [] } = useQuery({
+1	    queryKey: ['show-orders', showId],
+1	    queryFn: async () => {
+1	      const { data, error } = await supabase
+1	        .from('orders')
+1	        .select('id,show_id,price,delivery_fee,created_at,product_id,buyer_id,buyer:buyer_id(display_name),product:product_id(image_urls,title)')
+1	        .eq('show_id', showId)
+1	        .in('status', ['paid', 'fulfilled', 'completed', 'ready']);
+1	
+1	      if (error) throw error;
+1	      return data || [];
+1	    },
+1	    refetchInterval: 15000,
+1	    staleTime: 10000
+1	  });
+1	
+1	  // Watch for GIVI winner selection
+1	  const { data: activeGIVI } = useQuery({
+1	    queryKey: ['host-givi-banner-trigger', showId],
+1	    queryFn: async () => {
+1	      if (!showId) return null;
+1	      const events = await base44.entities.GIVIEvent.filter({
+1	        show_id: showId,
+1	        status: "result"
+1	      }, '-created_date');
+1	      return events.length > 0 ? events[0] : null;
+1	    },
+1	    enabled: !!showId,
+1	    refetchInterval: 3000,
+1	    staleTime: 2000,
+1	    refetchOnWindowFocus: false
+1	  });
+1	
+1	  // Trigger banner when winner is selected
+1	  useEffect(() => {
+1	    if (activeGIVI?.status === "result" && activeGIVI?.winner_ids?.length > 0) {
+1	      const bannerShownKey = `givi_banner_shown_${activeGIVI.id}`;
+1	      if (localStorage.getItem(bannerShownKey) !== 'true') {
+1	        setShowWinnerBanner(true);
+1	        localStorage.setItem(bannerShownKey, 'true');
+1	      }
+1	    }
+1	  }, [activeGIVI?.id, activeGIVI?.status, activeGIVI?.winner_ids]);
+1	
+1	  // Detect sales_count changes and show global purchase banner
+1	  useEffect(() => {
+1	    if (!show || typeof show.sales_count !== "number") return;
+1	
+1	    // Initialize on first load
+1	    if (lastSalesCountRef.current === null) {
+1	      lastSalesCountRef.current = show.sales_count;
+1	      return;
+1	    }
+1	
+1	    // Detect increment
+1	    if (show.sales_count > lastSalesCountRef.current) {
+1	      setShowPurchaseBanner(true);
+1	      setTimeout(() => setShowPurchaseBanner(false), 2000);
+1	    }
+1	
+1	    lastSalesCountRef.current = show.sales_count;
+1	  }, [show?.sales_count]);
+1	
+1	  const featureProductMutation = useMutation({
+1	    mutationFn: async (product) => {
+1	      console.log("⭐ HostConsole - Featuring product:", product.title, "ID:", product.id);
+1	      
+1	      // Clear any previously featured products in this show
+1	      await clearFeaturedForShow(showId);
+1	      
+1	      // Feature this product in show_products
+1	      await updateShowProductByIds(showId, product.id, { is_featured: true });
+1	      
+1	      // Update show's featured product reference
+1	      await supabase
+1	        .from("shows")
+1	        .update({ featured_product_id: product.id })
+1	        .eq("id", showId);
+1	      
+1	      console.log("✅ HostConsole - Product featured successfully");
+1	    },
+1	    onSuccess: () => {
+1	      queryClient.invalidateQueries({ queryKey: ['show', showId] });
+1	      queryClient.invalidateQueries({ queryKey: ['show-products', showId] });
+1	    },
+1	  });
+1	
+1	  const unfeatureProductMutation = useMutation({
+1	    mutationFn: async (product) => {
+1	      console.log("👁️ HostConsole - Unfeaturing product:", product?.id);
+1	      
+1	      // Clear featured flag on show_products
+1	      await clearFeaturedForShow(showId);
+1	      
+1	      // Clear featured product on show
+1	      await supabase
+1	        .from("shows")
+1	        .update({ featured_product_id: null })
+1	        .eq("id", showId);
+1	      
+1	      console.log("✅ HostConsole - Product unfeatured successfully");
+1	    },
+1	    onSuccess: () => {
+1	      queryClient.invalidateQueries({ queryKey: ['show', showId] });
+1	      queryClient.invalidateQueries({ queryKey: ['show-products', showId] });
+1	    },
+1	  });
+1	
+1	  const createProductMutation = useMutation({
+1	    mutationFn: async (data) => {
+1	      if (!currentSeller || !currentSeller.id) {
+1	        throw new Error("Seller ID is missing - cannot create product");
+1	      }
+1	      if (!showId) {
+1	        throw new Error("Show ID is missing - cannot create product");
+1	      }
+1	      
+1	      // Step 1: Create the product in the products catalog
+1	      // Extract is_givey for show_products, don't pass to products
+1	      const { is_givey, ...catalogData } = data;
+1	      
+1	      // ═══════════════════════════════════════════════════════════════════════════
+1	      // NORMALIZED: products.seller_id = sellers.id (NOT user_id)
+1	      // ═══════════════════════════════════════════════════════════════════════════
+1	      if (!currentSeller?.id) {
+1	        throw new Error("Seller ID is missing from seller profile - cannot create product");
+1	      }
+1	      
+1	      const productData = { 
+1	        ...catalogData, 
+1	        seller_id: currentSeller.id, // FIXED: Use sellers.id (not user_id)
+1	        status: "active"
+1	      };
+1	      console.log("📦 HostConsole - Creating product in catalog:", productData);
+1	      console.log("🆔 Seller ID (sellers.id):", currentSeller.id);
+1	      
+1	      const newProduct = await createProduct(productData);
+1	      if (!newProduct) {
+1	        throw new Error("Failed to create product - check Supabase logs");
+1	      }
+1	      console.log("✅ Product created in catalog:", newProduct.id);
+1	      
+1	      // Step 2: Link product to this show via show_products
+1	      // is_givi is stored here (per-show state), not in products catalog
+1	      // NORMALIZED: show_products.seller_id = sellers.id (NOT user_id)
+1	      console.log("🔗 Linking product to show:", showId);
+1	      const showProduct = await createShowProduct({
+1	        show_id: showId,
+1	        product_id: newProduct.id,
+1	        seller_id: currentSeller.id, // FIXED: Use sellers.id (not user_id)
+1	        is_featured: false,
+1	        is_givi: is_givey === true,
+1	      });
+1	      
+1	      if (!showProduct) {
+1	        throw new Error("Failed to link product to show - check Supabase logs");
+1	      }
+1	      console.log("✅ Show product link created:", showProduct.id, "Box #:", showProduct.box_number);
+1	      
+1	      return { product: newProduct, showProduct };
+1	    },
+1	    onSuccess: ({ product, showProduct }) => {
+1	      console.log("✅ HostConsole - Product created and linked successfully");
+1	      console.log("🆔 Product ID:", product.id);
+1	      console.log("🆔 Show Product ID:", showProduct.id);
+1	      console.log("📦 Box Number:", showProduct.box_number);
+1	      queryClient.invalidateQueries({ queryKey: ['show-products', showId] });
+1	      setShowProductDialog(false);
+1	      setShowAddProductDrawer(false);
+1	    },
+1	    onError: (error) => {
+1	      console.error("❌ HostConsole - Error creating product:", error);
+1	      alert("Error creating product: " + error.message);
+1	    }
+1	  });
+1	
+1	  const updatePriceMutation = useMutation({
+1	    mutationFn: async ({ productId, newPrice }) => {
+1	      console.log("💰 HostConsole - Updating price for product:", productId, "to $", newPrice);
+1	      const updated = await updateProduct(productId, {
+1	        price: parseFloat(newPrice)
+1	      });
+1	      if (!updated) {
+1	        throw new Error("Failed to update price");
+1	      }
+1	      console.log("✅ HostConsole - Price updated successfully");
+1	      return updated;
+1	    },
+1	    onSuccess: () => {
+1	      queryClient.invalidateQueries({ queryKey: ['show-products', showId] });
+1	      queryClient.invalidateQueries({ queryKey: ['featured-product'] });
+1	      setEditingPriceProductId(null);
+1	      setNewPrice("");
+1	    },
+1	  });
+1	
+1	  // NEW: Update Quantity Mutation
+1	  const updateQuantityMutation = useMutation({
+1	    mutationFn: async ({ productId, newQuantity }) => {
+1	      console.log("📦 HostConsole - Updating quantity for product:", productId, "to", newQuantity);
+1	      
+1	      const qty = parseInt(newQuantity);
+1	      if (isNaN(qty) || qty < 0) {
+1	        throw new Error("Quantity must be a non-negative number.");
+1	      }
+1	      
+1	      // If quantity becomes 0, mark as sold_out
+1	      const updates = {
+1	        quantity: qty
+1	      };
+1	      
+1	      if (qty === 0) {
+1	        updates.status = "sold_out";
+1	        console.log("   Marking as sold_out (quantity = 0)");
+1	      } else if (qty > 0) {
+1	        // If increasing from 0, restore to active unless it was explicitly locked
+1	        const currentProduct = products.find(p => p.id === productId);
+1	        if (currentProduct?.status === "sold_out") {
+1	          updates.status = "active";
+1	          console.log("   Restoring to active (quantity > 0 and was sold_out)");
+1	        }
+1	      }
+1	      
+1	      const updated = await updateProduct(productId, updates);
+1	      if (!updated) {
+1	        throw new Error("Failed to update quantity");
+1	      }
+1	      console.log("✅ HostConsole - Quantity updated successfully");
+1	      return updated;
+1	    },
+1	    onSuccess: () => {
+1	      queryClient.invalidateQueries({ queryKey: ['show-products', showId] });
+1	      setEditingQuantityProductId(null);
+1	      setNewQuantity("");
+1	    },
+1	    onError: (error) => {
+1	      alert(`Failed to update quantity: ${error.message}`);
+1	    }
+1	  });
+1	
+1	  // NEW: Remove Product from Show (removes show_product link)
+1	  const deleteProductMutation = useMutation({
+1	    mutationFn: async (productId) => {
+1	      console.log("🗑️ HostConsole - Removing product from show:", productId);
+1	      
+1	      // Remove the show_product link (keeps product in catalog)
+1	      const deleted = await deleteShowProductByIds(showId, productId);
+1	      if (!deleted) {
+1	        throw new Error("Failed to remove product from show");
+1	      }
+1	      
+1	      // If this was the featured product, clear it
+1	      if (show.featured_product_id === productId) {
+1	        await supabase
+1	          .from("shows")
+1	          .update({ featured_product_id: null })
+1	          .eq("id", showId);
+1	      }
+1	      
+1	      console.log("✅ HostConsole - Product removed from show successfully");
+1	    },
+1	    onSuccess: () => {
+1	      queryClient.invalidateQueries({ queryKey: ['show-products', showId] });
+1	      queryClient.invalidateQueries({ queryKey: ['show', showId] }); // Invalidate show to reflect featured product change
+1	    },
+1	    onError: (error) => {
+1	      alert(`Failed to remove product from show: ${error.message}`);
+1	    }
+1	  });
+1	
+1	  const handleStreamStart = (stream) => {
+1	    console.log("📡 HostConsole - Stream started for ShowID:", showId);
+1	  };
+1	
+1	  const handleStreamStop = () => {
+1	    console.log("⏹️ HostConsole - Stream stopped for ShowID:", showId);
+1	  };
+1	
+1	  // Check if broadcasting is allowed based on show status
+1	  const isBroadcastBlocked = show?.status === "ended" || show?.status === "cancelled";
+1	  
+1	  // Check if show is already live (one-way: cannot revert)
+1	  const isAlreadyLive = show?.stream_status === "live";
+1	
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  // DAILY IN-APP CAMERA BROADCAST
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  const startDailyBroadcast = async () => {
+1	    if (!show?.id) return;
+1	    
+1	    setDailyLoading(true);
+1	    setDailyError(null);
+1	    
+1	    try {
+1	      // ═══════════════════════════════════════════════════════════════════════════
+1	      // TEMP DEBUG: Log show state BEFORE daily-create-room call
+1	      // ═══════════════════════════════════════════════════════════════════════════
+1	      console.log("[DAILY-DEBUG] PRE-CALL STATE:", {
+1	        show_id: show?.id,
+1	        streaming_provider: show?.streaming_provider,
+1	        status: show?.status,
+1	        stream_status: show?.stream_status,
+1	        user_id: currentUser?.id,
+1	        timestamp: new Date().toISOString()
+1	      });
+1	      
+1	      // Step 1: Call Daily room creation Edge Function FIRST
+1	      // (daily-create-room writes daily_room_name and daily_room_url to DB)
+1	      const { data: resp, error: fnError } = await supabase.functions.invoke("daily-create-room", {
+1	        body: { show_id: show.id }
+1	      });
+1	      
+1	      // TEMP DEBUG: Log response from daily-create-room
+1	      console.log("[DAILY-DEBUG] POST-CALL RESPONSE:", {
+1	        resp,
+1	        fnError,
+1	        fnError_message: fnError?.message,
+1	        fnError_context: fnError?.context,
+1	        resp_error: resp?.error,
+1	        timestamp: new Date().toISOString()
+1	      });
+1	      
+1	      if (fnError) {
+1	        throw new Error(fnError.message || "Failed to create Daily room");
+1	      }
+1	      
+1	      if (resp?.error) {
+1	        throw new Error(resp.error);
+1	      }
+1	      
+1	      // Step 2: Verify room was created successfully
+1	      if (!resp?.room_url || !resp?.room_name) {
+1	        throw new Error("Daily room creation returned invalid response");
+1	      }
+1	      
+1	      // Store room URL and token locally
+1	      setDailyRoomUrl(resp.room_url);
+1	      setDailyToken(resp.token);
+1	      
+1	      // Step 3: ONLY NOW mark show as daily + live (strict invariant)
+1	      // Room is guaranteed to exist at this point
+1	      const { error: updateError } = await supabase
+1	        .from("shows")
+1	        .update({
+1	          streaming_provider: "daily",
+1	          status: "live",
+1	          stream_status: "live",
+1	          started_at: new Date().toISOString()
+1	        })
+1	        .eq("id", show.id);
+1	      
+1	      if (updateError) {
+1	        console.error("Failed to update show status:", updateError);
+1	        throw new Error("Room created but failed to go live. Please try again.");
+1	      }
+1	      
+1	      // Update local state
+1	      setIsBroadcasting(true);
+1	      
+1	      // Invalidate queries so other pages see the update
+1	      queryClient.invalidateQueries({ queryKey: ['seller-shows'] });
+1	      queryClient.invalidateQueries({ queryKey: ['all-shows'] });
+1	      queryClient.invalidateQueries({ queryKey: ['marketplace-live-shows'] });
+1	      queryClient.invalidateQueries({ queryKey: ['show', showId] });
+1	      
+1	    } catch (err) {
+1	      console.error("Daily broadcast error:", err);
+1	      setDailyError(err?.message || "Failed to start broadcast");
+1	    } finally {
+1	      setDailyLoading(false);
+1	    }
+1	  };
+1	
+1	  const handleSaveProduct = (productData) => {
+1	    createProductMutation.mutate(productData);
+1	  };
+1	
+1	  const handleStartEditPrice = (product) => {
+1	    setEditingPriceProductId(product.id);
+1	    setNewPrice(product.price?.toString() || "");
+1	  };
+1	
+1	  const handleSavePrice = (productId) => {
+1	    const price = parseFloat(newPrice);
+1	    if (isNaN(price) || price <= 0) {
+1	      alert("Please enter a valid price");
+1	      return;
+1	    }
+1	    updatePriceMutation.mutate({ productId, newPrice: price });
+1	  };
+1	
+1	  const handleCancelEditPrice = () => {
+1	    setEditingPriceProductId(null);
+1	    setNewPrice("");
+1	  };
+1	
+1	  // NEW: Quantity Edit Handlers
+1	  const handleStartEditQuantity = (product) => {
+1	    setEditingQuantityProductId(product.id);
+1	    setNewQuantity(product.quantity?.toString() || "0");
+1	  };
+1	
+1	  const handleSaveQuantity = (productId) => {
+1	    const qty = parseInt(newQuantity);
+1	    if (isNaN(qty) || qty < 0) {
+1	      alert("Please enter a valid quantity (0 or more)");
+1	      return;
+1	    }
+1	    updateQuantityMutation.mutate({ productId, newQuantity: qty });
+1	  };
+1	
+1	  const handleCancelEditQuantity = () => {
+1	    setEditingQuantityProductId(null);
+1	    setNewQuantity("");
+1	  };
+1	
+1	  // NEW: Delete Handler with Confirmation
+1	  const handleDeleteProduct = (product) => {
+1	    const confirmMessage = `Are you sure you want to remove "${product.title}" from this show?\n\nThis will:\n• Hide it from viewers\n• Set its quantity to 0\n• Mark it as sold within this show context`;
+1	    
+1	    if (window.confirm(confirmMessage)) {
+1	      deleteProductMutation.mutate(product.id);
+1	    }
+1	  };
+1	
+1	  // CRITICAL: End Show with proper navigation history reset
+1	  // CANONICAL END: Sets both status and stream_status to "ended"
+1	  const endShowMutation = useMutation({
+1	    mutationFn: async () => {
+1	      console.log("⏹️ HostConsole - Ending show:", showId);
+1	      
+1	      // CRITICAL: Stop Daily broadcast FIRST to release camera/mic immediately
+1	      if (window.__stopDailyHost) {
+1	        try {
+1	          await window.__stopDailyHost();
+1	          console.log("✅ Daily broadcast stopped - camera released");
+1	        } catch (e) {
+1	          console.warn("[HostConsole] stopDailyHost failed", e);
+1	        }
+1	      }
+1	      
+1	      // CRITICAL: Change URL IMMEDIATELY before making the API call
+1	      // This prevents refresh from reloading the dead showId
+1	      const showsUrl = createPageUrl("SellerShows");
+1	      window.history.replaceState({}, '', showsUrl);
+1	      console.log("✅ URL immediately changed to prevent refresh loading dead showId");
+1	      
+1	      // Build payload - only set ended_at if not already set (avoid overwriting)
+1	      const payload = {
+1	        status: "ended",
+1	        stream_status: "ended",
+1	        ...(show?.ended_at ? {} : { ended_at: new Date().toISOString() })
+1	      };
+1	      
+1	      console.log("📝 End Show payload:", payload);
+1	      
+1	      const { data, error } = await supabase
+1	        .from("shows")
+1	        .update(payload)
+1	        .eq("id", showId)
+1	        .select()
+1	        .maybeSingle();
+1	      
+1	      if (error) {
+1	        console.error("[EndShow] supabase update failed", error);
+1	        throw error;
+1	      }
+1	      
+1	      if (!data) {
+1	        console.warn("[EndShow] update returned no row");
+1	      }
+1	      
+1	      console.log("✅ Show ended - status and stream_status now 'ended'");
+1	      return data;
+1	    },
+1	    onSuccess: () => {
+1	      console.log("✅ Show ended successfully - completing navigation");
+1	      
+1	      // Invalidate all queries
+1	      queryClient.invalidateQueries({ queryKey: ['seller-shows'] });
+1	      queryClient.invalidateQueries({ queryKey: ['all-shows'] });
+1	      queryClient.invalidateQueries({ queryKey: ['marketplace-live-shows'] });
+1	      
+1	      // Navigate using router (preserves React state)
+1	      navigate(createPageUrl("SellerShows"), { replace: true });
+1	    },
+1	    onError: (error) => {
+1	      console.error("❌ Error ending show:", error);
+1	      alert(`Failed to end show: ${error.message}`);
+1	    }
+1	  });
+1	
+1	  if (!showId) {
+1	    return (
+1	      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-900 via-purple-900 to-blue-900 p-4">
+1	        <Card className="max-w-md w-full">
+1	          <CardContent className="p-6 sm:p-8 text-center">
+1	            <XCircle className="w-12 h-12 sm:w-16 sm:h-16 text-red-500 mx-auto mb-4" />
+1	            <h3 className="text-base sm:text-lg font-semibold text-white mb-2">No Show ID</h3>
+1	            <p className="text-sm sm:text-base text-white/70 mb-4">
+1	              No show ID was provided in the URL.
+1	            </p>
+1	            <div className="bg-white/10 rounded p-2 mb-4 text-left">
+1	              <p className="text-xs text-white/70 font-mono">URL: {window.location.href}</p>
+1	            </div>
+1	            <Button onClick={() => navigate(createPageUrl("SellerShows"))} className="w-full sm:w-auto">
+1	              Back to Shows
+1	            </Button>
+1	          </CardContent>
+1	        </Card>
+1	      </div>
+1	    );
+1	  }
+1	
+1	  if (userLoading || showLoading || sellerLoading) {
+1	    return (
+1	      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-900 via-purple-900 to-blue-900 p-4">
+1	        <div className="text-center">
+1	          <div className="animate-spin rounded-full h-10 w-10 sm:h-12 sm:w-12 border-b-2 border-white mx-auto mb-4"></div>
+1	          <p className="text-white text-base sm:text-lg">Loading Host Console...</p>
+1	          <p className="text-white/50 text-xs sm:text-sm mt-2">Show ID: {showId}</p>
+1	          {userLoading && <p className="text-white/50 text-xs mt-1">Loading user...</p>}
+1	          {showLoading && <p className="text-white/50 text-xs mt-1">Loading show...</p>}
+1	          {sellerLoading && <p className="text-white/50 text-xs mt-1">Loading seller...</p>}
+1	        </div>
+1	      </div>
+1	    );
+1	  }
+1	
+1	  if (showError || !show) {
+1	    return (
+1	      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-900 via-purple-900 to-blue-900 p-4">
+1	        <Card className="max-w-md w-full">
+1	          <CardContent className="p-6 sm:p-8 text-center">
+1	            <XCircle className="w-12 h-12 sm:w-16 sm:h-16 text-red-500 mx-auto mb-4" />
+1	            <h3 className="text-base sm:text-lg font-semibold text-white mb-2">Show Not Found</h3>
+1	            <p className="text-sm sm:text-base text-white/70 mb-4">
+1	              Could not load show with ID: {showId}
+1	            </p>
+1	            <div className="bg-white/10 rounded p-2 mb-4 text-left">
+1	              <p className="text-xs text-white/70 font-mono">Error: {showError?.message || "Unknown error"}</p>
+1	            </div>
+1	            <Button onClick={() => navigate(createPageUrl("SellerShows"))} className="w-full sm:w-auto">
+1	              Back to Shows
+1	            </Button>
+1	          </CardContent>
+1	        </Card>
+1	      </div>
+1	    );
+1	  }
+1	
+1	  if (accessError) {
+1	    return (
+1	      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-900 via-purple-900 to-blue-900 p-4">
+1	        <Card className="max-w-2xl w-full border-2 border-red-500">
+1	          <CardContent className="p-6 sm:p-8">
+1	            <div className="text-center mb-6">
+1	              <AlertTriangle className="w-12 h-12 sm:w-16 sm:h-16 text-red-500 mx-auto mb-4" />
+1	              <h3 className="text-base sm:text-lg font-semibold text-white mb-2">Access Denied</h3>
+1	              <p className="text-sm sm:text-base text-white/70 mb-4">{accessError}</p>
+1	            </div>
+1	
+1	            {/* Debug Info */}
+1	            {debugInfo && (
+1	              <div className="bg-black/30 rounded-lg p-4 mb-4 text-left space-y-2">
+1	                <p className="text-white font-semibold text-sm mb-2">Debug Information:</p>
+1	                <div className="space-y-1 text-xs font-mono">
+1	                  <p className="text-white/70">
+1	                    <strong className="text-white">User:</strong> {debugInfo.userEmail}
+1	                  </p>
+1	                  <p className="text-white/70">
+1	                    <strong className="text-white">Role:</strong> {debugInfo.userRole}
+1	                  </p>
+1	                  {debugInfo.currentSeller && (
+1	                    <>
+1	                      <p className="text-white/70">
+1	                        <strong className="text-white">Your Seller:</strong> {debugInfo.currentSeller}
+1	                      </p>
+1	                      <p className="text-white/70">
+1	                        <strong className="text-white">Your Seller ID:</strong> {debugInfo.currentSellerId}
+1	                      </p>
+1	                    </>
+1	                  )}
+1	                  {debugInfo.showSeller && (
+1	                    <>
+1	                      <p className="text-white/70">
+1	                        <strong className="text-white">Show Owner:</strong> {debugInfo.showSeller}
+1	                      </p>
+1	                      <p className="text-white/70">
+1	                        <strong className="text-white">Show Seller ID:</strong> {debugInfo.showSellerId}
+1	                      </p>
+1	                    </>
+1	                  )}
+1	                  {show && (
+1	                    <>
+1	                      <p className="text-white/70">
+1	                        <strong className="text-white">Show Title:</strong> {show.title}
+1	                      </p>
+1	                      <p className="text-white/70">
+1	                        <strong className="text-white">Show ID:</strong> {show.id}
+1	                      </p>
+1	                    </>
+1	                  )}
+1	                  <p className={`${debugInfo.accessGranted ? 'text-green-400' : 'text-red-400'} font-bold`}>
+1	                    <strong>Status:</strong> {debugInfo.accessGranted ? '✅ GRANTED' : '❌ DENIED'}
+1	                  </p>
+1	                  <p className="text-white/70">
+1	                    <strong className="text-white">Reason:</strong> {debugInfo.reason}
+1	                  </p>
+1	                </div>
+1	              </div>
+1	            )}
+1	
+1	            {/* Actions */}
+1	            <div className="flex flex-col sm:flex-row gap-3">
+1	              <Button 
+1	                onClick={() => navigate(createPageUrl("SellerShows"))} 
+1	                className="flex-1"
+1	                variant="outline"
+1	              >
+1	                Go to Your Shows
+1	              </Button>
+1	              <Button 
+1	                onClick={() => navigate(createPageUrl("SellerDashboard"))} 
+1	                className="flex-1"
+1	              >
+1	                Seller Dashboard
+1	              </Button>
+1	            </div>
+1	
+1	            {/* Help Text */}
+1	            <div className="mt-6 p-4 bg-blue-500/20 rounded-lg border border-blue-500/30">
+1	              <p className="text-blue-100 text-xs">
+1	                <strong>Need help?</strong> If you believe this is an error, please check:
+1	              </p>
+1	              <ul className="text-blue-100/80 text-xs mt-2 space-y-1 list-disc list-inside">
+1	                <li>You're logged in with the correct account</li>
+1	                <li>You have an approved seller profile</li>
+1	                <li>You're accessing a show you created</li>
+1	              </ul>
+1	            </div>
+1	          </CardContent>
+1	        </Card>
+1	      </div>
+1	    );
+1	  }
+1	
+1	  // CRITICAL NULL CHECK: Don't render main content until we have currentSeller
+1	  // This check serves as an additional safeguard if, for any reason,
+1	  // currentSeller is null despite passing initial loading and accessError checks.
+1	  if (!currentSeller) {
+1	    return (
+1	      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-900 via-purple-900 to-blue-900 p-4">
+1	        <Card className="max-w-md w-full border-2 border-orange-500">
+1	          <CardContent className="p-6 sm:p-8 text-center">
+1	            <AlertTriangle className="w-12 h-12 sm:w-16 sm:h-16 text-orange-500 mx-auto mb-4" />
+1	            <h3 className="text-base sm:text-lg font-semibold text-white mb-2">No Seller Profile</h3>
+1	            <p className="text-sm sm:text-base text-white/70 mb-4">
+1	              You need a seller profile to access the Host Console.
+1	            </p>
+1	            <Button 
+1	              onClick={() => navigate(createPageUrl("SellerDashboard"))} 
+1	              className="w-full sm:w-auto"
+1	            >
+1	              Create Seller Profile
+1	            </Button>
+1	          </CardContent>
+1	        </Card>
+1	      </div>
+1	    );
+1	  }
+1	
+1	  // Find featured product - check is_featured flag from show_products first, then fall back to show.featured_product_id
+1	  const featuredProduct = products.find(p => p.is_featured) || products.find(p => p.id === show.featured_product_id);
+1	  const filteredProducts = products.filter(p => {
+1	    const searchLower = searchTerm.toLowerCase();
+1	    return (
+1	      p.title.toLowerCase().includes(searchLower) ||
+1	      p.description?.toLowerCase().includes(searchLower)
+1	    );
+1	  });
+1	
+1	  // MVP PHASE-1: Seller viewer count sourced from Daily SDK (UI-only)
+1	  // Prefers live SDK count, falls back to server-polled value
+1	  const stats = {
+1	    viewers: liveViewerCount ?? show.viewer_count ?? 0,
+1	    sales: orders.length,
+1	    revenue: orders.reduce((sum, o) => sum + (o.price || 0), 0)
+1	  };
+1	
+1	  return (
+1	    <div style={{ 
+1	      overscrollBehavior: 'none',
+1	      touchAction: 'pan-y'
+1	    }}>
+1	      {/* GIVI Winner Banner - Gated by feature flag */}
+1	      {FEATURES.givi && (
+1	        <GIVIWinnerBanner 
+1	          show={showWinnerBanner}
+1	          winnerName={activeGIVI?.winner_names?.[0]}
+1	          onDismiss={() => setShowWinnerBanner(false)}
+1	        />
+1	      )}
+1	
+1	      {/* Global Purchase Confirmation Banner */}
+1	      {showPurchaseBanner && (
+1	        <div className="fixed top-20 left-1/2 -translate-x-1/2 bg-green-600 text-white px-5 py-2 rounded-full shadow-lg z-[9999] text-sm font-semibold pointer-events-none">
+1	          🎉 New purchase just made!
+1	        </div>
+1	      )}
+1	
+1	      {/* GIVI Drawer - MOBILE ONLY - Gated by feature flag + device class */}
+1	        {FEATURES.givi && currentSeller && showGiviDrawer && isMobileDevice && (
+1	          <BottomDrawer
+1	            isOpen={showGiviDrawer}
+1	            onClose={() => {
+1	              setShowGiviDrawer(false);
+1	              setGiviDrawerMode("console");
+1	            }}
+1	            title={giviDrawerMode === "form" ? "Create New GIVI Event" : "GIVI Control Console"}
+1	            height={giviDrawerMode === "form" ? "70vh" : "50vh"}
+1	          >
+1	            {giviDrawerMode === "form" ? (
+1	              <GIVIHostPanel 
+1	                show={show} 
+1	                seller={currentSeller}
+1	                formOnly={true}
+1	                onFormClose={() => {
+1	                  setGiviDrawerMode("console");
+1	                }}
+1	                externalDrawerOpen={showGiviDrawer}
+1	                onCloseExternalDrawer={() => {
+1	                  setShowGiviDrawer(false);
+1	                  setGiviDrawerMode("console");
+1	                }}
+1	              />
+1	            ) : (
+1	              <GIVIHostPanel 
+1	                show={show} 
+1	                seller={currentSeller}
+1	                onAddNewGivi={() => setGiviDrawerMode("form")}
+1	              />
+1	            )}
+1	          </BottomDrawer>
+1	        )}
+1	
+1	        {/* GIVI Dialog - DESKTOP ONLY - Gated by feature flag + device class */}
+1	        {FEATURES.givi && currentSeller && showGiviDrawer && isDesktopDevice && (
+1	          <Dialog open={true} onOpenChange={(open) => {
+1	            if (!open) {
+1	              setShowGiviDrawer(false);
+1	              setGiviDrawerMode("console");
+1	            }
+1	          }}>
+1	            <DialogContent className="max-w-4xl max-h-[90vh] p-0 overflow-hidden">
+1	              <div className="flex flex-col h-full max-h-[90vh]">
+1	                <DialogHeader className="px-6 py-4 border-b border-gray-200 flex-shrink-0">
+1	                  <DialogTitle className="text-gray-900 text-xl font-bold">
+1	                    GIVI Control Console
+1	                  </DialogTitle>
+1	                </DialogHeader>
+1	                <div className="overflow-y-auto flex-1 px-6 py-4">
+1	                  {giviDrawerMode === "form" ? (
+1	                    <GIVIHostPanel 
+1	                      show={show} 
+1	                      seller={currentSeller}
+1	                      formOnly={true}
+1	                      onFormClose={() => {
+1	                        setGiviDrawerMode("console");
+1	                      }}
+1	                    />
+1	                  ) : (
+1	                    <GIVIHostPanel 
+1	                      show={show} 
+1	                      seller={currentSeller}
+1	                      onAddNewGivi={() => setGiviDrawerMode("form")}
+1	                    />
+1	                  )}
+1	                </div>
+1	              </div>
+1	            </DialogContent>
+1	          </Dialog>
+1	        )}
+1	
+1	        {/* MOBILE: Fullscreen Video with Overlay Chat */}
+1	        {/* CONDITIONAL CONTAINER: Only mount mobile layout on mobile devices.
+1	            Device-locked classification prevents remount on rotation. */}
+1	        {isMobileDevice && (
+1	        <div className="fixed inset-0 bg-black" style={{ zIndex: 1 }}>
+1	          {/* Back Arrow - Top Left */}
+1	          <Button
+1	            variant="ghost"
+1	            size="icon"
+1	            onClick={() => navigate(createPageUrl("SellerShows"))}
+1	            className="fixed top-4 left-4 z-[250] bg-black/50 backdrop-blur-md text-white hover:bg-black/70 h-10 w-10 rounded-full"
+1	          >
+1	            <ArrowLeft className="w-5 h-5" />
+1	          </Button>
+1	          
+1	          {/* Mobile Stats - Top Right (Revenue + Viewers) */}
+1	          <div className="fixed top-4 right-3 z-[250] bg-black/50 backdrop-blur-md rounded-lg px-3 py-2 text-right">
+1	            <p className="text-[10px] text-white/70 leading-tight">Revenue</p>
+1	            <p className="text-sm font-bold text-white leading-tight">${stats.revenue.toFixed(2)}</p>
+1	            <p className="text-[9px] text-white/50 leading-tight mt-0.5">👁 {stats.viewers} viewers</p>
+1	          </div>
+1	          
+1	          {/* Video Background - Daily SDK Broadcaster or Placeholder */}
+1	          {/* CRITICAL: Only mount DailyBroadcaster on mobile devices to prevent duplicate Daily instances */}
+1	          {isMobileDevice && dailyRoomUrl && dailyToken ? (
+1	            <DailyBroadcaster 
+1	              roomUrl={dailyRoomUrl} 
+1	              token={dailyToken} 
+1	              onViewerCountChange={setLiveViewerCount}
+1	            />
+1	          ) : (
+1	            <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-gray-900 to-gray-800">
+1	              {show.thumbnail_url && (
+1	                <img 
+1	                  src={show.thumbnail_url} 
+1	                  alt={show.title}
+1	                  className="absolute inset-0 w-full h-full object-cover opacity-50"
+1	                />
+1	              )}
+1	              <div className="relative z-10 text-center p-6">
+1	                <Video className="w-16 h-16 text-white/50 mx-auto mb-4" />
+1	                <p className="text-white/70 text-lg mb-2">
+1	                  {isAlreadyLive ? "🔴 LIVE — In-App Camera" : "Ready to Go Live"}
+1	                </p>
+1	                <p className="text-white/50 text-sm">
+1	                  {isAlreadyLive ? "Your broadcast is active" : "Tap Go Live to start your camera stream"}
+1	                </p>
+1	              </div>
+1	            </div>
+1	          )}
+1	          
+1	          {/* Chat Overlay - Left Side, Transparent */}
+1	          {/* CONDITIONAL MOUNT: Only mount mobile chat on mobile devices.
+1	              Device-locked classification prevents double polling and freeze
+1	              under load by ensuring only one chat instance mounts at any time. */}
+1	          {isMobileDevice && (
+1	            <div style={{ zIndex: 100 }}>
+1	              {console.log("[HOSTCONSOLE AUTH DEBUG][MOBILE]", {
+1	                currentUserId: currentUser?.id ?? null,
+1	                currentUserRole: currentUser?.role ?? null
+1	              })}
+1	              {useSupabaseChat ? (
+1	                <SupabaseLiveChat
+1	                  showId={showId}
+1	                  sellerId={currentSeller?.id}
+1	                  isSeller={true}
+1	                  isOverlay={true}
+1	                  user={currentUser}
+1	                />
+1	              ) : (
+1	                <LiveChatOverlay 
+1	                  showId={showId} 
+1	                  isSeller={true}
+1	                  sellerId={currentSeller?.id}
+1	                />
+1	              )}
+1	            </div>
+1	          )}
+1	          
+1	          {/* Seller Product Detail Card (Overlay) */}
+1	          {selectedProduct && (
+1	            <SellerProductDetailCard 
+1	              product={selectedProduct}
+1	              showId={showId}
+1	              isFeatured={selectedProduct.is_featured || selectedProduct.id === show.featured_product_id}
+1	              onClose={() => setSelectedProduct(null)}
+1	              onPushToLive={(product) => {
+1	                const isFeatured = product.is_featured || product.id === show.featured_product_id;
+1	                
+1	                // Only active products can be featured; any status can be unfeatured
+1	                if (isFeatured) {
+1	                  unfeatureProductMutation.mutate();
+1	                } else if (product.status === "active") {
+1	                  featureProductMutation.mutate(product);
+1	                } else {
+1	                  console.warn("[HostConsole] Cannot feature product - status is not active:", product.status);
+1	                }
+1	              }}
+1	            />
+1	          )}
+1	
+1	          {/* Bottom Controls (Product Bubbles + Toggle Area) */}
+1	          <HostBottomControls
+1	            mode={bottomBarMode}
+1	            showId={showId}
+1	            sellerId={currentSeller?.id}
+1	            products={filteredProducts}
+1	            featuredProductId={show.featured_product_id}
+1	            onFeatureProduct={(product) => setSelectedProduct(product)}
+1	            onAddProduct={() => setShowAddProductDrawer(true)}
+1	            onSearch={setSearchTerm}
+1	            searchTerm={searchTerm}
+1	            useSupabaseChat={useSupabaseChat}
+1	            user={currentUser}
+1	          />
+1	          
+1	          {/* Host Controls - Top Right Icons */}
+1	          <div 
+1	            className="fixed top-16 right-3 flex flex-col gap-3 z-[200]"
+1	          >
+1	            {/* Message Toggle (Icon Only) */}
+1	            <Button
+1	              onClick={() => setBottomBarMode("message")}
+1	              size="icon"
+1	              className={`h-10 w-10 rounded-full backdrop-blur-md border transition-all ${
+1	                bottomBarMode === "message" 
+1	                  ? "bg-white text-purple-600 border-white" 
+1	                  : "bg-black/40 text-white border-white/20 hover:bg-black/60"
+1	              }`}
+1	            >
+1	              <MessageCircle className="w-5 h-5" />
+1	            </Button>
+1	
+1	            {/* GIVI Button (Icon Only) - Gated by feature flag */}
+1	            {FEATURES.givi && (
+1	              <Button
+1	                onClick={() => {
+1	                  setShowGiviDrawer(true);
+1	                  setGiviDrawerMode("console");
+1	                }}
+1	                size="icon"
+1	                className="bg-gradient-to-r from-purple-600 to-blue-600 h-10 w-10 rounded-full shadow-lg border border-white/20"
+1	              >
+1	                <Sparkles className="w-5 h-5 text-white" />
+1	              </Button>
+1	            )}
+1	
+1	            {/* Products Button (Icon Only) - Toggles Product Mode */}
+1	            <Button
+1	              onClick={() => setBottomBarMode("products")}
+1	              size="icon"
+1	              className={`h-10 w-10 rounded-full shadow-lg border transition-all ${
+1	                bottomBarMode === "products"
+1	                  ? "bg-gradient-to-r from-blue-500 to-cyan-500 border-white scale-110"
+1	                  : "bg-gradient-to-r from-blue-600 to-cyan-600 border-white/20"
+1	              }`}
+1	            >
+1	              <Package className="w-5 h-5 text-white" />
+1	            </Button>
+1	
+1	            {/* Fulfillment Button (Icon Only) */}
+1	            <Button
+1	              onClick={() => setShowFulfillmentDrawer(true)}
+1	              size="icon"
+1	              className="bg-gradient-to-r from-orange-600 to-amber-600 h-10 w-10 rounded-full shadow-lg border border-white/20"
+1	            >
+1	              <ClipboardCheck className="w-5 h-5 text-white" />
+1	            </Button>
+1	
+1	                {/* Broadcast Button (Icon Only) - ONE-WAY: Shows LIVE or Start */}
+1	                {isAlreadyLive ? (
+1	                  <div className="h-10 w-10 rounded-full shadow-lg border border-red-500 bg-red-600 flex items-center justify-center">
+1	                    <Radio className="w-5 h-5 text-white animate-pulse" />
+1	                  </div>
+1	                ) : (
+1	                  <Button
+1	                    onClick={startDailyBroadcast}
+1	                    size="icon"
+1	                    disabled={isBroadcastBlocked || dailyLoading}
+1	                    className={`h-10 w-10 rounded-full shadow-lg border border-white/20 ${
+1	                      isBroadcastBlocked || dailyLoading
+1	                        ? "bg-gray-600 cursor-not-allowed opacity-50"
+1	                        : "bg-gradient-to-r from-green-600 to-emerald-600"
+1	                    }`}
+1	                    title={isBroadcastBlocked ? `Cannot broadcast - show is ${show?.status}` : "Go Live"}
+1	                  >
+1	                    <Radio className="w-5 h-5 text-white" />
+1	                  </Button>
+1	                )}
+1	          </div>
+1	        </div>
+1	        )}
+1	
+1	        {/* DESKTOP: 3-Column Whatnot-Style Layout */}
+1	        {/* CONDITIONAL CONTAINER: Only mount desktop layout on desktop devices.
+1	            Device-locked classification prevents remount on rotation. */}
+1	        {isDesktopDevice && (
+1	        <div className="grid grid-cols-[25%_50%_25%] h-screen bg-black fixed inset-0" style={{ top: 0, paddingTop: 0 }}>
+1	          {/* LEFT COLUMN - Host Tools & Products */}
+1	          <div className="bg-gray-900 overflow-y-auto p-4 space-y-4">
+1	            {/* Host Control Buttons - GATED: Broadcast disabled if show ended/cancelled */}
+1	            <div className="space-y-2">
+1	              {/* Broadcast blocked warning */}
+1	              {isBroadcastBlocked && (
+1	                <div className="bg-red-500/20 border border-red-500/50 rounded-lg p-3 text-center">
+1	                  <AlertTriangle className="w-5 h-5 text-red-400 mx-auto mb-1" />
+1	                  <p className="text-red-300 text-sm font-medium">
+1	                    Show is {show?.status} - Broadcasting not allowed
+1	                  </p>
+1	                </div>
+1	              )}
+1	
+1	              {/* ═══════════════════════════════════════════════════════════════════════════ */}
+1	              {/* DAILY IN-APP CAMERA BROADCAST */}
+1	              {/* ═══════════════════════════════════════════════════════════════════════════ */}
+1	              
+1	              {/* Daily Error Display */}
+1	              {dailyError && (
+1	                <div className="bg-red-500/20 border border-red-500/30 rounded-lg p-3">
+1	                  <p className="text-red-400 text-sm">{dailyError}</p>
+1	                </div>
+1	              )}
+1	              
+1	              {/* ONE-WAY BROADCAST: Shows "LIVE" status or "Go Live" button */}
+1	              {isAlreadyLive ? (
+1	                <div className="bg-red-600/20 border border-red-500 rounded-lg p-3 text-center">
+1	                  <div className="flex items-center justify-center gap-2 mb-1">
+1	                    <Radio className="w-4 h-4 text-red-400 animate-pulse" />
+1	                    <span className="text-red-400 font-bold">🔴 LIVE — In-App Camera</span>
+1	                  </div>
+1	                  <p className="text-gray-400 text-xs">
+1	                    Your broadcast is active. End Show when you're done.
+1	                  </p>
+1	                </div>
+1	              ) : (
+1	                <Button
+1	                  onClick={startDailyBroadcast}
+1	                  disabled={isBroadcastBlocked || dailyLoading}
+1	                  className={`w-full font-bold py-3 ${
+1	                    isBroadcastBlocked || dailyLoading
+1	                      ? 'bg-gray-600 cursor-not-allowed opacity-50'
+1	                      : 'bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700'
+1	                  } text-white`}
+1	                >
+1	                  <Radio className="w-4 h-4 mr-2" />
+1	                  {dailyLoading ? "Starting Camera…" : "Go Live"}
+1	                </Button>
+1	              )}
+1	              
+1	              <Button
+1	                onClick={() => {
+1	                  if (window.confirm('Are you sure you want to end this show? This action cannot be undone.')) {
+1	                    endShowMutation.mutate();
+1	                  }
+1	                }}
+1	                variant="outline"
+1	                className="w-full border-2 border-red-500 text-red-600 hover:bg-red-50 font-bold py-3"
+1	                disabled={endShowMutation.isPending}
+1	              >
+1	                {endShowMutation.isPending ? 'Ending Show...' : 'End Show'}
+1	              </Button>
+1	              
+1	              {FEATURES.givi && (
+1	                <Button
+1	                  onClick={() => {
+1	                    setShowGiviDrawer(true);
+1	                    setGiviDrawerMode("console");
+1	                  }}
+1	                  className="w-full bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white font-bold py-3"
+1	                >
+1	                  <Sparkles className="w-4 h-4 mr-2" />
+1	                  GIVI
+1	                </Button>
+1	              )}
+1	              
+1	              <Button
+1	                onClick={() => setShowProductDialog(true)}
+1	                className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3"
+1	              >
+1	                <Plus className="w-4 h-4 mr-2" />
+1	                Add Product
+1	              </Button>
+1	              
+1	              <Button
+1	                onClick={() => setShowRecentOrders(true)}
+1	                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3"
+1	              >
+1	                <Package className="w-4 h-4 mr-2" />
+1	                Recent Orders
+1	              </Button>
+1	              
+1	              {/* HIDDEN: Pickup Verification moved to SellerOrders - UI guard only, logic preserved */}
+1	              {false && (
+1	                <Button
+1	                  onClick={() => setShowFulfillmentDialog(true)}
+1	                  className="w-full bg-orange-600 hover:bg-orange-700 text-white font-bold py-3"
+1	                >
+1	                  <ClipboardCheck className="w-4 h-4 mr-2" />
+1	                  Pickup Verification
+1	                </Button>
+1	              )}
+1	            </div>
+1	
+1	            {/* Search Bar */}
+1	            <div className="relative">
+1	              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+1	              <Input
+1	                value={searchTerm}
+1	                onChange={(e) => setSearchTerm(e.target.value)}
+1	                placeholder="Search products..."
+1	                className="pl-10 bg-gray-800 border-gray-700 text-white placeholder:text-gray-500"
+1	              />
+1	            </div>
+1	
+1	            {/* Products List */}
+1	            <h2 className="text-white font-bold text-lg">Products</h2>
+1	            <div className="space-y-3">
+1	              {filteredProducts.map((product) => {
+1	                const isLocked = product.status === "locked" || product.status === "sold_out";
+1	                const isFeatured = product.is_featured || product.id === show.featured_product_id;
+1	                const isEditingQty = editingQuantityProductId === product.id;
+1	                const isEditingPrice = editingPriceProductId === product.id;
+1	                
+1	                return (
+1	                  <div
+1	                    key={product.id}
+1	                    onClick={() => {
+1	                      // Only active products can be featured; any status can be unfeatured
+1	                      if (isFeatured) {
+1	                        unfeatureProductMutation.mutate();
+1	                      } else if (product.status === "active") {
+1	                        featureProductMutation.mutate(product);
+1	                      } else {
+1	                        console.warn("[HostConsole] Cannot feature product - status is not active:", product.status);
+1	                      }
+1	                    }}
+1	                    className={`cursor-pointer rounded-lg p-3 transition-all ${
+1	                      isFeatured
+1	                        ? 'bg-yellow-500/20 border-2 border-yellow-500'
+1	                        : 'bg-gray-800 hover:bg-gray-700'
+1	                    }`}
+1	                  >
+1	                    <div className="flex gap-3">
+1	                      <div className="relative w-20 h-20 flex-shrink-0">
+1	                        {Array.isArray(product.image_urls) && product.image_urls.length > 0 ? (
+1	                          <img
+1	                            src={product.image_urls[0]}
+1	                            alt={product.title}
+1	                            className="w-full h-full object-cover rounded"
+1	                          />
+1	                        ) : (
+1	                          <div className="w-full h-full flex items-center justify-center bg-gray-700 rounded">
+1	                            <ShoppingBag className="w-8 h-8 text-gray-500" />
+1	                          </div>
+1	                        )}
+1	                        {product.box_number && (
+1	                          <div className={`absolute -top-1 -left-1 w-6 h-6 rounded-full flex items-center justify-center text-xs font-black ${
+1	                            isFeatured ? 'bg-yellow-400 text-gray-900' : 'bg-purple-600 text-white'
+1	                          }`}>
+1	                            {product.box_number}
+1	                          </div>
+1	                        )}
+1	                      </div>
+1	                      <div className="flex-1 min-w-0">
+1	                        <h3 className="text-white font-semibold text-sm line-clamp-2">{product.title}</h3>
+1	                        {product.category && (
+1	                          <p className="text-white/50 text-xs mt-0.5">{product.category}</p>
+1	                        )}
+1	                        
+1	                        <div className="flex items-center gap-2 mt-1" onClick={(e) => e.stopPropagation()}>
+1	                          {isEditingPrice ? (
+1	                            <div className="flex items-center gap-1">
+1	                              <span className="text-white/80 text-xs">$</span>
+1	                              <Input
+1	                                type="number"
+1	                                step="0.01"
+1	                                value={newPrice}
+1	                                onChange={(e) => setNewPrice(e.target.value)}
+1	                                className="h-6 w-16 text-xs"
+1	                                autoFocus
+1	                                onKeyDown={(e) => {
+1	                                  if (e.key === 'Enter') handleSavePrice(product.id);
+1	                                  if (e.key === 'Escape') handleCancelEditPrice();
+1	                                }}
+1	                              />
+1	                              <Button size="icon" variant="ghost" className="h-5 w-5 text-green-400" onClick={() => handleSavePrice(product.id)}>
+1	                                <Check className="w-3 h-3" />
+1	                              </Button>
+1	                              <Button size="icon" variant="ghost" className="h-5 w-5 text-red-400" onClick={handleCancelEditPrice}>
+1	                                <XIcon className="w-3 h-3" />
+1	                              </Button>
+1	                            </div>
+1	                          ) : (
+1	                            <div className="flex items-center gap-1">
+1	                              <p className="text-green-400 font-bold text-sm">${product.price?.toFixed(2)}</p>
+1	                              <Button size="icon" variant="ghost" className="h-4 w-4 text-white/70" onClick={() => handleStartEditPrice(product)}>
+1	                                <Edit2 className="w-2.5 h-2.5" />
+1	                              </Button>
+1	                            </div>
+1	                          )}
+1	
+1	                          {isEditingQty ? (
+1	                            <div className="flex items-center gap-1">
+1	                              <Input
+1	                                type="number"
+1	                                min="0"
+1	                                value={newQuantity}
+1	                                onChange={(e) => setNewQuantity(e.target.value)}
+1	                                className="h-6 w-12 text-xs"
+1	                                autoFocus
+1	                                onKeyDown={(e) => {
+1	                                  if (e.key === 'Enter') handleSaveQuantity(product.id);
+1	                                  if (e.key === 'Escape') handleCancelEditQuantity();
+1	                                }}
+1	                              />
+1	                              <Button size="icon" variant="ghost" className="h-5 w-5 text-green-400" onClick={() => handleSaveQuantity(product.id)}>
+1	                                <Check className="w-3 h-3" />
+1	                              </Button>
+1	                              <Button size="icon" variant="ghost" className="h-5 w-5 text-red-400" onClick={handleCancelEditQuantity}>
+1	                                <XIcon className="w-3 h-3" />
+1	                              </Button>
+1	                            </div>
+1	                          ) : (
+1	                            <div className="flex items-center gap-1">
+1	                              <p className={`text-xs ${product.quantity === 0 ? 'text-red-400' : 'text-gray-400'}`}>
+1	                                Qty: {product.quantity}
+1	                              </p>
+1	                              <Button size="icon" variant="ghost" className="h-4 w-4 text-white/70" onClick={() => handleStartEditQuantity(product)}>
+1	                                <Edit2 className="w-2.5 h-2.5" />
+1	                              </Button>
+1	                            </div>
+1	                          )}
+1	                        </div>
+1	                        
+1	                        {isFeatured && (
+1	                          <Badge className="bg-yellow-400 text-gray-900 text-xs mt-1">⭐ Featured</Badge>
+1	                        )}
+1	                        {isLocked && (
+1	                          <Badge className="bg-red-500 text-white text-xs mt-1">
+1	                            {product.status === "sold_out" ? "SOLD" : "LOCKED"}
+1	                          </Badge>
+1	                        )}
+1	                      </div>
+1	                    </div>
+1	                  </div>
+1	                );
+1	              })}
+1	            </div>
+1	          </div>
+1	
+1	          {/* CENTER COLUMN - Live Video */}
+1	          <div className="relative bg-black flex items-center justify-center">
+1	            {/* Daily SDK Broadcaster OR Placeholder */}
+1	            {/* Container is device-gated (isDesktopDevice), so we only check room availability */}
+1	            {dailyRoomUrl && dailyToken ? (
+1	              <DailyBroadcaster 
+1	                roomUrl={dailyRoomUrl} 
+1	                token={dailyToken} 
+1	                onViewerCountChange={setLiveViewerCount}
+1	              />
+1	            ) : (
+1	              <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-gray-900 to-gray-800">
+1	                {show.thumbnail_url && (
+1	                  <img 
+1	                    src={show.thumbnail_url} 
+1	                    alt={show.title}
+1	                    className="absolute inset-0 w-full h-full object-cover opacity-50"
+1	                  />
+1	                )}
+1	                <div className="relative z-10 text-center p-6">
+1	                  <Video className="w-16 h-16 text-white/50 mx-auto mb-4" />
+1	                  <p className="text-white/70 text-lg mb-2">Host Console</p>
+1	                  <p className="text-white/50 text-sm">
+1	                    {isAlreadyLive 
+1	                      ? "🔴 LIVE — In-App Camera"
+1	                      : "Tap Go Live to start your in-app camera stream."
+1	                    }
+1	                  </p>
+1	                </div>
+1	              </div>
+1	            )}
+1	            
+1	            {/* Header overlay */}
+1	            <div className="absolute top-0 left-0 right-0 z-50 bg-gradient-to-b from-black/80 via-black/40 to-transparent p-4">
+1	              <div className="flex items-center justify-between">
+1	                <Button
+1	                  variant="ghost"
+1	                  size="icon"
+1	                  className="text-white hover:bg-white/20 rounded-full"
+1	                  onClick={() => navigate(createPageUrl("SellerShows"), { replace: true })}
+1	                  >
+1	                  <ArrowLeft className="w-5 h-5" />
+1	                  </Button>
+1	
+1	                <div className="text-center">
+1	                  <h1 className="text-white font-bold text-lg">{show.title}</h1>
+1	                  <p className="text-purple-300 text-sm">Host Console</p>
+1	                </div>
+1	
+1	                <div className="flex items-center gap-2">
+1	                  {/* MVP PHASE-1: Seller viewer count from Daily SDK (UI-only) */}
+1	                  <Badge className="bg-black/60 backdrop-blur-sm text-white border-white/30">
+1	                    <Users className="w-4 h-4 mr-1" />
+1	                    {liveViewerCount ?? show.viewer_count ?? 0}
+1	                  </Badge>
+1	                  {isShowLive(show) && (
+1	                    <Badge className="bg-red-500 text-white border-0 animate-pulse">
+1	                      <Radio className="w-4 h-4 mr-1" />
+1	                      LIVE
+1	                    </Badge>
+1	                  )}
+1	                </div>
+1	              </div>
+1	            </div>
+1	          </div>
+1	
+1	          {/* RIGHT COLUMN - Chat & Metrics */}
+1	          <div className="bg-gray-900 flex flex-col h-full overflow-hidden">
+1	            {/* Metrics Section */}
+1	            <div className="p-4 border-b border-gray-800 flex-shrink-0">
+1	              <h2 className="text-white font-bold mb-3">Analytics</h2>
+1	              <div className="space-y-2">
+1	                <div className="flex items-center justify-between bg-gray-800 rounded p-2">
+1	                  <div className="flex items-center gap-2">
+1	                    <Users className="w-4 h-4 text-blue-400" />
+1	                    <span className="text-gray-300 text-sm">Viewers</span>
+1	                  </div>
+1	                  <span className="text-white font-bold">{stats.viewers}</span>
+1	                </div>
+1	                <div className="flex items-center justify-between bg-gray-800 rounded p-2">
+1	                  <div className="flex items-center gap-2">
+1	                    <Package className="w-4 h-4 text-green-400" />
+1	                    <span className="text-gray-300 text-sm">Sales</span>
+1	                  </div>
+1	                  <span className="text-white font-bold">{stats.sales}</span>
+1	                </div>
+1	                <div className="flex items-center justify-between bg-gray-800 rounded p-2">
+1	                  <div className="flex items-center gap-2">
+1	                    <DollarSign className="w-4 h-4 text-purple-400" />
+1	                    <span className="text-gray-300 text-sm">Revenue</span>
+1	                  </div>
+1	                  <span className="text-white font-bold">${stats.revenue.toFixed(2)}</span>
+1	                </div>
+1	              </div>
+1	            </div>
+1	
+1	            {/* Chat Component */}
+1	            {/* Container is device-gated (isDesktopDevice), so chat mounts only on desktop.
+1	                This prevents double polling and freeze under load. */}
+1	            <div className="flex-1 flex flex-col min-h-0 pb-6">
+1	              {console.log("[HOSTCONSOLE AUTH DEBUG][DESKTOP]", {
+1	                currentUserId: currentUser?.id ?? null,
+1	                currentUserRole: currentUser?.role ?? null
+1	              })}
+1	              {useSupabaseChat ? (
+1	                <SupabaseLiveChat
+1	                  showId={showId}
+1	                  sellerId={currentSeller?.id}
+1	                  isSeller={true}
+1	                  isOverlay={false}
+1	                  user={currentUser}
+1	                />
+1	              ) : (
+1	                <LiveChat
+1	                  showId={showId}
+1	                  sellerId={currentSeller?.id}
+1	                  isSeller={true}
+1	                  isEmbedded={true}
+1	                />
+1	              )}
+1	            </div>
+1	          </div>
+1	        </div>
+1	        )}
+1	
+1	
+1	        {/* Recent Orders Dialog - DESKTOP ONLY */}
+1	        <Dialog open={showRecentOrders} onOpenChange={setShowRecentOrders}>
+1	          <DialogContent className="max-w-2xl max-h-[80vh] overflow-hidden bg-white">
+1	            <DialogHeader>
+1	              <DialogTitle className="text-gray-900 text-xl">Recent Orders</DialogTitle>
+1	            </DialogHeader>
+1	            <div className="overflow-y-auto max-h-[60vh]">
+1	              {orders.length === 0 ? (
+1	                <p className="text-gray-500 text-center py-8">No orders yet</p>
+1	              ) : (
+1	                <div className="space-y-3">
+1	                  {orders.slice().reverse().map((order) => (
+1	                    <div
+1	                      key={order.id}
+1	                      className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors"
+1	                    >
+1	                      <img
+1	                        src={order.product?.image_urls?.[0] || "/placeholder.png"}
+1	                        alt={order.product?.title}
+1	                        className="w-16 h-16 object-cover rounded-lg flex-shrink-0"
+1	                      />
+1	                      <div className="flex-1 min-w-0">
+1	                        <p className="font-semibold text-gray-900 truncate">{order.product?.title}</p>
+1	                        <p className="text-sm text-gray-600">{order.buyer?.display_name || 'Buyer'}</p>
+1	                      </div>
+1	                      <p className="text-lg font-bold text-gray-900 flex-shrink-0">${order.price?.toFixed(2)}</p>
+1	                    </div>
+1	                  ))}
+1	                </div>
+1	              )}
+1	            </div>
+1	          </DialogContent>
+1	        </Dialog>
+1	
+1	        {/* Add Product Bottom Drawer - APP VERSION */}
+1	        <BottomDrawer
+1	          isOpen={showAddProductDrawer}
+1	          onClose={() => setShowAddProductDrawer(false)}
+1	          title="Add New Product"
+1	          height="70vh"
+1	        >
+1	          <ProductForm
+1	            product={null}
+1	            onSave={handleSaveProduct}
+1	            onCancel={() => setShowAddProductDrawer(false)}
+1	            isSubmitting={createProductMutation.isPending}
+1	          />
+1	        </BottomDrawer>
+1	
+1	        {/* Add Product Dialog - DESKTOP VERSION */}
+1	        <Dialog open={showProductDialog} onOpenChange={setShowProductDialog}>
+1	          <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto bg-white border-gray-200">
+1	            <DialogHeader>
+1	              <DialogTitle className="text-gray-900 text-xl">Add New Product</DialogTitle>
+1	              <p className="text-gray-600 text-sm mt-2">
+1	                Add a product to your inventory during the live show
+1	              </p>
+1	            </DialogHeader>
+1	            <ProductForm
+1	              product={null}
+1	              onSave={handleSaveProduct}
+1	              onCancel={() => setShowProductDialog(false)}
+1	              isSubmitting={createProductMutation.isPending}
+1	            />
+1	          </DialogContent>
+1	        </Dialog>
+1	
+1	        {/* Fulfillment Bottom Drawer - MOBILE VERSION */}
+1	        <BottomDrawer
+1	          isOpen={showFulfillmentDrawer}
+1	          onClose={() => setShowFulfillmentDrawer(false)}
+1	          title="Order Fulfillment"
+1	          height="80vh"
+1	        >
+1	          <Tabs defaultValue="verify" className="w-full">
+1	            <TabsList className="w-full mb-4">
+1	              <TabsTrigger value="verify" className="flex-1">
+1	                <QrCode className="w-4 h-4 mr-2" />
+1	                Verify Code
+1	              </TabsTrigger>
+1	              <TabsTrigger value="batches" className="flex-1">
+1	                <Package className="w-4 h-4 mr-2" />
+1	                All Orders
+1	              </TabsTrigger>
+1	            </TabsList>
+1	            <TabsContent value="verify">
+1	              <PickupVerification
+1	                sellerId={currentSeller?.id}
+1	                sellerEmail={currentUser?.email}
+1	                sellerName={currentSeller?.business_name || "Seller"}
+1	                isAdmin={currentUser?.role === "admin"}
+1	                onComplete={(batch, orderCount) => {
+1	                  queryClient.invalidateQueries({ queryKey: ['show-orders', showId] });
+1	                }}
+1	              />
+1	            </TabsContent>
+1	            <TabsContent value="batches">
+1	              <BatchFulfillmentList
+1	                showId={showId}
+1	                sellerId={currentSeller?.id}
+1	                isAdmin={currentUser?.role === "admin"}
+1	                onBatchUpdate={() => {
+1	                  queryClient.invalidateQueries({ queryKey: ['show-orders', showId] });
+1	                }}
+1	              />
+1	            </TabsContent>
+1	          </Tabs>
+1	        </BottomDrawer>
+1	
+1	        {/* Fulfillment Dialog - DESKTOP VERSION */}
+1	        <Dialog open={showFulfillmentDialog} onOpenChange={setShowFulfillmentDialog}>
+1	          <DialogContent className="max-w-3xl max-h-[90vh] overflow-hidden bg-white">
+1	            <DialogHeader>
+1	              <DialogTitle className="text-gray-900 text-xl flex items-center gap-2">
+1	                <ClipboardCheck className="w-6 h-6" />
+1	                Order Fulfillment
+1	              </DialogTitle>
+1	            </DialogHeader>
+1	            <Tabs defaultValue="verify" className="w-full">
+1	              <TabsList className="w-full mb-4">
+1	                <TabsTrigger value="verify" className="flex-1">
+1	                  <QrCode className="w-4 h-4 mr-2" />
+1	                  Verify Pickup Code
+1	                </TabsTrigger>
+1	                <TabsTrigger value="batches" className="flex-1">
+1	                  <Package className="w-4 h-4 mr-2" />
+1	                  All Order Batches
+1	                </TabsTrigger>
+1	              </TabsList>
+1	              <TabsContent value="verify" className="max-h-[60vh] overflow-y-auto">
+1	                <PickupVerification
+1	                  sellerId={currentSeller?.id}
+1	                  sellerEmail={currentUser?.email}
+1	                  sellerName={currentSeller?.business_name || "Seller"}
+1	                  isAdmin={currentUser?.role === "admin"}
+1	                  onComplete={(batch, orderCount) => {
+1	                    queryClient.invalidateQueries({ queryKey: ['show-orders', showId] });
+1	                  }}
+1	                />
+1	              </TabsContent>
+1	              <TabsContent value="batches" className="max-h-[60vh] overflow-y-auto">
+1	                <BatchFulfillmentList
+1	                  showId={showId}
+1	                  sellerId={currentSeller?.id}
+1	                  isAdmin={currentUser?.role === "admin"}
+1	                  onBatchUpdate={() => {
+1	                    queryClient.invalidateQueries({ queryKey: ['show-orders', showId] });
+1	                  }}
+1	                />
+1	              </TabsContent>
+1	            </Tabs>
+1	          </DialogContent>
+1	        </Dialog>
+1	    </div>
+1	  );
+1	}

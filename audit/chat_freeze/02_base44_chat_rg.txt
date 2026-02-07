@@ -1,0 +1,3 @@
+src\components\chat\LiveChatOverlay.jsx:78:    queryFn: () => base44.entities.ChatMessage.filter({ show_id: showId }, 'created_date'),
+src\components\chat\LiveChatOverlay.jsx:84:    mutationFn: (messageData) => base44.entities.ChatMessage.create(messageData),
+src\components\chat\LiveChatOverlay.jsx:93:    mutationFn: ({ id, isPinned }) => base44.entities.ChatMessage.update(id, { is_pinned: isPinned }),

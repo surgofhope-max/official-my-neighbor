@@ -1,0 +1,401 @@
+﻿1	import React, { useState, useEffect, useRef } from "react";
+2	import { supabase } from "@/lib/supabase/supabaseClient";
+3	import { supabaseApi as base44 } from "@/api/supabaseClient";
+4	import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+5	import { Input } from "@/components/ui/input";
+6	import { Button } from "@/components/ui/button";
+7	import { Badge } from "@/components/ui/badge";
+8	import { Send, Pin, MessageCircle, X, Ban, MoreVertical } from "lucide-react";
+9	import {
+10	  DropdownMenu,
+11	  DropdownMenuTrigger,
+12	  DropdownMenuContent,
+13	  DropdownMenuItem
+14	} from "@/components/ui/dropdown-menu";
+15	import ViewerBanDialog from "@/components/host/ViewerBanDialog";
+16	
+17	/**
+18	 * LiveChatOverlay Component
+19	 * Transparent overlay chat for Live Show Buyer's View
+20	 * UPDATED: Added ban enforcement
+21	 */
+22	export default function LiveChatOverlay({ showId, isSeller = false, onClose, inputOnly = false, sellerId = null }) {
+23	  const [message, setMessage] = useState("");
+24	  const [user, setUser] = useState(null);
+25	  const [isVisible, setIsVisible] = useState(true);
+26	  const [fadeMessages, setFadeMessages] = useState(false);
+27	  const [banningViewer, setBanningViewer] = useState(null);
+28	  const messagesEndRef = useRef(null);
+29	  const queryClient = useQueryClient();
+30	  const fadeTimeoutRef = useRef(null);
+31	
+32	  useEffect(() => {
+33	    loadUser();
+34	  }, []);
+35	
+36	  const loadUser = async () => {
+37	    try {
+38	      const { data, error } = await supabase.auth.getUser();
+39	      if (error) {
+40	        // Gracefully handle - user just can't chat
+41	        setUser(null);
+42	        return;
+43	      }
+44	      setUser(data?.user ?? null);
+45	    } catch (error) {
+46	      // Swallow errors - chat is non-critical
+47	      setUser(null);
+48	    }
+49	  };
+50	
+51	  // Check if viewer is banned from chatting - ONLY when user is actively chatting
+52	  // DO NOT poll continuously - check once on mount and when sending messages
+53	  const { data: viewerBan } = useQuery({
+54	    queryKey: ['viewer-ban-check', sellerId, user?.id],
+55	    queryFn: async () => {
+56	      if (!sellerId || !user?.id) return null;
+57	      const { data, error } = await supabase
+58	        .from('viewer_bans')
+59	        .select('id, ban_type, reason')
+60	        .eq('seller_id', sellerId)
+61	        .eq('viewer_id', user.id)
+62	        .maybeSingle();
+63	
+64	      if (error) {
+65	        console.warn('[CHAT] Failed to check ban status:', error.message);
+66	        return null;
+67	      }
+68	      return data;
+69	    },
+70	    enabled: !!sellerId && !!user && !isSeller,
+71	    staleTime: 300000, // 5 minutes - ban status rarely changes
+72	    refetchInterval: false, // DO NOT poll - prevents loop
+73	    refetchOnWindowFocus: false
+74	  });
+75	
+76	  const { data: messages = [] } = useQuery({
+77	    queryKey: ['chat-messages', showId],
+78	    queryFn: () => base44.entities.ChatMessage.filter({ show_id: showId }, 'created_date'),
+79	    refetchInterval: 2000,
+80	    enabled: !!showId && !inputOnly
+81	  });
+82	
+83	  const sendMessageMutation = useMutation({
+84	    mutationFn: (messageData) => base44.entities.ChatMessage.create(messageData),
+85	    onSuccess: () => {
+86	      queryClient.invalidateQueries({ queryKey: ['chat-messages', showId] });
+87	      setMessage("");
+88	      if (!inputOnly) resetFadeTimer();
+89	    },
+90	  });
+91	
+92	  const pinMessageMutation = useMutation({
+93	    mutationFn: ({ id, isPinned }) => base44.entities.ChatMessage.update(id, { is_pinned: isPinned }),
+94	    onSuccess: () => {
+95	      queryClient.invalidateQueries({ queryKey: ['chat-messages', showId] });
+96	    },
+97	  });
+98	
+99	  const resetFadeTimer = () => {
+100	    setFadeMessages(false);
+101	    if (fadeTimeoutRef.current) {
+102	      clearTimeout(fadeTimeoutRef.current);
+103	    }
+104	    fadeTimeoutRef.current = setTimeout(() => {
+105	      setFadeMessages(true);
+106	    }, 5000);
+107	  };
+108	
+109	  useEffect(() => {
+110	    if (!inputOnly) {
+111	      resetFadeTimer();
+112	      return () => {
+113	        if (fadeTimeoutRef.current) {
+114	          clearTimeout(fadeTimeoutRef.current);
+115	        }
+116	      };
+117	    }
+118	  }, [messages.length, inputOnly]);
+119	
+120	  const handleSend = (e) => {
+121	    e.preventDefault();
+122	    if (!message.trim() || !user) return;
+123	
+124	    // ENFORCEMENT: Check if user is banned from chatting
+125	    if (viewerBan && (viewerBan.ban_type === 'chat' || viewerBan.ban_type === 'view' || viewerBan.ban_type === 'full')) {
+126	      console.log("ðŸš« CHAT BLOCKED - User is banned:", viewerBan);
+127	      alert(`â›” You have been banned from chatting.\n\nBan Type: ${viewerBan.ban_type}\n${viewerBan.reason ? `Reason: ${viewerBan.reason}` : ''}`);
+128	      return;
+129	    }
+130	
+131	    sendMessageMutation.mutate({
+132	      show_id: showId,
+133	      user_id: user.id,
+134	      user_name: user.full_name || user.email.split('@')[0],
+135	      user_avatar: user.profile_image_url || null,
+136	      message: message.trim(),
+137	      is_seller: isSeller
+138	    });
+139	  };
+140	
+141	  const handlePin = (msg) => {
+142	    if (!isSeller) return;
+143	    pinMessageMutation.mutate({ id: msg.id, isPinned: !msg.is_pinned });
+144	  };
+145	
+146	  const handleBanViewer = (msg) => {
+147	    console.log("ðŸš« Mute viewer clicked (overlay):", msg);
+148	    setBanningViewer({
+149	      user_id: msg.user_id,
+150	      user_name: msg.user_name
+151	    });
+152	  };
+153	
+154	  useEffect(() => {
+155	    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+156	  }, [messages]);
+157	
+158	  const pinnedMessages = messages.filter(m => m.is_pinned);
+159	  const regularMessages = messages.filter(m => !m.is_pinned);
+160	  const visibleMessages = regularMessages.slice(-5);
+161	
+162	  const isChatBanned = viewerBan && (viewerBan.ban_type === 'chat' || viewerBan.ban_type === 'view' || viewerBan.ban_type === 'full');
+163	
+164	  if (!isVisible) {
+165	    return null;
+166	  }
+167	
+168	  // Input-only mode for bottom bar
+169	  if (inputOnly) {
+170	    console.log("[CHAT DEBUG OVERLAY] user:", user);
+171	    console.log("[CHAT DEBUG OVERLAY] isSeller:", isSeller);
+172	    console.log("[CHAT DEBUG OVERLAY] showId:", showId);
+173	    return (
+174	      <form onSubmit={handleSend} className="w-full">
+175	        {user ? (
+176	          isChatBanned ? (
+177	            <div 
+178	              className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl w-full"
+179	              style={{
+180	                backgroundColor: 'rgba(220, 38, 38, 0.9)',
+181	                backdropFilter: 'blur(12px)',
+182	                WebkitBackdropFilter: 'blur(12px)',
+183	                border: '1px solid rgba(255, 255, 255, 0.3)',
+184	                boxShadow: '0 4px 20px 0 rgba(0, 0, 0, 0.5)'
+185	              }}
+186	            >
+187	              <Ban className="w-4 h-4 text-white" />
+188	              <p className="text-xs text-white font-medium">You are banned from chatting</p>
+189	            </div>
+190	          ) : (
+191	            <div 
+192	              className="flex gap-2 px-3 py-2.5 rounded-xl items-center w-full"
+193	              style={{
+194	                backgroundColor: 'rgba(0, 0, 0, 0.7)',
+195	                backdropFilter: 'blur(12px)',
+196	                WebkitBackdropFilter: 'blur(12px)',
+197	                border: '1px solid rgba(255, 255, 255, 0.2)',
+198	                boxShadow: '0 4px 20px 0 rgba(0, 0, 0, 0.5)'
+199	              }}
+200	            >
+201	              <Input
+202	                value={message}
+203	                onChange={(e) => setMessage(e.target.value)}
+204	                placeholder="Type your message..."
+205	                className="flex-1 bg-transparent border-0 text-white placeholder:text-white/50 text-sm h-8 px-2 focus-visible:ring-0"
+206	                maxLength={500}
+207	              />
+208	              <Button
+209	                type="submit"
+210	                size="sm"
+211	                className="bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 h-8 px-4 rounded-lg flex-shrink-0"
+212	                disabled={!message.trim() || sendMessageMutation.isPending}
+213	              >
+214	                <Send className="w-4 h-4" />
+215	              </Button>
+216	            </div>
+217	          )
+218	        ) : (
+219	          <div 
+220	            className="text-center py-2.5 px-4 rounded-xl w-full"
+221	            style={{
+222	              backgroundColor: 'rgba(0, 0, 0, 0.7)',
+223	              backdropFilter: 'blur(12px)',
+224	              border: '1px solid rgba(255, 255, 255, 0.2)'
+225	            }}
+226	          >
+227	            <p className="text-xs text-white/60">Log in to join the chat</p>
+228	          </div>
+229	        )}
+230	      </form>
+231	    );
+232	  }
+233	
+234	  // UPDATED: Text-only chat overlay - NO BLUR BOX, NO TIMESTAMPS
+235	  return (
+236	    <>
+237	      {/* Chat Messages - LEFT SIDE, MID-HEIGHT - TEXT ONLY */}
+238	      <div 
+239	        className="fixed left-3 z-[100] w-72 max-w-[85vw] animate-fade-in"
+240	        style={{ 
+241	          top: '50%',
+242	          transform: 'translateY(-50%)',
+243	        }}
+244	      >
+245	        {/* Pinned Messages - With subtle background for visibility */}
+246	        {pinnedMessages.length > 0 && (
+247	          <div className="mb-2 space-y-1">
+248	            {pinnedMessages.map((msg) => (
+249	              <div 
+250	                key={msg.id} 
+251	                className={`flex items-start gap-1.5 px-2 py-1 rounded transition-opacity duration-500 opacity-100`}
+252	                style={{
+253	                  backgroundColor: 'rgba(250, 204, 21, 0.2)',
+254	                }}
+255	              >
+256	                <Pin className="w-3 h-3 text-yellow-300 flex-shrink-0 mt-0.5" />
+257	                <div className="flex-1 min-w-0">
+258	                  <span className="font-bold text-xs text-yellow-100 drop-shadow-lg">
+259	                    {msg.user_name}:
+260	                  </span>{" "}
+261	                  <span className="text-xs text-yellow-50 drop-shadow-lg">
+262	                    {msg.message}
+263	                  </span>
+264	                </div>
+265	              </div>
+266	            ))}
+267	          </div>
+268	        )}
+269	
+270	        {/* Regular Messages - NO BACKGROUND BOX, NO TIMESTAMPS */}
+271	        <div className="space-y-2">
+272	          {visibleMessages.length === 0 && (
+273	            <div 
+274	              className={`text-center py-4 transition-opacity duration-500 opacity-100`}
+275	            >
+276	              <MessageCircle className="w-8 h-8 text-white/40 mx-auto mb-2 drop-shadow-lg" />
+277	              <p className="text-xs text-white/60 drop-shadow-lg">No messages yet</p>
+278	            </div>
+279	          )}
+280	
+281	          {visibleMessages.map((msg, index) => (
+282	            <div 
+283	              key={msg.id} 
+284	              className={`flex items-start gap-2 group animate-slide-in transition-opacity duration-500 opacity-100`}
+285	              style={{ 
+286	                animationDelay: `${index * 0.05}s`,
+287	                animationFillMode: 'backwards'
+288	              }}
+289	            >
+290	              {/* Message Content - Enhanced text shadows for readability */}
+291	              <div className="flex-1 min-w-0">
+292	                <div className="flex items-center gap-1.5 mb-0.5">
+293	                  <span 
+294	                    className={`font-bold text-xs ${
+295	                      msg.is_seller ? 'text-purple-200' : 'text-white'
+296	                    }`}
+297	                    style={{
+298	                      textShadow: '0 2px 4px rgba(0,0,0,0.8), 0 1px 2px rgba(0,0,0,0.6)'
+299	                    }}
+300	                  >
+301	                    {msg.user_name}:
+302	                  </span>
+303	                  {msg.is_seller && (
+304	                    <Badge 
+305	                      className="bg-purple-500/40 text-purple-100 border-purple-400/40 border text-[8px] px-1.5 py-0 leading-tight shadow-lg"
+306	                    >
+307	                      Host
+308	                    </Badge>
+309	                  )}
+310	                </div>
+311	                <p 
+312	                  className="text-xs text-white leading-relaxed"
+313	                  style={{
+314	                    textShadow: '0 2px 4px rgba(0,0,0,0.8), 0 1px 2px rgba(0,0,0,0.6)'
+315	                  }}
+316	                >
+317	                  {msg.message}
+318	                </p>
+319	              </div>
+320	
+321	              {/* Pin button (seller only) */}
+322	              {isSeller && (
+323	                <button
+324	                  onClick={() => handlePin(msg)}
+325	                  className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-black/30 rounded shadow-lg"
+326	                  title="Pin message"
+327	                >
+328	                  <Pin className="w-3 h-3 text-white/80" />
+329	                </button>
+330	              )}
+331	
+332	              {/* Moderation menu (seller only, viewer messages only) */}
+333	              {isSeller && !msg.is_seller && (
+334	                <DropdownMenu>
+335	                  <DropdownMenuTrigger asChild>
+336	                    <button
+337	                      className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-black/30 rounded shadow-lg"
+338	                      title="More options"
+339	                    >
+340	                      <MoreVertical className="w-3 h-3 text-white/80" />
+341	                    </button>
+342	                  </DropdownMenuTrigger>
+343	                  <DropdownMenuContent align="end">
+344	                    <DropdownMenuItem
+345	                      className="text-red-600"
+346	                      onClick={() => handleBanViewer(msg)}
+347	                    >
+348	                      Mute from chat
+349	                    </DropdownMenuItem>
+350	                  </DropdownMenuContent>
+351	                </DropdownMenu>
+352	              )}
+353	            </div>
+354	          ))}
+355	          <div ref={messagesEndRef} />
+356	        </div>
+357	      </div>
+358	
+359	      <style>{`
+360	        @keyframes fade-in {
+361	          from {
+362	            opacity: 0;
+363	            transform: translateY(10px);
+364	          }
+365	          to {
+366	            opacity: 1;
+367	            transform: translateY(0);
+368	          }
+369	        }
+370	
+371	        @keyframes slide-in {
+372	          from {
+373	            opacity: 0;
+374	            transform: translateX(-10px);
+375	          }
+376	          to {
+377	            opacity: 1;
+378	            transform: translateX(0);
+379	          }
+380	        }
+381	
+382	        .animate-fade-in {
+383	          animation: fade-in 0.3s ease-out;
+384	        }
+385	
+386	        .animate-slide-in {
+387	          animation: slide-in 0.3s ease-out;
+388	        }
+389	      `}</style>
+390	
+391	      {/* Viewer Ban Dialog */}
+392	      <ViewerBanDialog
+393	        open={!!banningViewer}
+394	        onOpenChange={() => setBanningViewer(null)}
+395	        viewer={banningViewer}
+396	        sellerId={sellerId}
+397	        showId={showId}
+398	      />
+399	    </>
+400	  );
+401	}

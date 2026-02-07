@@ -1,0 +1,24 @@
+supabase\migrations\20241214010000_live_show_messages.sql:9:-- Create the live_show_messages table
+supabase\migrations\20241214010000_live_show_messages.sql:10:CREATE TABLE IF NOT EXISTS live_show_messages (
+supabase\migrations\20241214010000_live_show_messages.sql:20:CREATE INDEX IF NOT EXISTS idx_live_show_messages_show_id
+supabase\migrations\20241214010000_live_show_messages.sql:21:  ON live_show_messages(show_id);
+supabase\migrations\20241214010000_live_show_messages.sql:24:CREATE INDEX IF NOT EXISTS idx_live_show_messages_created_at
+supabase\migrations\20241214010000_live_show_messages.sql:25:  ON live_show_messages(show_id, created_at);
+supabase\migrations\20241214010000_live_show_messages.sql:34:ALTER TABLE live_show_messages ENABLE ROW LEVEL SECURITY;
+supabase\migrations\20241214010000_live_show_messages.sql:37:CREATE OR REPLACE FUNCTION is_show_live(p_show_id UUID)
+supabase\migrations\20241214010000_live_show_messages.sql:64:DROP POLICY IF EXISTS "live_show_messages_select_policy" ON live_show_messages;
+supabase\migrations\20241214010000_live_show_messages.sql:65:CREATE POLICY "live_show_messages_select_policy" ON live_show_messages
+supabase\migrations\20241214010000_live_show_messages.sql:76:DROP POLICY IF EXISTS "live_show_messages_insert_policy" ON live_show_messages;
+supabase\migrations\20241214010000_live_show_messages.sql:77:CREATE POLICY "live_show_messages_insert_policy" ON live_show_messages
+supabase\migrations\20241215010000_viewer_bans.sql:6:-- Create viewer_bans table
+supabase\migrations\20241215010000_viewer_bans.sql:7:CREATE TABLE IF NOT EXISTS viewer_bans (
+supabase\migrations\20241215010000_viewer_bans.sql:24:ALTER TABLE viewer_bans ENABLE ROW LEVEL SECURITY;
+supabase\migrations\20241215010000_viewer_bans.sql:27:-- RLS POLICIES FOR viewer_bans
+supabase\migrations\20241215010000_viewer_bans.sql:31:CREATE POLICY "Sellers can manage their own bans"
+supabase\migrations\20241215010000_viewer_bans.sql:50:CREATE POLICY "Viewers can see their own ban"
+supabase\migrations\20241215010000_viewer_bans.sql:56:-- HARD SERVER ENFORCEMENT ON live_show_messages
+supabase\migrations\20241215010000_viewer_bans.sql:61:DROP POLICY IF EXISTS "Users can send messages to live shows" ON live_show_messages;
+supabase\migrations\20241215010000_viewer_bans.sql:64:CREATE POLICY "Users can send messages to live shows"
+supabase\migrations\20241215010000_viewer_bans.sql:65:  ON live_show_messages
+supabase\migrations\20241215010000_viewer_bans.sql:71:    AND is_show_live(show_id)
+supabase\migrations\20241215010000_viewer_bans.sql:74:      SELECT 1 FROM viewer_bans

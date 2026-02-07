@@ -1,0 +1,1614 @@
+﻿1	import React, { useState, useEffect, useRef, useCallback } from "react";
+1	import { Link, useLocation, useNavigate } from "react-router-dom";
+1	import { createPageUrl } from "@/utils";
+1	import { supabase } from "@/lib/supabase/supabaseClient";
+1	import { useQueryClient } from "@tanstack/react-query";
+1	import { useSupabaseAuth } from "@/lib/auth/SupabaseAuthProvider";
+1	import { getUnreadNotificationCount } from "@/api/notifications";
+1	import { getUnreadMessageCount } from "@/api/messages";
+1	import { getEffectiveUserContext } from "@/lib/auth/effectiveUser";
+1	import { getSellerByUserId, getSellerById } from "@/api/sellers";
+1	import { canAccessRoute, getUnauthorizedRedirect, isSuperAdmin, requireSellerAsync } from "@/lib/auth/routeGuards";
+1	
+1	// ═══════════════════════════════════════════════════════════════════════════
+1	// IDENTITY CACHE: Session-scoped cache to reduce Supabase cold-start reads
+1	// Cache TTL: 10 minutes. Stored in sessionStorage for tab persistence.
+1	// ═══════════════════════════════════════════════════════════════════════════
+1	const IDENTITY_CACHE_KEY = "lm_identity_cache";
+1	const IDENTITY_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+1	
+1	// ═══════════════════════════════════════════════════════════════════════════
+1	// FORENSIC LOGGING HELPER (gated behind localStorage flag)
+1	// Enable with: localStorage.setItem("LM_FORENSIC", "1")
+1	// ═══════════════════════════════════════════════════════════════════════════
+1	const LM_FORENSIC = () =>
+1	  typeof window !== "undefined" && window.localStorage?.getItem("LM_FORENSIC") === "1";
+1	
+1	// Log forensic mode status on first load (only once per page load)
+1	if (typeof window !== "undefined") {
+1	  try {
+1	    if (LM_FORENSIC()) console.warn("[LM_FORENSIC] ENABLED (localStorage LM_FORENSIC=1)");
+1	  } catch {}
+1	}
+1	
+1	/**
+1	 * Identity cache structure for session-scoped caching
+1	 */
+1	function readIdentityCache() {
+1	  try {
+1	    const raw = sessionStorage.getItem(IDENTITY_CACHE_KEY);
+1	    if (!raw) return null;
+1	    const parsed = JSON.parse(raw);
+1	    // Validate structure
+1	    if (typeof parsed?.userId !== "string" || typeof parsed?.timestamp !== "number") {
+1	      return null;
+1	    }
+1	    return parsed;
+1	  } catch {
+1	    return null;
+1	  }
+1	}
+1	
+1	function writeIdentityCache(data) {
+1	  try {
+1	    sessionStorage.setItem(IDENTITY_CACHE_KEY, JSON.stringify({
+1	      ...data,
+1	      timestamp: Date.now()
+1	    }));
+1	  } catch {
+1	    // sessionStorage may be unavailable in some contexts
+1	  }
+1	}
+1	
+1	function clearIdentityCache() {
+1	  try {
+1	    sessionStorage.removeItem(IDENTITY_CACHE_KEY);
+1	  } catch {
+1	    // Ignore errors
+1	  }
+1	}
+1	
+1	function isIdentityCacheValid(cache, userId) {
+1	  if (!cache) return false;
+1	  // Must match current user
+1	  if (cache.userId !== userId) return false;
+1	  // Must be younger than TTL
+1	  const age = Date.now() - cache.timestamp;
+1	  return age < IDENTITY_CACHE_TTL_MS;
+1	}
+1	import {
+1	  Video,
+1	  ShoppingBag,
+1	  LayoutDashboard,
+1	  Package,
+1	  Users,
+1	  Settings,
+1	  LogOut,
+1	  Menu,
+1	  X,
+1	  Radio,
+1	  Receipt,
+1	  User,
+1	  Store,
+1	  MessageCircle,
+1	  Mail
+1	} from "lucide-react";
+1	import { Button } from "@/components/ui/button";
+1	import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+1	import { Alert, AlertDescription } from "@/components/ui/alert";
+1	import { AlertCircle } from "lucide-react";
+1	import NotificationBell from "./components/layout/NotificationBell";
+1	import ImpersonationBanner from "./components/admin/ImpersonationBanner";
+1	
+1	export default function Layout({ children, currentPageName }) {
+1	  const location = useLocation();
+1	  const navigate = useNavigate();
+1	  const queryClient = useQueryClient();
+1	  
+1	  // Use SupabaseAuthProvider as single source of truth for user state
+1	  const { user, isLoadingAuth } = useSupabaseAuth();
+1	  
+1	  const [seller, setSeller] = useState(null);
+1	  // Buyer profile for route guard prerequisites
+1	  const [buyerProfile, setBuyerProfile] = useState(null);
+1	  // Option B: Track approved seller status from DB truth
+1	  const [isVerifiedApprovedSeller, setIsVerifiedApprovedSeller] = useState(false);
+1	  const [dbUserRole, setDbUserRole] = useState(null);
+1	  // AUDIT: Full DB user row for forensic comparison with auth user
+1	  const [dbUserRow, setDbUserRow] = useState(null);
+1	  const [unreadCount, setUnreadCount] = useState(0);
+1	  const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
+1	  
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  // ACCOUNT STATUS: Platform-level suspension state
+1	  // 'active' = full access, 'suspended' = viewer-only mode
+1	  // Canonical source: public.users.account_status
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  const [accountStatus, setAccountStatus] = useState("active");
+1	
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  // AUTH HYDRATION GATE: Prevents routing decisions until session is fully ready
+1	  // authHydrated becomes true ONLY when:
+1	  //   1. Auth provider has finished initial session check (isLoadingAuth = false)
+1	  //   2. Identity data (user role, seller status) has been loaded
+1	  // Until authHydrated is true, Layout renders a neutral loading state.
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  const [authHydrated, setAuthHydrated] = useState(false);
+1	  const authHydratedLoggedRef = useRef(false); // One-time log tracker
+1	
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  // IDENTITY CACHE STATE: Prevent repeated DB reads on route changes
+1	  // identityLoadedRef tracks if we've already loaded identity this session
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  const identityLoadedRef = useRef(false);
+1	  const identityLoadingRef = useRef(false); // Prevent concurrent loads
+1	  const cacheLoggedRef = useRef(false); // One-time log tracker
+1	
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  // CIRCUIT BREAKER: Stop hammering Supabase when degraded (503/timeout)
+1	  // Non-critical queries pause when degraded. Critical flows still work.
+1	  // Manual refresh resets the flag.
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  const [supabaseDegraded, setSupabaseDegraded] = useState(false);
+1	  const degradedLoggedRef = useRef(false);
+1	
+1	  // Helper to detect degraded state from error
+1	  const checkAndSetDegraded = (error) => {
+1	    if (!error) return false;
+1	    const msg = error?.message?.toLowerCase() || "";
+1	    const code = error?.code || "";
+1	    const status = error?.status || error?.statusCode;
+1	    
+1	    const isDegraded = 
+1	      status === 503 ||
+1	      code === "503" ||
+1	      msg.includes("503") ||
+1	      msg.includes("upstream connect error") ||
+1	      msg.includes("connection timeout") ||
+1	      msg.includes("fetch failed") ||
+1	      msg.includes("networkerror") ||
+1	      msg.includes("failed to fetch");
+1	
+1	    if (isDegraded && !supabaseDegraded) {
+1	      setSupabaseDegraded(true);
+1	      if (!degradedLoggedRef.current) {
+1	        console.warn("[Supabase] Entering degraded mode — pausing background queries");
+1	        degradedLoggedRef.current = true;
+1	      }
+1	    }
+1	    return isDegraded;
+1	  };
+1	
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  // FORCE REFRESH: Explicit retry action to refresh identity from Supabase
+1	  // Call this when user clicks "Retry" or when we want to re-check after recovery
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  const forceRefreshIdentity = useCallback(async () => {
+1	    if (!user) return;
+1	    
+1	    // Clear cache and reset flags
+1	    clearIdentityCache();
+1	    identityLoadedRef.current = false;
+1	    cacheLoggedRef.current = false;
+1	    authHydratedLoggedRef.current = false;
+1	    setSupabaseDegraded(false);
+1	    degradedLoggedRef.current = false;
+1	    // Note: Don't reset authHydrated to false here - we want to keep the app usable during refresh
+1	    
+1	    // Re-fetch from Supabase
+1	    await loadSellerData(user);
+1	    loadUnreadCount(user);
+1	    loadUnreadNotificationCount(user);
+1	  }, [user]);
+1	
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  // BUYER PROFILE SYNC: Re-fetch buyer_profiles when BuyerProfile page saves
+1	  // This ensures route guards see the updated buyer profile immediately
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  useEffect(() => {
+1	    const handleBuyerProfileUpdated = async (event) => {
+1	      const userId = event.detail?.userId || user?.id;
+1	      if (!userId) return;
+1	      
+1	      console.log("[Layout] buyerProfileUpdated event received, re-fetching buyer_profiles");
+1	      
+1	      const { data: buyerRow, error: buyerError } = await supabase
+1	        .from("buyer_profiles")
+1	        .select("*")
+1	        .eq("user_id", userId)
+1	        .maybeSingle();
+1	      
+1	      if (!buyerError && buyerRow) {
+1	        console.log("[Layout] buyerProfile re-fetched:", { full_name: buyerRow.full_name, phone: buyerRow.phone, email: buyerRow.email });
+1	        setBuyerProfile(buyerRow);
+1	      } else {
+1	        console.warn("[Layout] buyerProfile re-fetch failed:", buyerError);
+1	      }
+1	    };
+1	    
+1	    window.addEventListener("buyerProfileUpdated", handleBuyerProfileUpdated);
+1	    return () => window.removeEventListener("buyerProfileUpdated", handleBuyerProfileUpdated);
+1	  }, [user?.id]);
+1	
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  // SELLER STATUS SYNC: Refresh identity when seller approval is detected
+1	  // This ensures nav updates immediately after BuyerProfile detects approval
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  useEffect(() => {
+1	    const handleSellerStatusUpdated = async (event) => {
+1	      const eventUserId = event.detail?.userId;
+1	      // Ignore if no authenticated user
+1	      if (!user?.id) return;
+1	      // Only act if event is for current user (or userId not specified)
+1	      if (eventUserId && eventUserId !== user.id) return;
+1	      
+1	      console.log("[Layout] sellerStatusUpdated received, refreshing identity");
+1	      
+1	      // Use existing forceRefreshIdentity to clear cache and reload from DB
+1	      await forceRefreshIdentity();
+1	    };
+1	    
+1	    window.addEventListener("sellerStatusUpdated", handleSellerStatusUpdated);
+1	    return () => window.removeEventListener("sellerStatusUpdated", handleSellerStatusUpdated);
+1	  }, [user?.id, forceRefreshIdentity]);
+1	
+1	  // Pages where header should be shown (lowercase to match normalized route keys)
+1	  const pagesWithHeader = ['marketplace', 'sellerdashboard', 'buyerprofile', 'admindashboard'];
+1	  const shouldShowHeader = pagesWithHeader.includes(currentPageName);
+1	
+1	  // Check if admin is impersonating
+1	  const impersonatingSellerId = sessionStorage.getItem('admin_impersonate_seller_id');
+1	  const isImpersonating = !!impersonatingSellerId;
+1	
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  // AUTH HYDRATION GATE: Subscribe to auth state changes during initial hydration
+1	  // This prevents false logout cascades when getSession returns null during hydration
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  useEffect(() => {
+1	    // Subscribe to auth state changes for hydration signals
+1	    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+1	      // On SIGNED_IN or TOKEN_REFRESHED, auth is definitely hydrated
+1	      // Auth is valid - identity loading will handle authHydrated
+1	      
+1	      // On SIGNED_OUT, auth is also hydrated (just no session)
+1	      if (event === "SIGNED_OUT") {
+1	        authHydratedLoggedRef.current = true;
+1	        setAuthHydrated(true);
+1	      }
+1	    });
+1	
+1	    return () => {
+1	      subscription.unsubscribe();
+1	    };
+1	  }, []);
+1	
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  // IDENTITY LOADING: Load ONCE per session, use cache when available
+1	  // Prevents repeated /users and /sellers reads on every route change
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  useEffect(() => {
+1	    if (isLoadingAuth) return; // Wait for auth check to complete
+1	    
+1	    if (user) {
+1	      // Check if identity already loaded this session (prevents re-fetch on route change)
+1	      if (identityLoadedRef.current && !impersonatingSellerId) {
+1	        // ═══════════════════════════════════════════════════════════════════════════
+1	        // FIX: State may have been reset on component remount, restore from cache
+1	        // This prevents the "seller → buyer nav" bug during navigation
+1	        // ═══════════════════════════════════════════════════════════════════════════
+1	        if (dbUserRole === null) {
+1	          const cache = readIdentityCache();
+1	          if (cache && cache.userId === user.id) {
+1	            // Restore canonical role and seller state from cache
+1	            setDbUserRole(cache.dbRole);
+1	            setIsVerifiedApprovedSeller(cache.isApprovedSeller);
+1	            if (cache.sellerRow) {
+1	              setSeller(cache.sellerRow);
+1	            }
+1	            setBuyerProfile(cache.buyerProfile || null);
+1	            // Restore account status from cache, but update ref too
+1	            const cachedStatus = cache.accountStatus || "active";
+1	            authoritativeAccountStatusRef.current = cachedStatus;
+1	            setAccountStatus(cachedStatus);
+1	            console.log('[Layout] Restored account_status from cache:', cachedStatus);
+1	          }
+1	        }
+1	        
+1	        // Auth is already hydrated from previous load
+1	        if (!authHydrated) {
+1	          setAuthHydrated(true);
+1	        }
+1	        loadUnreadCount(user);
+1	        loadUnreadNotificationCount(user);
+1	        return;
+1	      }
+1	
+1	      loadIdentityWithCache(user);
+1	      loadUnreadCount(user);
+1	      loadUnreadNotificationCount(user);
+1	    } else {
+1	      // Logged out - clear everything including cache
+1	      setSeller(null);
+1	      setBuyerProfile(null);
+1	      setIsVerifiedApprovedSeller(false);
+1	      setDbUserRole(null);
+1	      setDbUserRow(null);
+1	      setAccountStatus("active");
+1	      setUnreadCount(0);
+1	      setUnreadNotificationCount(0);
+1	      identityLoadedRef.current = false;
+1	      clearIdentityCache();
+1	      // Auth is hydrated even when logged out
+1	      markAuthHydrated("no user");
+1	    }
+1	  }, [user, isLoadingAuth]);
+1	
+1	  // Listen for impersonation changes (non-critical, skip when degraded)
+1	  // Impersonation is an explicit admin action - always re-fetch when it changes
+1	  useEffect(() => {
+1	    if (!user || supabaseDegraded) return;
+1	    
+1	    const handleStorageChange = () => {
+1	      if (supabaseDegraded) return;
+1	      // Impersonation change is explicit - always re-fetch (bypass cache)
+1	      loadSellerData(user);
+1	    };
+1	
+1	    // Poll for sessionStorage changes (since storage event doesn't fire for same-tab changes)
+1	    const interval = setInterval(() => {
+1	      if (supabaseDegraded) return;
+1	      const currentImpersonation = sessionStorage.getItem('admin_impersonate_seller_id');
+1	      if (currentImpersonation !== impersonatingSellerId) {
+1	        handleStorageChange();
+1	      }
+1	    }, 500);
+1	
+1	    return () => clearInterval(interval);
+1	  }, [impersonatingSellerId, user, supabaseDegraded]);
+1	
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  // ACCOUNT STATUS ENFORCEMENT: Realtime + Polling fallback
+1	  // When account is suspended, immediately force viewer-only mode
+1	  // This ensures suspended users are kicked out of seller routes in real-time
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  // AUTHORITATIVE ACCOUNT STATUS REF: Prevents stale closures from overwriting
+1	  // This ref is the source of truth for account_status enforcement
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  const authoritativeAccountStatusRef = useRef(accountStatus);
+1	  
+1	  // Keep ref in sync with state
+1	  useEffect(() => {
+1	    authoritativeAccountStatusRef.current = accountStatus;
+1	    console.log('[Layout] authoritative account_status:', accountStatus);
+1	  }, [accountStatus]);
+1	  
+1	  // Helper function to handle suspension enforcement
+1	  const handleAccountStatusChange = useCallback((newStatus) => {
+1	    if (!newStatus) return;
+1	    
+1	    // Use ref to avoid stale closure issues
+1	    const currentStatus = authoritativeAccountStatusRef.current;
+1	    if (newStatus === currentStatus) return;
+1	    
+1	    console.log(`[Layout] Account status changed: ${currentStatus} → ${newStatus}`);
+1	    
+1	    // Update BOTH ref and state immediately
+1	    authoritativeAccountStatusRef.current = newStatus;
+1	    setAccountStatus(newStatus);
+1	    
+1	    // Update cache with new status to prevent stale cache restoration
+1	    const existingCache = readIdentityCache();
+1	    if (existingCache && existingCache.userId === user?.id) {
+1	      writeIdentityCache({
+1	        ...existingCache,
+1	        accountStatus: newStatus
+1	      });
+1	    }
+1	    
+1	    // If suspended, redirect away from seller routes immediately
+1	    if (newStatus === 'suspended') {
+1	      console.log('[Layout] Account suspended - forcing viewer-only mode');
+1	      const currentPath = location.pathname.toLowerCase();
+1	      const sellerRoutes = ['sellerdashboard', 'sellerorders', 'sellerproducts', 'hostconsole', 'manageproducts'];
+1	      const isOnSellerRoute = sellerRoutes.some(route => currentPath.includes(route));
+1	      
+1	      if (isOnSellerRoute) {
+1	        navigate(createPageUrl("BuyerProfile"), { replace: true });
+1	      }
+1	    }
+1	  }, [location.pathname, navigate, user?.id]);
+1	  
+1	  // OPTION 1: Supabase Realtime subscription
+1	  useEffect(() => {
+1	    if (!user?.id) return;
+1	
+1	    // Create realtime channel for account status changes
+1	    const channel = supabase
+1	      .channel(`account_status_${user.id}`)
+1	      .on(
+1	        'postgres_changes',
+1	        {
+1	          event: 'UPDATE',
+1	          schema: 'public',
+1	          table: 'users',
+1	          filter: `id=eq.${user.id}`
+1	        },
+1	        (payload) => {
+1	          const newStatus = payload.new?.account_status;
+1	          console.log(`[Layout] Realtime received: account_status = ${newStatus}`);
+1	          handleAccountStatusChange(newStatus);
+1	        }
+1	      )
+1	      .subscribe((status) => {
+1	        if (status === 'SUBSCRIBED') {
+1	          console.log('[Layout] Realtime subscription active for account_status');
+1	        } else if (status === 'CHANNEL_ERROR') {
+1	          console.warn('[Layout] Realtime subscription error - falling back to polling');
+1	        }
+1	      });
+1	
+1	    return () => {
+1	      supabase.removeChannel(channel);
+1	    };
+1	  }, [user?.id, handleAccountStatusChange]);
+1	
+1	  // Realtime subscription for viewer_bans (chat mute enforcement)
+1	  useEffect(() => {
+1	    if (!user?.id) return;
+1	
+1	    const viewerBansChannel = supabase
+1	      .channel('viewer_bans_realtime')
+1	      .on(
+1	        'postgres_changes',
+1	        {
+1	          event: 'INSERT',
+1	          schema: 'public',
+1	          table: 'viewer_bans',
+1	          filter: `viewer_id=eq.${user.id}`
+1	        },
+1	        async (payload) => {
+1	          console.log('[Layout] Realtime: viewer_bans INSERT', payload);
+1	          console.log("[VB REALTIME]", {
+1	            eventType: payload?.eventType,
+1	            table: payload?.table,
+1	            schema: payload?.schema,
+1	            new: payload?.new,
+1	            old: payload?.old,
+1	          });
+1	          
+1	          // Dump active viewer-ban-check queries BEFORE invalidation
+1	          const matchesBefore = queryClient
+1	            .getQueryCache()
+1	            .findAll({ predicate: q => q.queryKey?.[0] === "viewer-ban-check" })
+1	            .map(q => ({
+1	              key: q.queryKey,
+1	              stateStatus: q.state.status,
+1	              fetchStatus: q.state.fetchStatus,
+1	              observers: q.getObserversCount?.() ?? "n/a",
+1	            }));
+1	          console.log("[VB CACHE][BEFORE INVALIDATE]", matchesBefore);
+1	          
+1	          queryClient.invalidateQueries({
+1	            predicate: q => q.queryKey?.[0] === 'viewer-ban-check'
+1	          });
+1	          
+1	          console.log("[VB CACHE][AFTER INVALIDATE]", {
+1	            invalidated: true,
+1	            userId: user?.id ?? null,
+1	            path: window.location.pathname,
+1	          });
+1	          
+1	          // Force refetch to prove if this fixes immediate update
+1	          console.log("[VB REALTIME][AFTER INVALIDATE] forcing refetchQueries for viewer-ban-check");
+1	          await queryClient.refetchQueries({ predicate: q => q.queryKey?.[0] === 'viewer-ban-check' });
+1	          console.log("[VB REALTIME][AFTER REFETCH] done");
+1	          
+1	          queryClient.invalidateQueries({ queryKey: ['viewer-bans'] });
+1	          queryClient.invalidateQueries({
+1	            predicate: q => q.queryKey?.[0] === 'seller-banned-viewers-count'
+1	          });
+1	        }
+1	      )
+1	      .on(
+1	        'postgres_changes',
+1	        {
+1	          event: 'DELETE',
+1	          schema: 'public',
+1	          table: 'viewer_bans',
+1	          filter: `viewer_id=eq.${user.id}`
+1	        },
+1	        async (payload) => {
+1	          console.log('[Layout] Realtime: viewer_bans DELETE', payload);
+1	          console.log("[VB REALTIME]", {
+1	            eventType: payload?.eventType,
+1	            table: payload?.table,
+1	            schema: payload?.schema,
+1	            new: payload?.new,
+1	            old: payload?.old,
+1	          });
+1	          
+1	          // Dump active viewer-ban-check queries BEFORE invalidation
+1	          const matchesBefore = queryClient
+1	            .getQueryCache()
+1	            .findAll({ predicate: q => q.queryKey?.[0] === "viewer-ban-check" })
+1	            .map(q => ({
+1	              key: q.queryKey,
+1	              stateStatus: q.state.status,
+1	              fetchStatus: q.state.fetchStatus,
+1	              observers: q.getObserversCount?.() ?? "n/a",
+1	            }));
+1	          console.log("[VB CACHE][BEFORE INVALIDATE]", matchesBefore);
+1	          
+1	          queryClient.invalidateQueries({
+1	            predicate: q => q.queryKey?.[0] === 'viewer-ban-check'
+1	          });
+1	          
+1	          console.log("[VB CACHE][AFTER INVALIDATE]", {
+1	            invalidated: true,
+1	            userId: user?.id ?? null,
+1	            path: window.location.pathname,
+1	          });
+1	          
+1	          // Force refetch to prove if this fixes immediate update
+1	          console.log("[VB REALTIME][AFTER INVALIDATE] forcing refetchQueries for viewer-ban-check");
+1	          await queryClient.refetchQueries({ predicate: q => q.queryKey?.[0] === 'viewer-ban-check' });
+1	          console.log("[VB REALTIME][AFTER REFETCH] done");
+1	          
+1	          queryClient.invalidateQueries({ queryKey: ['viewer-bans'] });
+1	          queryClient.invalidateQueries({
+1	            predicate: q => q.queryKey?.[0] === 'seller-banned-viewers-count'
+1	          });
+1	        }
+1	      )
+1	      .subscribe((status) => {
+1	        if (status === 'SUBSCRIBED') {
+1	          console.log('[Layout] Realtime subscription active for viewer_bans');
+1	        } else if (status === 'CHANNEL_ERROR') {
+1	          console.warn('[Layout] Realtime subscription error for viewer_bans');
+1	        }
+1	      });
+1	
+1	    return () => {
+1	      supabase.removeChannel(viewerBansChannel);
+1	    };
+1	  }, [user?.id, queryClient, location.pathname]);
+1	  
+1	  // OPTION 2: Polling fallback (every 5 seconds) - ensures enforcement even if realtime fails
+1	  useEffect(() => {
+1	    if (!user?.id || supabaseDegraded) return;
+1	    
+1	    const pollAccountStatus = async () => {
+1	      try {
+1	        const { data, error } = await supabase
+1	          .from("users")
+1	          .select("account_status")
+1	          .eq("id", user.id)
+1	          .maybeSingle();
+1	        
+1	        if (!error && data?.account_status) {
+1	          if (data.account_status !== accountStatus) {
+1	            console.log(`[Layout] Poll detected status change: ${accountStatus} → ${data.account_status}`);
+1	            handleAccountStatusChange(data.account_status);
+1	          }
+1	        }
+1	      } catch (err) {
+1	        // Silently ignore polling errors
+1	      }
+1	    };
+1	    
+1	    // Poll every 5 seconds
+1	    const interval = setInterval(pollAccountStatus, 5000);
+1	    
+1	    return () => clearInterval(interval);
+1	  }, [user?.id, accountStatus, supabaseDegraded, handleAccountStatusChange]);
+1	
+1	  useEffect(() => {
+1	    // CRITICAL: Don't redirect on LiveShow page - wait for params to resolve
+1	    const isLiveShowRoute = location.pathname.toLowerCase().includes('liveshow') || location.search.toLowerCase().includes('showid');
+1	    
+1	    if (!isLiveShowRoute && (location.pathname === '/' || location.pathname === '' || location.pathname === '/index.html')) {
+1	      navigate(createPageUrl("Marketplace"), { replace: true });
+1	    }
+1	  }, [location.pathname, location.search, navigate]);
+1	
+1	  // Route protection - check access after auth is fully hydrated
+1	  useEffect(() => {
+1	    // ═══════════════════════════════════════════════════════════════════════════
+1	    // AUTH HYDRATION GATE: Block routing decisions until session is fully ready
+1	    // This prevents false redirects during login when identity hasn't loaded yet
+1	    // ═══════════════════════════════════════════════════════════════════════════
+1	    
+1	    // Wait for auth provider to finish initial check
+1	    if (isLoadingAuth) return;
+1	    
+1	    // CRITICAL: Wait for auth to be fully hydrated (session + identity loaded)
+1	    // This prevents the "seller → buyerprofile bounce" during login
+1	    if (!authHydrated) {
+1	      // Auth not hydrated yet - render neutral loading state (handled below)
+1	      return;
+1	    }
+1	
+1	    // Allow HostConsole to handle its own access checks
+1	    if (currentPageName === "hostconsole") return;
+1	
+1	    // ═══════════════════════════════════════════════════════════════════════════
+1	    // HARD AUDIT: Log when buyerProfile is null/undefined while user is authenticated
+1	    // This is the key failure mode causing sellerdashboard redirect
+1	    // ═══════════════════════════════════════════════════════════════════════════
+1	    if (user?.id && !buyerProfile) {
+1	      console.groupCollapsed("[BUYERPROFILE NULL WHILE AUTHED]");
+1	      console.log("DIAGNOSTIC:", {
+1	        currentPageName,
+1	        pathname: location.pathname,
+1	        authHydrated,
+1	        authUserId: user?.id,
+1	        email: user?.email,
+1	        reason: buyerProfile === null ? "EXPLICITLY_NULL" : buyerProfile === undefined ? "UNDEFINED" : "FALSY",
+1	        buyerProfileState: buyerProfile,
+1	        sellerState: seller,
+1	        dbUserRowExists: !!dbUserRow
+1	      });
+1	      console.groupEnd();
+1	    }
+1	
+1	    // ═══════════════════════════════════════════════════════════════════════════
+1	    // AUDIT: AUTH VS DB USER SNAPSHOT — Compare what gates SEE vs DB TRUTH
+1	    // ═══════════════════════════════════════════════════════════════════════════
+1	    console.groupCollapsed("[AUTH VS DB USER SNAPSHOT]");
+1	    console.log("authUser (from useSupabaseAuth):", {
+1	      id: user?.id,
+1	      email: user?.email,
+1	      role: user?.role,
+1	      buyer_safety_agreed: user?.buyer_safety_agreed,
+1	      seller_safety_agreed: user?.seller_safety_agreed,
+1	      seller_onboarding_completed: user?.seller_onboarding_completed,
+1	      user_metadata: user?.user_metadata
+1	    });
+1	    console.log("dbUserRow (from public.users query):", dbUserRow);
+1	    console.log("DB SELLER FLAGS PRESENT?", {
+1	      seller_safety_agreed: dbUserRow?.seller_safety_agreed,
+1	      seller_onboarding_completed: dbUserRow?.seller_onboarding_completed,
+1	      seller_safety_agreed_at: dbUserRow?.seller_safety_agreed_at
+1	    });
+1	    console.log("buyerProfile (raw):", buyerProfile);
+1	    console.log("seller (raw):", seller);
+1	    console.groupEnd();
+1	
+1	    // Check if current route is accessible
+1	    const hasAccess = canAccessRoute(currentPageName, user, seller, buyerProfile);
+1	
+1	    // ═══════════════════════════════════════════════════════════════════════════
+1	    // GATING SNAPSHOT: Full diagnostic for routing decisions
+1	    // ═══════════════════════════════════════════════════════════════════════════
+1	    const buyerComplete = !!(buyerProfile?.full_name && buyerProfile?.phone && buyerProfile?.email);
+1	    const buyerSafetyDirect = user?.buyer_safety_agreed === true;
+1	    const buyerSafetyMeta = user?.user_metadata?.buyer_safety_agreed === true;
+1	    const buyerSafety = buyerSafetyDirect || buyerSafetyMeta;
+1	    const redirectTo = !hasAccess ? getUnauthorizedRedirect(currentPageName, user, buyerProfile) : null;
+1	    
+1	    console.groupCollapsed("[GATING SNAPSHOT]");
+1	    console.log("Route:", { pathname: location.pathname, currentPageName });
+1	    console.log("Auth:", { userId: user?.id, email: user?.email, authHydrated });
+1	    console.log("BuyerProfile (raw):", buyerProfile);
+1	    console.log("BuyerProfile check:", { 
+1	      buyerComplete, 
+1	      missingFields: !buyerProfile ? "NO_PROFILE" : [
+1	        !buyerProfile.full_name && "full_name",
+1	        !buyerProfile.phone && "phone", 
+1	        !buyerProfile.email && "email"
+1	      ].filter(Boolean)
+1	    });
+1	    console.log("BuyerSafety:", { buyerSafety, source: buyerSafetyDirect ? "users.buyer_safety_agreed" : buyerSafetyMeta ? "user_metadata" : "NONE" });
+1	    console.log("Seller:", { 
+1	      sellerId: seller?.id, 
+1	      status: seller?.status,
+1	      userRole: user?.role,
+1	      userMetaRole: user?.user_metadata?.role 
+1	    });
+1	    console.log("Guard result:", { hasAccess, redirectTo });
+1	    console.groupEnd();
+1	
+1	    if (!hasAccess) {
+1	      // MARKETPLACE REDIRECT FORENSIC LOG: Capture exact state when redirecting to Marketplace
+1	      if (redirectTo && redirectTo.toLowerCase() === "marketplace") {
+1	        console.warn("[MARKETPLACE REDIRECT FORENSIC]", {
+1	          pathname: window.location.pathname,
+1	          currentPageName,
+1	          redirectTo,
+1	          buyerProfileExists: !!buyerProfile,
+1	          buyerProfileComplete: buyerComplete,
+1	          buyerSafetyAgreed: buyerSafety,
+1	          buyerSafetySource: buyerSafetyDirect ? "users.buyer_safety_agreed" : buyerSafetyMeta ? "user_metadata" : "NONE",
+1	          sellerExists: !!seller,
+1	          sellerStatus: seller?.status,
+1	          userRole: user?.role,
+1	          userMetaRole: user?.user_metadata?.role,
+1	          hasAccess,
+1	          authHydrated
+1	        });
+1	      }
+1	      console.warn("[GATE REDIRECT]", { from: currentPageName, to: redirectTo, reason: "canAccessRoute returned false" });
+1	      
+1	      // FORENSIC SNAPSHOT (gated)
+1	      if (LM_FORENSIC()) {
+1	        try {
+1	          const authUser = user || null;
+1	          console.groupCollapsed("[GATE FORENSIC SNAPSHOT][LAYOUT]");
+1	          console.log({
+1	            ts: new Date().toISOString(),
+1	            pathname: window.location.pathname,
+1	            search: window.location.search,
+1	            currentPageName,
+1	            redirectTo,
+1	            hasAccess,
+1	            authHydrated,
+1	            // AUTH (JWT / session)
+1	            auth_user_id: authUser?.id,
+1	            auth_email: authUser?.email,
+1	            auth_role: authUser?.role,
+1	            auth_user_metadata: authUser?.user_metadata || null,
+1	            // DB USER (public.users)
+1	            db_user_obj: dbUserRow || null,
+1	            // BUYER PROFILE (buyer_profiles)
+1	            buyerProfile_obj: buyerProfile || null,
+1	            buyerProfile_exists: !!buyerProfile,
+1	            buyerProfile_user_id: buyerProfile?.user_id,
+1	            buyerProfile_email: buyerProfile?.email,
+1	            buyerProfile_phone: buyerProfile?.phone,
+1	            buyerProfile_full_name: buyerProfile?.full_name,
+1	            // SELLER (sellers)
+1	            seller_obj: seller || null,
+1	            seller_exists: !!seller,
+1	            seller_user_id: seller?.user_id,
+1	            seller_status: seller?.status,
+1	          });
+1	          console.groupEnd();
+1	        } catch (e) {
+1	          console.warn("[GATE FORENSIC SNAPSHOT][LAYOUT] logging failed", e);
+1	        }
+1	      }
+1	      
+1	      // Handle redirects that may include query strings (e.g., "BuyerProfile?forceEdit=1")
+1	      const [route, query] = redirectTo.split("?");
+1	      const redirectUrl = createPageUrl(route) + (query ? "?" + query : "");
+1	      navigate(redirectUrl, { replace: true });
+1	    }
+1	  }, [isLoadingAuth, authHydrated, currentPageName, user, seller, buyerProfile, navigate, location.pathname]);
+1	
+1	  useEffect(() => {
+1	    window.scrollTo(0, 0);
+1	  }, [location.pathname]);
+1	
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  // HELPER: Mark auth as hydrated (once per session)
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  const markAuthHydrated = (source) => {
+1	    authHydratedLoggedRef.current = true;
+1	    setAuthHydrated(true);
+1	  };
+1	
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  // IDENTITY LOADING WITH CACHE: Load identity ONCE, cache for session
+1	  // Sequenced reads: users FIRST, then sellers (if users succeeds)
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  const loadIdentityWithCache = async (currentUser) => {
+1	    // Prevent concurrent loads
+1	    if (identityLoadingRef.current) {
+1	      return;
+1	    }
+1	    identityLoadingRef.current = true;
+1	
+1	    try {
+1	      // ═══════════════════════════════════════════════════════════════════════════
+1	      // STEP 1: Check cache FIRST (before any Supabase reads)
+1	      // ═══════════════════════════════════════════════════════════════════════════
+1	      const cache = readIdentityCache();
+1	      
+1	      if (isIdentityCacheValid(cache, currentUser.id)) {
+1	        // Cache hit - use cached identity immediately
+1	        cacheLoggedRef.current = true;
+1	        
+1	        // Apply cached state
+1	        setDbUserRole(cache.dbRole);
+1	        setIsVerifiedApprovedSeller(cache.isApprovedSeller);
+1	        if (cache.sellerRow) {
+1	          setSeller(cache.sellerRow);
+1	        } else {
+1	          setSeller(null);
+1	        }
+1	        setBuyerProfile(cache.buyerProfile || null);
+1	        
+1	        identityLoadedRef.current = true;
+1	        markAuthHydrated("from cache");
+1	        return;
+1	      }
+1	
+1	      // Cache miss or stale - need to fetch from Supabase
+1	      cacheLoggedRef.current = true;
+1	
+1	      // ═══════════════════════════════════════════════════════════════════════════
+1	      // STEP 2: Load identity from Supabase (sequenced reads)
+1	      // ═══════════════════════════════════════════════════════════════════════════
+1	      await loadSellerData(currentUser);
+1	      
+1	    } finally {
+1	      identityLoadingRef.current = false;
+1	    }
+1	  };
+1	
+1	  const loadSellerData = async (currentUser) => {
+1	    try {
+1	      // If impersonating, load the impersonated seller by ID (admin bypass)
+1	      if (impersonatingSellerId) {
+1	        const targetSeller = await getSellerById(impersonatingSellerId);
+1	        if (targetSeller) {
+1	          setSeller(targetSeller);
+1	          // Impersonation bypasses Option B check - admin is viewing as seller
+1	          setIsVerifiedApprovedSeller(true);
+1	          setDbUserRole("seller"); // Treat as seller for impersonation
+1	          // Do NOT cache impersonation state
+1	        } else {
+1	          console.error("Impersonation target seller not found:", impersonatingSellerId);
+1	          sessionStorage.removeItem('admin_impersonate_seller_id');
+1	          setSeller(null);
+1	          setIsVerifiedApprovedSeller(false);
+1	          setDbUserRole(null);
+1	        }
+1	        identityLoadedRef.current = true;
+1	        markAuthHydrated("impersonation");
+1	        return;
+1	      }
+1	
+1	      // ═══════════════════════════════════════════════════════════════════════════
+1	      // SEQUENCED READS: Query public.users FIRST, then sellers
+1	      // If users fetch fails (503/timeout), do NOT attempt sellers fetch
+1	      // This prevents cascading failures
+1	      // ═══════════════════════════════════════════════════════════════════════════
+1	      
+1	      // STEP 1: Fetch public.users role, account_status, and seller onboarding flags
+1	      // NOTE: seller flags included for AUDIT VISIBILITY (gate logic uses auth user, not this)
+1	      const { data: userRow, error: userError } = await supabase
+1	        .from("users")
+1	        .select("id, role, email, account_status, buyer_safety_agreed, seller_safety_agreed, seller_onboarding_completed, seller_safety_agreed_at")
+1	        .eq("id", currentUser.id)
+1	        .maybeSingle();
+1	
+1	      if (userError) {
+1	        console.error("[Layout] users query failed:", userError);
+1	        // Check if degraded
+1	        if (checkAndSetDegraded(userError)) {
+1	          console.warn("[Layout] Users fetch degraded — using cache fallback if available");
+1	          // Try to use cache as fallback
+1	          const fallbackCache = readIdentityCache();
+1	          if (fallbackCache && fallbackCache.userId === currentUser.id) {
+1	            cacheLoggedRef.current = true;
+1	            setDbUserRole(fallbackCache.dbRole);
+1	            setIsVerifiedApprovedSeller(fallbackCache.isApprovedSeller);
+1	            if (fallbackCache.sellerRow) {
+1	              setSeller(fallbackCache.sellerRow);
+1	            }
+1	            setBuyerProfile(fallbackCache.buyerProfile || null);
+1	            identityLoadedRef.current = true;
+1	            markAuthHydrated("degraded cache fallback");
+1	            return;
+1	          }
+1	          // No cache - fail closed (buyer view)
+1	          setDbUserRole(null);
+1	          setSeller(null);
+1	          setIsVerifiedApprovedSeller(false);
+1	          identityLoadedRef.current = true;
+1	          markAuthHydrated("degraded no cache");
+1	          return;
+1	        }
+1	        throw userError;
+1	      }
+1	
+1	      const dbRole = userRow?.role || null;
+1	      setDbUserRole(dbRole);
+1	      // AUDIT: Store full DB user row for forensic comparison
+1	      setDbUserRow(userRow);
+1	      
+1	      // Set account status (default to 'active' if not present)
+1	      // IMPORTANT: Always use DB value as authoritative source
+1	      const status = userRow?.account_status || "active";
+1	      console.log('[Layout] loadSellerData: DB account_status =', status);
+1	      
+1	      // Update both state and ref
+1	      authoritativeAccountStatusRef.current = status;
+1	      setAccountStatus(status);
+1	
+1	      // STEP 2: Fetch buyer_profiles (required for seller route guards)
+1	      const { data: buyerRow, error: buyerError } = await supabase
+1	        .from("buyer_profiles")
+1	        .select("*")
+1	        .eq("user_id", currentUser.id)
+1	        .maybeSingle();
+1	
+1	      // ═══════════════════════════════════════════════════════════════════════════
+1	      // HARD AUDIT: Log EVERY buyer_profiles fetch result
+1	      // ═══════════════════════════════════════════════════════════════════════════
+1	      console.groupCollapsed("[BUYERPROFILE FETCH RESULT]");
+1	      console.log("QUERY:", { 
+1	        table: "buyer_profiles", 
+1	        filter: `user_id = ${currentUser.id}`,
+1	        method: ".maybeSingle()"
+1	      });
+1	      console.log("RESPONSE:", { 
+1	        data: buyerRow, 
+1	        error: buyerError,
+1	        dataIsNull: buyerRow === null,
+1	        dataIsUndefined: buyerRow === undefined,
+1	        errorCode: buyerError?.code,
+1	        errorMessage: buyerError?.message
+1	      });
+1	      if (buyerError) {
+1	        if (buyerError.code === "PGRST116") {
+1	          console.warn("[BUYERPROFILE FETCH] NO ROW FOUND (PGRST116) — user has no buyer_profiles entry");
+1	        } else if (buyerError.code === "42501" || buyerError.message?.includes("permission")) {
+1	          console.error("[BUYERPROFILE FETCH] RLS/DENY — user blocked by RLS policy:", buyerError);
+1	        } else {
+1	          console.error("[BUYERPROFILE FETCH] UNKNOWN ERROR:", buyerError);
+1	        }
+1	      } else if (!buyerRow) {
+1	        console.warn("[BUYERPROFILE FETCH] NO ROW FOUND (null data, no error) — .maybeSingle() returned nothing");
+1	      } else {
+1	        console.log("[BUYERPROFILE FETCH] SUCCESS — row found:", { 
+1	          full_name: buyerRow.full_name, 
+1	          phone: buyerRow.phone, 
+1	          email: buyerRow.email 
+1	        });
+1	      }
+1	      console.groupEnd();
+1	
+1	      if (!buyerError && buyerRow) {
+1	        setBuyerProfile(buyerRow);
+1	      } else {
+1	        setBuyerProfile(null);
+1	      }
+1	
+1	      // STEP 3: If users succeeded, fetch sellers
+1	      const { data: sellerRow, error: sellerError } = await supabase
+1	        .from("sellers")
+1	        .select("*")
+1	        .eq("user_id", currentUser.id)
+1	        .maybeSingle();
+1	
+1	      if (sellerError) {
+1	        // Check if degraded - still have user role
+1	        if (checkAndSetDegraded(sellerError)) {
+1	          const fallbackCache = readIdentityCache();
+1	          if (fallbackCache && fallbackCache.userId === currentUser.id && fallbackCache.sellerRow) {
+1	            setSeller(fallbackCache.sellerRow);
+1	            setIsVerifiedApprovedSeller(
+1	              dbRole === "seller" && fallbackCache.sellerRow?.status === "approved"
+1	            );
+1	          } else {
+1	            // Fail closed - no seller access
+1	            setSeller(null);
+1	            setIsVerifiedApprovedSeller(false);
+1	          }
+1	          identityLoadedRef.current = true;
+1	          markAuthHydrated("seller degraded");
+1	          return;
+1	        }
+1	      }
+1	
+1	      // ═══════════════════════════════════════════════════════════════════════════
+1	      // OPTION B: User is seller IFF role='seller' AND status='approved'
+1	      // ═══════════════════════════════════════════════════════════════════════════
+1	      const sellerStatus = sellerRow?.status || null;
+1	      const isApproved = dbRole === "seller" && sellerStatus === "approved";
+1	
+1	      if (isApproved) {
+1	        setSeller(sellerRow);
+1	        setIsVerifiedApprovedSeller(true);
+1	      } else {
+1	        // NOT approved - still load seller row for UI (pending banner, etc)
+1	        if (sellerRow) {
+1	          setSeller(sellerRow);
+1	        } else {
+1	          setSeller(null);
+1	        }
+1	        setIsVerifiedApprovedSeller(false);
+1	      }
+1	
+1	      // ═══════════════════════════════════════════════════════════════════════════
+1	      // STEP 4: Cache successful identity load
+1	      // ═══════════════════════════════════════════════════════════════════════════
+1	      writeIdentityCache({
+1	        userId: currentUser.id,
+1	        dbRole,
+1	        accountStatus: status,
+1	        sellerStatus,
+1	        sellerId: sellerRow?.id || null,
+1	        sellerRow: sellerRow || null,
+1	        isApprovedSeller: isApproved,
+1	        buyerProfile: buyerRow || null,
+1	      });
+1	
+1	      identityLoadedRef.current = true;
+1	      markAuthHydrated("identity loaded");
+1	
+1	    } catch (error) {
+1	      console.error("Error loading seller data:", error);
+1	      // Check if degraded - but don't reset state if so (keep last known)
+1	      if (checkAndSetDegraded(error)) {
+1	        console.warn("[Layout] Seller data load failed due to degraded state - keeping last known state");
+1	        identityLoadedRef.current = true;
+1	        markAuthHydrated("error degraded");
+1	        return;
+1	      }
+1	      setSeller(null);
+1	      setIsVerifiedApprovedSeller(false);
+1	      setDbUserRole(null);
+1	      identityLoadedRef.current = true;
+1	      markAuthHydrated("error");
+1	    }
+1	  };
+1	
+1	  const loadUnreadCount = async (currentUser) => {
+1	    // CIRCUIT BREAKER: Skip non-critical fetch when degraded
+1	    if (supabaseDegraded) {
+1	      return;
+1	    }
+1	
+1	    try {
+1	      if (!currentUser) {
+1	        setUnreadCount(0);
+1	        return;
+1	      }
+1	
+1	      const {
+1	        effectiveUserId,
+1	        isImpersonating: isActivelyImpersonating,
+1	        impersonatedSellerId: effectiveSellerId,
+1	      } = getEffectiveUserContext(currentUser);
+1	
+1	      // Determine role: seller if impersonating or has approved seller profile (Option B verified)
+1	      const isSellerRole = isActivelyImpersonating || isVerifiedApprovedSeller;
+1	      const role = isSellerRole ? "seller" : "buyer";
+1	
+1	      // Get the seller ID to use
+1	      const sellerIdForQuery = isActivelyImpersonating
+1	        ? effectiveSellerId
+1	        : seller?.id ?? null;
+1	
+1	      const result = await getUnreadMessageCount({
+1	        effectiveUserId,
+1	        effectiveSellerId: sellerIdForQuery,
+1	        role,
+1	      });
+1	
+1	      // Check if result indicates failure (null = degraded/error)
+1	      if (result === null) {
+1	        // API indicated failure - don't update count, keep last known
+1	        return;
+1	      }
+1	      setUnreadCount(result);
+1	    } catch (err) {
+1	      // Check if this error indicates degraded state
+1	      checkAndSetDegraded(err);
+1	      // Don't set to 0 on error - keep last known value
+1	    }
+1	  };
+1	
+1	  const loadUnreadNotificationCount = async (currentUser) => {
+1	    // CIRCUIT BREAKER: Skip non-critical fetch when degraded
+1	    if (supabaseDegraded) {
+1	      return;
+1	    }
+1	
+1	    try {
+1	      if (!currentUser) {
+1	        setUnreadNotificationCount(0);
+1	        return;
+1	      }
+1	      const { effectiveUserId } = getEffectiveUserContext(currentUser);
+1	      const result = await getUnreadNotificationCount(effectiveUserId);
+1	      
+1	      // Check if result indicates failure (null = degraded/error)
+1	      if (result === null) {
+1	        // API indicated failure - don't update count, keep last known
+1	        return;
+1	      }
+1	      setUnreadNotificationCount(result);
+1	    } catch (err) {
+1	      // Check if this error indicates degraded state
+1	      checkAndSetDegraded(err);
+1	      // Don't set to 0 on error - keep last known value
+1	    }
+1	  };
+1	
+1	  const isLiveShowPage = 
+1	    currentPageName === "LiveShow" || 
+1	    location.pathname.toLowerCase().includes('liveshow') ||
+1	    location.pathname.toLowerCase().includes('live-show') ||
+1	    location.search.toLowerCase().includes('showid');
+1	
+1	  const isHostConsolePage =
+1	    currentPageName === "hostconsole" ||
+1	    location.pathname.toLowerCase().includes("hostconsole");
+1	
+1	  const isFullScreenPage = isLiveShowPage || isHostConsolePage;
+1	
+1	  const isNearMePage = 
+1	    currentPageName === "NearMe" || 
+1	    location.pathname.toLowerCase().includes('nearme') ||
+1	    location.pathname.toLowerCase().includes('near-me');
+1	
+1	  // Poll for unread messages every 30 seconds (skip on fullscreen pages or when degraded)
+1	  useEffect(() => {
+1	    if (isFullScreenPage || !user || supabaseDegraded) {
+1	      return;
+1	    }
+1	
+1	    const interval = setInterval(() => {
+1	      if (!supabaseDegraded) {
+1	        loadUnreadCount(user);
+1	      }
+1	    }, 30000);
+1	
+1	    return () => clearInterval(interval);
+1	  }, [isFullScreenPage, user, supabaseDegraded]);
+1	
+1	  // Poll for unread notifications every 30 seconds (skip on fullscreen pages or when degraded)
+1	  useEffect(() => {
+1	    if (isFullScreenPage || !user || supabaseDegraded) {
+1	      return;
+1	    }
+1	
+1	    const interval = setInterval(() => {
+1	      if (!supabaseDegraded) {
+1	        loadUnreadNotificationCount(user);
+1	      }
+1	    }, 30000);
+1	
+1	    return () => clearInterval(interval);
+1	  }, [isFullScreenPage, user, supabaseDegraded]);
+1	
+1	  const handleLogout = async () => {
+1	    // Clear identity cache and refs on logout
+1	    clearIdentityCache();
+1	    identityLoadedRef.current = false;
+1	    cacheLoggedRef.current = false;
+1	    
+1	    await supabase.auth.signOut();
+1	    navigate(createPageUrl("Marketplace"), { replace: true });
+1	  };
+1	
+1	  const handleUserClick = () => {
+1	    // ═══════════════════════════════════════════════════════════════════════════
+1	    // CANONICAL ROLE: Use dbUserRole (from public.users.role), NOT metadata
+1	    // ═══════════════════════════════════════════════════════════════════════════
+1	    const canonicalRole = dbUserRole || user?.user_metadata?.role || user?.role;
+1	
+1	    // 1. SUPER_ADMIN → AdminDashboard
+1	    if (isSuperAdmin(user)) {
+1	      navigate(createPageUrl("AdminDashboard"));
+1	      return;
+1	    }
+1	
+1	    // 2. Admin → AdminDashboard (admins manage platform, not sell)
+1	    if (canonicalRole === "admin") {
+1	      navigate(createPageUrl("AdminDashboard"));
+1	      return;
+1	    }
+1	
+1	    // 3. Approved Seller → SellerDashboard (Option B verified)
+1	    if (isVerifiedApprovedSeller) {
+1	      navigate(createPageUrl("SellerDashboard"));
+1	      return;
+1	    }
+1	
+1	    // 4. Everyone else → BuyerProfile
+1	    navigate(createPageUrl("BuyerProfile"));
+1	  };
+1	
+1	  const handleLogoClick = () => {
+1	    navigate(createPageUrl("Marketplace"));
+1	  };
+1	
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  // CANONICAL ROLE FOR NAV: public.users.role is the source of truth
+1	  // Only fallback to metadata when dbUserRole hasn't loaded yet (during hydration)
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  const userRole = dbUserRole || user?.user_metadata?.role || user?.role;
+1	  
+1	  // OPTION B: isApprovedSeller is TRUE only when BOTH conditions pass:
+1	  // 1. public.users.role === 'seller'
+1	  // 2. sellers.status === 'approved'
+1	  // This is now verified via requireSellerAsync in loadSellerData
+1	  const isApprovedSeller = isVerifiedApprovedSeller;
+1	  
+1	  // Pending seller: has seller row with status='pending' but NOT approved
+1	  const isPendingSeller = !isSuperAdmin(user) && seller && seller.status === "pending" && !isVerifiedApprovedSeller;
+1	
+1	  const sellerNav = [
+1	    { title: "Marketplace", url: createPageUrl("Marketplace"), icon: ShoppingBag },
+1	    { title: "Communities", url: createPageUrl("Communities"), icon: Users },
+1	    { title: "Dashboard", url: createPageUrl("SellerDashboard"), icon: LayoutDashboard },
+1	    { title: "Orders", url: createPageUrl("SellerOrders"), icon: Receipt },
+1	  ];
+1	
+1	  const buyerNav = [
+1	    { title: "Marketplace", url: createPageUrl("Marketplace"), icon: ShoppingBag },
+1	    { title: "Communities", url: createPageUrl("Communities"), icon: Users },
+1	    { title: "My Orders", url: createPageUrl("BuyerOrders"), icon: Receipt },
+1	    { title: "Profile", url: createPageUrl("BuyerProfile"), icon: User },
+1	  ];
+1	
+1	  // Admin navigation - platform management only (V1)
+1	  const adminNav = [
+1	    { title: "Marketplace", url: createPageUrl("Marketplace"), icon: ShoppingBag },
+1	    { title: "Dashboard", url: createPageUrl("AdminDashboard"), icon: LayoutDashboard },
+1	    { title: "Sellers", url: createPageUrl("AdminSellers"), icon: Store },
+1	  ];
+1	
+1	  // Non-logged-in visitor navigation - ONLY these 4 items, NO Profile/Orders
+1	  const visitorNav = [
+1	    { title: "Login", url: "#login", icon: User, isLogin: true },
+1	    { title: "Live", url: createPageUrl("Marketplace"), icon: Radio, isLive: true },
+1	    { title: "Community", url: createPageUrl("Communities"), icon: Users },
+1	    { title: "Marketplace", url: createPageUrl("Marketplace"), icon: ShoppingBag, isMarketplace: true },
+1	  ];
+1	
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  // SUSPENDED USER NAVIGATION: Viewer-only mode (can browse, cannot transact)
+1	  // Shows minimal navigation - no seller dashboard, no orders, just browsing
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  const suspendedNav = [
+1	    { title: "Marketplace", url: createPageUrl("Marketplace"), icon: ShoppingBag },
+1	    { title: "Communities", url: createPageUrl("Communities"), icon: Users },
+1	    { title: "Profile", url: createPageUrl("BuyerProfile"), icon: User },
+1	  ];
+1	
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  // ACCOUNT SUSPENSION CHECK: Suspended users get viewer-only navigation
+1	  // This overrides role-based navigation when account_status === 'suspended'
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  const isAccountSuspended = accountStatus === "suspended";
+1	  
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  // NAVIGATION SELECTION (CANONICAL SOURCE = public.users.role ONLY)
+1	  // Priority:
+1	  // 1. Not logged in → visitorNav
+1	  // 2. SUSPENDED → suspendedNav (viewer-only mode, overrides role)
+1	  // 3. Admin or Super Admin → adminNav (platform management)
+1	  // 4. Seller (role='seller') → sellerNav (Dashboard tab ALWAYS visible)
+1	  // 5. Everyone else → buyerNav
+1	  // 
+1	  // IMPORTANT: Suspension overrides role for navigation purposes.
+1	  // Route access control remains separate from nav visibility.
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  const isAdminUser = userRole === "admin" || isSuperAdmin(user);
+1	  
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  // CANONICAL SELLER NAV CHECK: Show seller nav if role === 'seller'
+1	  // This is separate from isApprovedSeller (which gates route access)
+1	  // Dashboard tab appears for ALL sellers, including pending/unapproved
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  let isSellerRole = userRole === "seller";
+1	  
+1	  // Defensive fallback: Check cache for role if state appears stale
+1	  // This prevents brief flashes of buyer nav during state restoration
+1	  if (!isSellerRole && user && !isAdminUser) {
+1	    const cache = readIdentityCache();
+1	    if (cache?.userId === user.id && cache?.dbRole === "seller") {
+1	      isSellerRole = true;
+1	    }
+1	  }
+1	  
+1	  // Navigation selection with suspension override
+1	  const navigation = user === null
+1	    ? visitorNav
+1	    : isAccountSuspended
+1	      ? suspendedNav  // Suspended users get viewer-only nav regardless of role
+1	      : isAdminUser
+1	        ? adminNav
+1	        : isSellerRole
+1	          ? sellerNav
+1	          : buyerNav;
+1	
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  // AUTH HYDRATION LOADING STATE
+1	  // Show neutral loading state while auth is hydrating for logged-in users
+1	  // This prevents false routing decisions before identity is loaded
+1	  // ═══════════════════════════════════════════════════════════════════════════
+1	  if (!isLoadingAuth && user && !authHydrated) {
+1	    // User exists but auth not fully hydrated - show neutral loading state
+1	    // DO NOT redirect, DO NOT assume buyer/seller, just wait
+1	    return (
+1	      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-purple-50 flex items-center justify-center">
+1	        <div className="text-center">
+1	          <div className="w-8 h-8 border-4 border-purple-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
+1	          <p className="mt-3 text-sm text-gray-500">Loading...</p>
+1	        </div>
+1	      </div>
+1	    );
+1	  }
+1	
+1	  return (
+1	    <>
+1	      <style>{`
+1	        :root {
+1	          --primary: 270 80% 55%;
+1	          --primary-dark: 270 80% 45%;
+1	          --accent: 200 85% 50%;
+1	          --accent-dark: 200 85% 40%;
+1	        }
+1	
+1	        @keyframes pulse-glow {
+1	          0%, 100% {
+1	            filter: drop-shadow(0 0 12px rgba(255, 255, 255, 0.8)) drop-shadow(0 0 6px rgba(255, 215, 0, 0.6));
+1	          }
+1	          50% {
+1	            filter: drop-shadow(0 0 18px rgba(255, 255, 255, 1)) drop-shadow(0 0 10px rgba(255, 215, 0, 0.9));
+1	          }
+1	        }
+1	
+1	        .animate-pulse-glow {
+1	          animation: pulse-glow 2s ease-in-out infinite;
+1	        }
+1	      `}</style>
+1	
+1	      <div className={`min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-purple-50 ${isFullScreenPage ? 'pb-0' : 'pb-20'}`}>
+1	        {/* Admin Impersonation Banner - Always on top */}
+1	        {isImpersonating && <ImpersonationBanner />}
+1	
+1	        {/* Top Header - Only show on specific pages */}
+1	        {shouldShowHeader && !isLiveShowPage && !isNearMePage && (
+1	          <header className="bg-[#1fb3e3] border-b border-blue-400">
+1	            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+1	              <div className="flex justify-between items-center h-16">
+1	                <button onClick={handleLogoClick} className="flex items-center gap-3 cursor-pointer">
+1	                  <div className="relative w-10 h-10 flex items-center justify-center">
+1	                    <svg 
+1	                      viewBox="0 0 115 130" 
+1	                      className="absolute inset-0 w-full h-full"
+1	                    >
+1	                      <defs>
+1	                        <linearGradient id="azGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+1	                          <stop offset="0%" style={{ stopColor: '#ff8c00', stopOpacity: 1 }} />
+1	                          <stop offset="100%" style={{ stopColor: '#ffd700', stopOpacity: 1 }} />
+1	                        </linearGradient>
+1	                      </defs>
+1	                      <path
+1	                        d="M 20 10 L 100 10 L 100 15 L 105 15 L 105 20 L 100 20 L 100 100 L 95 105 L 85 115 L 75 120 L 30 90 L 20 85 
+1	                           C 18 83 16 80 15 77 
+1	                           C 14 74 13 71 14 68 
+1	                           C 15 65 16 62 15 59 
+1	                           C 14 56 13 53 12 50 
+1	                           C 11 47 12 44 13 41 
+1	                           C 14 38 15 35 14 32 
+1	                           C 13 29 14 26 15 23 
+1	                           C 16 20 17 17 18 14 
+1	                           L 20 10 Z"
+1	                        fill="url(#azGradient)"
+1	                      />
+1	                    </svg>
+1	                    <div 
+1	                      className="relative z-10 animate-pulse-glow"
+1	                      style={{
+1	                        filter: 'drop-shadow(0 0 12px rgba(255, 255, 255, 0.8)) drop-shadow(0 0 6px rgba(255, 215, 0, 0.6))'
+1	                      }}
+1	                    >
+1	                      <Video className="w-6 h-6 text-white" />
+1	                    </div>
+1	                  </div>
+1	                  <div className="text-center">
+1	                    <h1 
+1	                      className="text-xl font-black tracking-tight leading-none"
+1	                      style={{
+1	                        color: 'white',
+1	                        WebkitTextStroke: '2px #ff8c00',
+1	                        paintOrder: 'stroke fill',
+1	                        textShadow: '2px 2px 4px rgba(0,0,0,0.3)'
+1	                      }}
+1	                    >
+1	                      MY NEIGHBOR
+1	                    </h1>
+1	                    <p 
+1	                      className="text-xs font-bold tracking-wide mt-0.5"
+1	                      style={{
+1	                        color: 'white',
+1	                        textShadow: '1px 1px 2px rgba(0,0,0,0.3)'
+1	                      }}
+1	                    >
+1	                      LOCAL LIVE SHOPPING
+1	                    </p>
+1	                  </div>
+1	                </button>
+1	
+1	                <div className="flex items-center gap-3">
+1	                  {user && <NotificationBell user={user} unreadCount={unreadNotificationCount} />}
+1	                  {user && (
+1	                    <Button
+1	                      variant="ghost"
+1	                      size="icon"
+1	                      onClick={() => navigate(createPageUrl("Messages"))}
+1	                      className="relative"
+1	                    >
+1	                      <MessageCircle className="w-5 h-5" />
+1	                      {unreadCount > 0 && (
+1	                        <div className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 rounded-full flex items-center justify-center">
+1	                          <span className="text-white text-[10px] font-bold">
+1	                            {unreadCount > 99 ? "99+" : unreadCount}
+1	                          </span>
+1	                        </div>
+1	                      )}
+1	                    </Button>
+1	                  )}
+1	                  {!user && !isLoadingAuth && (
+1	                    <Button
+1	                      onClick={() => navigate("/Login")}
+1	                      className="bg-gradient-to-r from-purple-600 to-blue-500 text-white font-semibold"
+1	                    >
+1	                      Login
+1	                    </Button>
+1	                  )}
+1	                  {user ? (
+1	                    <div className="flex items-center gap-2">
+1	                      <button
+1	                        onClick={handleUserClick}
+1	                        className="hidden sm:flex items-center gap-3 hover:bg-gray-100 rounded-lg px-3 py-2 transition-colors cursor-pointer"
+1	                      >
+1	                        <Avatar className="w-9 h-9">
+1	                          <AvatarImage src={seller?.profile_image_url} />
+1	                          <AvatarFallback className="bg-gradient-to-r from-purple-600 to-blue-500 text-white">
+1	                            {isImpersonating && seller ? seller.business_name[0] : (user.full_name?.[0] || user.email[0].toUpperCase())}
+1	                          </AvatarFallback>
+1	                        </Avatar>
+1	                        <div className="hidden lg:block text-left">
+1	                          <p className="text-sm font-medium text-gray-900">
+1	                            {isImpersonating && seller ? seller.business_name : (user.full_name || user.email)}
+1	                          </p>
+1	                          <p className="text-xs text-gray-500">
+1	                            {isImpersonating ? "Seller" : (isSuperAdmin(user) ? "Super Admin" : userRole === "admin" ? "Admin" : isSellerRole ? seller?.business_name || "Seller" : "Buyer")}
+1	                          </p>
+1	                        </div>
+1	                      </button>
+1	                      <a
+1	                        href="mailto:contact.myneighbor@gmail.com"
+1	                        className="hidden sm:flex items-center gap-2 hover:bg-blue-50 text-gray-600 hover:text-blue-600 rounded-lg px-3 py-2 transition-colors cursor-pointer"
+1	                        title="Contact"
+1	                      >
+1	                        <Mail className="w-5 h-5" />
+1	                        <span className="hidden lg:inline text-sm font-medium">Contact</span>
+1	                      </a>
+1	                    </div>
+1	                  ) : (
+1	                    <Button
+1	                      onClick={() => navigate("/Login")}
+1	                      className="bg-gradient-to-r from-purple-600 to-blue-500 text-white font-semibold"
+1	                    >
+1	                      Login
+1	                    </Button>
+1	                  )}
+1	                </div>
+1	              </div>
+1	            </div>
+1	          </header>
+1	        )}
+1	
+1	        {/* Pending Seller Banner - Only show on pages with header */}
+1	        {shouldShowHeader && !isLiveShowPage && !isNearMePage && isPendingSeller && (
+1	          <div className="bg-yellow-50 border-b border-yellow-200">
+1	            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3">
+1	              <Alert className="border-yellow-300 bg-yellow-100">
+1	                <AlertCircle className="h-4 w-4 text-yellow-600" />
+1	                <AlertDescription className="text-yellow-900">
+1	                  <strong>Your Seller Application is Under Review</strong> — You can browse and shop while waiting for approval. Once approved, you'll gain access to seller tools.
+1	                </AlertDescription>
+1	              </Alert>
+1	            </div>
+1	          </div>
+1	        )}
+1	
+1	        {/* Suspension Banner - Shown for suspended accounts */}
+1	        {user && isAccountSuspended && (
+1	          <div className="bg-amber-500 text-white px-4 py-3 text-center shadow-md">
+1	            <div className="flex items-center justify-center gap-2">
+1	              <AlertCircle className="w-5 h-5" />
+1	              <span className="font-medium">
+1	                Your account is temporarily suspended. You may view content only.
+1	              </span>
+1	              <a 
+1	                href="mailto:support@livemarketaz.com" 
+1	                className="underline hover:no-underline ml-2 font-semibold"
+1	              >
+1	                Contact Support
+1	              </a>
+1	            </div>
+1	          </div>
+1	        )}
+1	
+1	        {/* Main Content */}
+1	        <main className={isFullScreenPage ? '' : 'pb-4'}>
+1	          {children}
+1	        </main>
+1	
+1	        {/* Bottom Navigation Bar - HIDE on fullscreen pages (LiveShow, HostConsole) */}
+1	        {!isFullScreenPage && (
+1	          <nav className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t border-gray-200 shadow-lg z-50">
+1	            <div className="max-w-7xl mx-auto px-2">
+1	              <div className="flex justify-around items-center h-16">
+1	                {navigation.map((item, index) => {
+1	                  // Determine if this item is active
+1	                  // For visitor nav, only one should be active at a time
+1	                  const isMarketplacePath = location.pathname.includes('Marketplace') || location.pathname === '/';
+1	                  const isCommunitiesPath = location.pathname.includes('Communities') || location.pathname.includes('Community');
+1	                  
+1	                  let isActive = false;
+1	                  if (item.isLogin) {
+1	                    isActive = false; // Login button never shows as "active"
+1	                  } else if (item.isMarketplace) {
+1	                    // Marketplace tab: active only on Marketplace, NOT when on Communities
+1	                    isActive = isMarketplacePath && !isCommunitiesPath;
+1	                  } else if (item.isLive) {
+1	                    // Live tab: never auto-highlight (both Live and Marketplace point to same URL)
+1	                    isActive = false;
+1	                  } else if (item.url.includes('Communities')) {
+1	                    // Community tab
+1	                    isActive = isCommunitiesPath;
+1	                  } else {
+1	                    // Default: exact path match
+1	                    isActive = location.pathname === item.url;
+1	                  }
+1	
+1	                  return item.isLogin ? (
+1	                    // Login button for non-logged-in users - never highlighted
+1	                    <button
+1	                      key="login"
+1	                      onClick={() => navigate("/Login")}
+1	                      className="flex-1 flex flex-col items-center justify-center gap-1 py-2 px-1 transition-all text-gray-600 hover:text-purple-600"
+1	                    >
+1	                      <div className="relative">
+1	                        <item.icon className="w-6 h-6" />
+1	                      </div>
+1	                      <span className="text-xs font-medium">
+1	                        {item.title}
+1	                      </span>
+1	                    </button>
+1	                  ) : (
+1	                    <Link key={item.title + index} to={item.url} className="flex-1">
+1	                      <button
+1	                        className={`w-full flex flex-col items-center justify-center gap-1 py-2 px-1 transition-all relative ${
+1	                          isActive
+1	                            ? "text-purple-600"
+1	                            : "text-gray-600 hover:text-gray-900"
+1	                        }`}
+1	                      >
+1	                        <div className={`relative ${isActive ? "scale-110" : ""}`}>
+1	                          <item.icon className={`w-6 h-6 ${
+1	                            isActive ? "stroke-[2.5]" : ""
+1	                          }`} />
+1	                          {item.badge > 0 && (
+1	                            <div className="absolute -top-2 -right-2 w-5 h-5 bg-red-500 rounded-full flex items-center justify-center">
+1	                              <span className="text-white text-[10px] font-bold">
+1	                                {item.badge > 99 ? "99+" : item.badge}
+1	                              </span>
+1	                            </div>
+1	                          )}
+1	                          {isActive && (
+1	                            <div className="absolute -bottom-1 left-1/2 transform -translate-x-1/2 w-1 h-1 bg-purple-600 rounded-full"></div>
+1	                          )}
+1	                        </div>
+1	                        <span className={`text-xs font-medium ${
+1	                          isActive ? "text-purple-600" : ""
+1	                        }`}>
+1	                          {item.title}
+1	                        </span>
+1	                      </button>
+1	                    </Link>
+1	                  );
+1	                })}
+1	              </div>
+1	            </div>
+1	          </nav>
+1	        )}
+1	      </div>
+1	    </>
+1	  );
+1	}

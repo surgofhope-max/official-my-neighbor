@@ -1,0 +1,69 @@
+src\components\chat\LiveChatOverlay.jsx:18: * LiveChatOverlay Component
+src\components\chat\LiveChatOverlay.jsx:22:export default function LiveChatOverlay({ showId, isSeller = false, onClose, inputOnly = false, sellerId = null }) {
+src\components\chat\LiveChat.jsx:20:export default function LiveChat({ showId, isSeller = false, isEmbedded = false, sellerId = null }) {
+src\pages\HostConsole.jsx:48:import LiveChat from "../components/chat/LiveChat";
+src\pages\HostConsole.jsx:49:import LiveChatOverlay from "../components/chat/LiveChatOverlay";
+src\pages\HostConsole.jsx:50:import SupabaseLiveChat from "../components/chat/SupabaseLiveChat";
+src\pages\HostConsole.jsx:100:  // Prevents dual DailyBroadcaster AND dual SupabaseLiveChat mount.
+src\pages\HostConsole.jsx:104:  const { isMobileDevice, isDesktopDevice, reason: deviceClassReason } = useDeviceClass();
+src\pages\HostConsole.jsx:105:  useMobilePortraitLock(isMobileDevice);
+src\pages\HostConsole.jsx:109:    console.log("[HostConsole] Device classification:", { isMobileDevice, isDesktopDevice, reason: deviceClassReason });
+src\pages\HostConsole.jsx:287:  // SupabaseLiveChat renders when show is starting or live (lifecycle-based)
+src\pages\HostConsole.jsx:289:  const useSupabaseChat =
+src\pages\HostConsole.jsx:1100:        {FEATURES.givi && currentSeller && showGiviDrawer && isMobileDevice && (
+src\pages\HostConsole.jsx:1135:        {FEATURES.givi && currentSeller && showGiviDrawer && isDesktopDevice && (
+src\pages\HostConsole.jsx:1175:        {isMobileDevice && (
+src\pages\HostConsole.jsx:1196:          {isMobileDevice && dailyRoomUrl && dailyToken ? (
+src\pages\HostConsole.jsx:1227:          {isMobileDevice && (
+src\pages\HostConsole.jsx:1233:              {useSupabaseChat ? (
+src\pages\HostConsole.jsx:1234:                <SupabaseLiveChat
+src\pages\HostConsole.jsx:1242:                <LiveChatOverlay
+src\pages\HostConsole.jsx:1284:            useSupabaseChat={useSupabaseChat}
+src\pages\HostConsole.jsx:1368:        {isDesktopDevice && (
+src\pages\HostConsole.jsx:1625:            {/* Container is device-gated (isDesktopDevice), so we only check room availability */}
+src\pages\HostConsole.jsx:1719:            {/* Container is device-gated (isDesktopDevice), so chat mounts only on desktop.
+src\pages\HostConsole.jsx:1726:              {useSupabaseChat ? (
+src\pages\HostConsole.jsx:1727:                <SupabaseLiveChat
+src\pages\HostConsole.jsx:1735:                <LiveChat
+src\pages\LiveShow.jsx:46:import LiveChatOverlay from "../components/chat/LiveChatOverlay";
+src\pages\LiveShow.jsx:47:import LiveChat from "../components/chat/LiveChat";
+src\pages\LiveShow.jsx:48:import SupabaseLiveChat from "../components/chat/SupabaseLiveChat";
+src\pages\LiveShow.jsx:118:  // Prevents dual WebRTCViewer AND dual SupabaseLiveChat mount.
+src\pages\LiveShow.jsx:122:  const { isMobileDevice, isDesktopDevice } = useDeviceClass();
+src\pages\LiveShow.jsx:123:  useMobilePortraitLock(isMobileDevice);
+src\pages\LiveShow.jsx:132:  // SupabaseLiveChat renders when show is starting or live (lifecycle-based)
+src\pages\LiveShow.jsx:134:  const useSupabaseChat =
+src\pages\LiveShow.jsx:882:      {isMobileDevice && (
+src\pages\LiveShow.jsx:971:        {/* Container is device-gated (isMobileDevice), so chat mounts only on mobile.
+src\pages\LiveShow.jsx:985:          useSupabaseChat ? (
+src\pages\LiveShow.jsx:986:            <SupabaseLiveChat
+src\pages\LiveShow.jsx:999:            <LiveChatOverlay
+src\pages\LiveShow.jsx:1248:              {!useSupabaseChat && (
+src\pages\LiveShow.jsx:1249:                <LiveChatOverlay
+src\pages\LiveShow.jsx:1266:      {isDesktopDevice && (
+src\pages\LiveShow.jsx:1466:          {/* Container is device-gated (isDesktopDevice), so chat mounts only on desktop.
+src\pages\LiveShow.jsx:1480:            {useSupabaseChat ? (
+src\pages\LiveShow.jsx:1481:              <SupabaseLiveChat
+src\pages\LiveShow.jsx:1492:              <LiveChat
+src\hooks\useMobilePortraitLock.js:10: * - Only activates when isMobileDevice is true
+src\hooks\useMobilePortraitLock.js:14: * @param {boolean} isMobileDevice - From useDeviceClass hook
+src\hooks\useMobilePortraitLock.js:16:export function useMobilePortraitLock(isMobileDevice) {
+src\hooks\useMobilePortraitLock.js:18:    if (!isMobileDevice) return;
+src\hooks\useMobilePortraitLock.js:42:  }, [isMobileDevice]);
+src\hooks\useDeviceClass.js:8: *   const { isMobileDevice, isDesktopDevice, deviceClass, reason } = useDeviceClass();
+src\hooks\useDeviceClass.js:10: * {isMobileDevice && <MobileLayout />}
+src\hooks\useDeviceClass.js:11: * {isDesktopDevice && <DesktopLayout />}
+src\hooks\useDeviceClass.js:17:export function useDeviceClass() {
+src\hooks\useDeviceClass.js:33:    isMobileDevice: classification.deviceClass === "mobile",
+src\hooks\useDeviceClass.js:34:    isDesktopDevice: classification.deviceClass === "desktop",
+src\lib\deviceClass.js:8: * This prevents SDKs (DailyBroadcaster, WebRTCViewer, SupabaseLiveChat)
+src\components\chat\SupabaseLiveChat.jsx:2: * SupabaseLiveChat Component
+src\components\chat\SupabaseLiveChat.jsx:13: * This replaces the Base44-based LiveChatOverlay for Supabase migration.
+src\components\chat\SupabaseLiveChat.jsx:39: * SupabaseLiveChat Component
+src\components\chat\SupabaseLiveChat.jsx:50:export default function SupabaseLiveChat({
+src\components\chat\SupabaseLiveChat.jsx:59:  console.log("[CHAT PROPS DEBUG][SupabaseLiveChat]", {
+src\components\host\HostBottomControls.jsx:5:import LiveChatOverlay from "../chat/LiveChatOverlay";
+src\components\host\HostBottomControls.jsx:6:import SupabaseLiveChat from "../chat/SupabaseLiveChat";
+src\components\host\HostBottomControls.jsx:19:  useSupabaseChat = false,
+src\components\streaming\LiveShowCardWrapper.jsx:10:import LiveChatOverlay from "../chat/LiveChatOverlay";
+src\components\streaming\LiveShowCardWrapper.jsx:73:      <LiveChatOverlay

@@ -1,0 +1,123 @@
+================================================================================
+CHAT MOUNT TRACE — LiveShow.jsx (Viewer)
+================================================================================
+File: src/pages/LiveShow.jsx
+Route: liveshow (with showId query param)
+
+--------------------------------------------------------------------------------
+a) useSupabaseChat DEFINITION (lines 131-136)
+--------------------------------------------------------------------------------
+
+  // Determine which chat system to use:
+  // SupabaseLiveChat renders when show is starting or live (lifecycle-based)
+  // Legacy chat is fallback for other states
+  const useSupabaseChat =
+    show?.stream_status === 'starting' ||
+    show?.stream_status === 'live';
+
+--------------------------------------------------------------------------------
+b) DEVICE GATING (lines 122-123)
+--------------------------------------------------------------------------------
+
+  const { isMobileDevice, isDesktopDevice } = useDeviceClass();
+  useMobilePortraitLock(isMobileDevice);
+
+  // isMobileDevice and isDesktopDevice are MUTUALLY EXCLUSIVE (one or the other).
+
+--------------------------------------------------------------------------------
+c) JSX: SupabaseLiveChat RENDER BLOCKS
+--------------------------------------------------------------------------------
+
+  MOBILE (lines 982-1005, inside {isMobileDevice && (...)}):
+    {showChatOverlay && (
+      useSupabaseChat ? (
+        <SupabaseLiveChat
+          showId={showId}
+          sellerId={show?.seller_id}
+          isSeller={isShowOwner}
+          user={user}
+          isOverlay={true}
+          onClose={() => setShowChatOverlay(false)}
+          onMessageSeller={() => navigate(createPageUrl("Messages") + `?sellerId=${show?.seller_id}`)}
+        />
+      ) : (
+        ...
+      )
+    )}
+
+  DESKTOP (lines 1478-1490, inside {isDesktopDevice && (...)}):
+    {useSupabaseChat ? (
+      <SupabaseLiveChat
+        showId={showId}
+        sellerId={show?.seller_id}
+        isSeller={isShowOwner}
+        user={user}
+        isOverlay={false}
+        onMessageSeller={() => navigate(createPageUrl("Messages") + `?sellerId=${show?.seller_id}`)}
+      />
+    ) : (
+      ...
+    )}
+
+--------------------------------------------------------------------------------
+d) JSX: LiveChat RENDER BLOCKS
+--------------------------------------------------------------------------------
+
+  DESKTOP ONLY (lines 1490-1496, inside {isDesktopDevice && (...)} when !useSupabaseChat):
+    ) : (
+      <LiveChat
+        showId={showId}
+        sellerId={show?.seller_id}
+        isSeller={false}
+        isEmbedded={true}
+      />
+    )}
+
+  LiveChat NEVER renders on mobile. Only on desktop when stream_status is NOT 'starting'/'live'.
+
+--------------------------------------------------------------------------------
+e) JSX: LiveChatOverlay RENDER BLOCKS (including inputOnly)
+--------------------------------------------------------------------------------
+
+  MOBILE — FULL OVERLAY (lines 997-1004, inside {isMobileDevice && (...)} when !useSupabaseChat):
+    ) : (
+      <LiveChatOverlay
+        showId={showId}
+        sellerId={show?.seller_id}
+        isSeller={false}
+        onClose={() => setShowChatOverlay(false)}
+      />
+    )}
+
+  MOBILE — INPUT-ONLY BOTTOM BAR (lines 1247-1256, inside {isMobileDevice && (...)} when !useSupabaseChat):
+    {!useSupabaseChat && (
+      <LiveChatOverlay
+        showId={showId}
+        sellerId={show?.seller_id}
+        isSeller={false}
+        inputOnly={true}
+      />
+    )}
+
+--------------------------------------------------------------------------------
+f) MOUNT MATRIX — Can LiveChatOverlay and LiveChat mount together?
+--------------------------------------------------------------------------------
+
+  DEVICE BRANCHES: isMobileDevice XOR isDesktopDevice (mutually exclusive).
+
+  | Device   | useSupabaseChat | Chat component(s) that mount                    |
+  |----------|-----------------|--------------------------------------------------|
+  | MOBILE   | true            | SupabaseLiveChat (overlay only)                  |
+  | MOBILE   | false           | LiveChatOverlay (full) + LiveChatOverlay (inputOnly) |
+  | DESKTOP  | true            | SupabaseLiveChat (sidebar)                       |
+  | DESKTOP  | false           | LiveChat (sidebar)                               |
+
+  CONCLUSION: LiveChatOverlay and LiveChat NEVER mount together.
+  - LiveChatOverlay mounts ONLY on mobile (when !useSupabaseChat).
+  - LiveChat mounts ONLY on desktop (when !useSupabaseChat).
+
+  DUPLICATION: On MOBILE when !useSupabaseChat, TWO LiveChatOverlay instances mount:
+  1. Full overlay (messages + input)
+  2. Input-only in bottom bar
+  Both use same showId and same React Query key ['chat-messages', showId].
+  Both fetch from base44.entities.ChatMessage (same table, shared cache).
