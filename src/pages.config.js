@@ -28,6 +28,7 @@ import SellerSafetyAgreement from './pages/SellerSafetyAgreement';
 import SellerOnboarding from './pages/SellerOnboarding';
 import Login from './pages/Login';
 import Signup from './pages/Signup';
+import ResetPassword from './pages/ResetPassword';
 import __Layout from './Layout.jsx';
 
 
@@ -62,6 +63,7 @@ export const PAGES = {
     "selleronboarding": SellerOnboarding,
     "login": Login,
     "signup": Signup,
+    "reset-password": ResetPassword,
 }
 
 export const pagesConfig = {
