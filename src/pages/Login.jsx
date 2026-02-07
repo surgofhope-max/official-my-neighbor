@@ -12,6 +12,7 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [resetMsg, setResetMsg] = useState(null);
 
   // ═══════════════════════════════════════════════════════════════════════════
   // AUTH REDIRECT: If user becomes authenticated while on Login, redirect away
@@ -63,6 +64,29 @@ export default function Login() {
       setLoading(false);
     }
   };
+
+  async function handleForgotPassword(e) {
+    e.preventDefault();
+    setResetMsg(null);
+    setError(null);
+
+    const trimmed = (email || "").trim();
+    if (!trimmed) {
+      setResetMsg({ type: "error", text: "Enter your email above to reset your password." });
+      return;
+    }
+
+    const redirectTo = "https://www.myneighbor.live/reset-password";
+
+    const { error: resetError } = await supabase.auth.resetPasswordForEmail(trimmed, { redirectTo });
+
+    if (resetError) {
+      setResetMsg({ type: "error", text: resetError.message || "Could not send reset email." });
+      return;
+    }
+
+    setResetMsg({ type: "success", text: "Password reset email sent. Check your inbox/spam." });
+  }
 
   return (
     <div className="min-h-screen relative bg-gradient-to-br from-purple-900 via-indigo-900 to-blue-900">
@@ -157,6 +181,25 @@ export default function Login() {
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none transition-all disabled:bg-gray-100 disabled:cursor-not-allowed"
                   placeholder="Enter your password"
                 />
+                <button
+                  type="button"
+                  onClick={handleForgotPassword}
+                  disabled={loading}
+                  className="mt-2 text-sm font-semibold text-purple-600 hover:text-purple-700 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Forgot password?
+                </button>
+                {resetMsg && (
+                  <div
+                    className={`mt-2 text-sm ${
+                      resetMsg.type === "success"
+                        ? "text-green-600"
+                        : "text-red-600"
+                    }`}
+                  >
+                    {resetMsg.text}
+                  </div>
+                )}
               </div>
 
               {error && (
