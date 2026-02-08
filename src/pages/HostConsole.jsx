@@ -671,7 +671,8 @@ export default function HostConsole() {
   const isBroadcastBlocked = show?.status === "ended" || show?.status === "cancelled";
   
   // Check if show is already live (one-way: cannot revert)
-  const isAlreadyLive = show?.stream_status === "live";
+  // Include local room state so UI is correct during refetch race after startDailyBroadcast
+  const isAlreadyLive = show?.stream_status === "live" || (!!dailyRoomUrl && !!dailyToken);
 
   // ═══════════════════════════════════════════════════════════════════════════
   // DAILY IN-APP CAMERA BROADCAST
