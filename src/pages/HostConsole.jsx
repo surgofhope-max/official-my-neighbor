@@ -778,8 +778,18 @@ export default function HostConsole() {
     }
     try {
       const nextMode = cameraFacingMode === "user" ? "environment" : "user";
-      await call.updateInputSettings({ video: { settings: { facingMode: nextMode } } });
-      setCameraFacingMode(nextMode);
+      try {
+        await call.updateInputSettings({
+          video: { settings: { facingMode: { exact: nextMode } } }
+        });
+        setCameraFacingMode(nextMode);
+      } catch (exactErr) {
+        console.warn("[FLIP_CAMERA] exact facingMode failed, falling back");
+        await call.updateInputSettings({
+          video: { settings: { facingMode: nextMode } }
+        });
+        // Do NOT update cameraFacingMode when fallback is used
+      }
     } catch (e) {
       console.error("[FLIP_CAMERA] failed", e);
     }
