@@ -91,6 +91,7 @@ export default function SupabaseLiveChat({
   const lastMessageIdRef = useRef(null);
   const knownMessageIdsRef = useRef(new Set()); // Track IDs we've already processed
   const mountedRef = useRef(true);
+  const realtimeActiveRef = useRef(false);
 
   // Poll interval (ms)
   const POLL_INTERVAL = 2500;
@@ -236,27 +237,30 @@ export default function SupabaseLiveChat({
   const pollMessages = useCallback(async () => {
     if (!showId) return;
 
-    const { messages: serverMessages, error } = await getLiveShowMessages(showId, {
-      limit: 100,
-    });
+    // Gate message fetch when realtime is active — reduces burst load, availability still runs
+    if (!realtimeActiveRef.current) {
+      const { messages: serverMessages, error } = await getLiveShowMessages(showId, {
+        limit: 100,
+      });
 
-    if (mountedRef.current && !error && serverMessages.length > 0) {
-      const lastServerId = serverMessages[serverMessages.length - 1].id;
+      if (mountedRef.current && !error && serverMessages.length > 0) {
+        const lastServerId = serverMessages[serverMessages.length - 1].id;
 
-      // Only process if there are new messages (compare last ID)
-      if (lastServerId !== lastMessageIdRef.current) {
-        lastMessageIdRef.current = lastServerId;
+        // Only process if there are new messages (compare last ID)
+        if (lastServerId !== lastMessageIdRef.current) {
+          lastMessageIdRef.current = lastServerId;
 
-        // INCREMENTAL APPEND: Find only truly new messages using ref for O(1) lookup
-        const onlyNew = serverMessages.filter((m) => !knownMessageIdsRef.current.has(m.id));
+          // INCREMENTAL APPEND: Find only truly new messages using ref for O(1) lookup
+          const onlyNew = serverMessages.filter((m) => !knownMessageIdsRef.current.has(m.id));
 
-        if (onlyNew.length > 0) {
-          await applyIncomingMessages(onlyNew);
+          if (onlyNew.length > 0) {
+            await applyIncomingMessages(onlyNew);
+          }
         }
       }
     }
 
-    // Also check availability periodically
+    // Also check availability periodically (always runs)
     await checkAvailability();
   }, [showId, checkAvailability, fetchBuyerNames, applyIncomingMessages]);
 
@@ -300,11 +304,15 @@ export default function SupabaseLiveChat({
           await applyIncomingMessages([row]);
         }
       )
-      .subscribe((status) => console.log("[REALTIME_CHAT] status", { status, showId }));
+      .subscribe((status) => {
+        realtimeActiveRef.current = status === "SUBSCRIBED";
+        console.log("[REALTIME_CHAT] status", { status, showId });
+      });
 
     console.log("[REALTIME_CHAT] subscribed", { showId });
 
     return () => {
+      realtimeActiveRef.current = false;
       supabase.removeChannel(channel);
       console.log("[REALTIME_CHAT] unsubscribed", { showId });
     };
