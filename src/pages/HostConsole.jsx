@@ -1333,14 +1333,16 @@ export default function HostConsole() {
               <Package className="w-5 h-5 text-white" />
             </Button>
 
-            {/* Fulfillment Button (Icon Only) */}
-            <Button
-              onClick={() => setShowFulfillmentDrawer(true)}
-              size="icon"
-              className="bg-gradient-to-r from-orange-600 to-amber-600 h-10 w-10 rounded-full shadow-lg border border-white/20"
-            >
-              <ClipboardCheck className="w-5 h-5 text-white" />
-            </Button>
+            {/* Fulfillment Button (Icon Only) — hidden during live to free slot */}
+            {!isAlreadyLive && (
+              <Button
+                onClick={() => setShowFulfillmentDrawer(true)}
+                size="icon"
+                className="bg-gradient-to-r from-orange-600 to-amber-600 h-10 w-10 rounded-full shadow-lg border border-white/20"
+              >
+                <ClipboardCheck className="w-5 h-5 text-white" />
+              </Button>
+            )}
 
                 {/* Broadcast Button (Icon Only) - ONE-WAY: Shows LIVE or Start */}
                 {isAlreadyLive ? (
