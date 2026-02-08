@@ -41,8 +41,7 @@ import {
   MessageCircle,
   ClipboardCheck,
   QrCode,
-  ShoppingBag,
-  RefreshCcw
+  ShoppingBag
 } from "lucide-react";
 import HostBottomControls from "../components/host/HostBottomControls";
 import SellerProductDetailCard from "../components/host/SellerProductDetailCard";
@@ -95,7 +94,6 @@ export default function HostConsole() {
   const [showFulfillmentDrawer, setShowFulfillmentDrawer] = useState(false);
   const [showFulfillmentDialog, setShowFulfillmentDialog] = useState(false);
   const [showPurchaseBanner, setShowPurchaseBanner] = useState(false);
-  const [cameraFacingMode, setCameraFacingMode] = useState("user");
   
   // ═══════════════════════════════════════════════════════════════════════════
   // DEVICE-LOCKED CLASSIFICATION (NO VIEWPORT FLIPS)
@@ -765,36 +763,6 @@ export default function HostConsole() {
     }
   };
 
-  const handleFlipCamera = async () => {
-    if (!isAlreadyLive) return;
-    const call = window.__dailyHostCall;
-    if (!call) {
-      console.warn("[FLIP_CAMERA] No call object");
-      return;
-    }
-    if (typeof call.updateInputSettings !== "function") {
-      console.warn("[FLIP_CAMERA] updateInputSettings not available");
-      return;
-    }
-    try {
-      const nextMode = cameraFacingMode === "user" ? "environment" : "user";
-      try {
-        await call.updateInputSettings({
-          video: { settings: { facingMode: { exact: nextMode } } }
-        });
-        setCameraFacingMode(nextMode);
-      } catch (exactErr) {
-        console.warn("[FLIP_CAMERA] exact facingMode failed, falling back");
-        await call.updateInputSettings({
-          video: { settings: { facingMode: nextMode } }
-        });
-        // Do NOT update cameraFacingMode when fallback is used
-      }
-    } catch (e) {
-      console.error("[FLIP_CAMERA] failed", e);
-    }
-  };
-
   const handleSaveProduct = (productData) => {
     createProductMutation.mutate(productData);
   };
@@ -1366,26 +1334,14 @@ export default function HostConsole() {
               <Package className="w-5 h-5 text-white" />
             </Button>
 
-            {/* Fulfillment Button (Icon Only) — hidden during live to free slot */}
-            {!isAlreadyLive && (
+            {/* Fulfillment Button (Icon Only) — DISABLED: never shown on mobile */}
+            {false && (
               <Button
                 onClick={() => setShowFulfillmentDrawer(true)}
                 size="icon"
                 className="bg-gradient-to-r from-orange-600 to-amber-600 h-10 w-10 rounded-full shadow-lg border border-white/20"
               >
                 <ClipboardCheck className="w-5 h-5 text-white" />
-              </Button>
-            )}
-
-            {/* Flip Camera Button (Icon Only) — shown only when live */}
-            {isAlreadyLive && (
-              <Button
-                onClick={handleFlipCamera}
-                size="icon"
-                className="bg-black/40 text-white border-white/20 hover:bg-black/60 h-10 w-10 rounded-full backdrop-blur-md border"
-                title="Flip camera"
-              >
-                <RefreshCcw className="w-5 h-5" />
               </Button>
             )}
 
@@ -1445,25 +1401,15 @@ export default function HostConsole() {
               
               {/* ONE-WAY BROADCAST: Shows "LIVE" status or "Go Live" button */}
               {isAlreadyLive ? (
-                <>
-                  <div className="bg-red-600/20 border border-red-500 rounded-lg p-3 text-center">
-                    <div className="flex items-center justify-center gap-2 mb-1">
-                      <Radio className="w-4 h-4 text-red-400 animate-pulse" />
-                      <span className="text-red-400 font-bold">🔴 LIVE — In-App Camera</span>
-                    </div>
-                    <p className="text-gray-400 text-xs">
-                      Your broadcast is active. End Show when you're done.
-                    </p>
+                <div className="bg-red-600/20 border border-red-500 rounded-lg p-3 text-center">
+                  <div className="flex items-center justify-center gap-2 mb-1">
+                    <Radio className="w-4 h-4 text-red-400 animate-pulse" />
+                    <span className="text-red-400 font-bold">🔴 LIVE — In-App Camera</span>
                   </div>
-                  <Button
-                    onClick={handleFlipCamera}
-                    variant="outline"
-                    className="w-full border-white/30 text-gray-300 hover:bg-white/10 font-medium py-2"
-                  >
-                    <RefreshCcw className="w-4 h-4 mr-2" />
-                    Flip Camera
-                  </Button>
-                </>
+                  <p className="text-gray-400 text-xs">
+                    Your broadcast is active. End Show when you're done.
+                  </p>
+                </div>
               ) : (
                 <Button
                   onClick={startDailyBroadcast}
