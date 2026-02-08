@@ -33,7 +33,7 @@ serve(async (req: Request) => {
 
     // Determine frontend URL for redirect
     // In production, this should be your actual frontend domain
-    const frontendUrl = Deno.env.get("FRONTEND_URL") || supabaseUrl.replace(".supabase.co", ".vercel.app");
+    const frontendUrl = Deno.env.get("FRONTEND_URL") || "https://myneighbor.live";
     const redirectUrl = `${frontendUrl}/sellerdashboard`;
 
     console.log("[stripe-return] Received return redirect", { accountId });
@@ -120,8 +120,7 @@ serve(async (req: Request) => {
     console.error("[stripe-return] Error:", error);
 
     // Even on error, redirect to dashboard
-    const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
-    const frontendUrl = Deno.env.get("FRONTEND_URL") || supabaseUrl.replace(".supabase.co", ".vercel.app");
+    const frontendUrl = Deno.env.get("FRONTEND_URL") || "https://myneighbor.live";
     
     return new Response(null, {
       status: 302,
