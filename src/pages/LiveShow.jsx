@@ -72,7 +72,7 @@ export default function LiveShow() {
       </div>
     );
   }
-  
+
   const [buyerProfile, setBuyerProfile] = useState(null);
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [showCheckout, setShowCheckout] = useState(false);
@@ -131,12 +131,12 @@ export default function LiveShow() {
   // LIVE CHAT INVARIANT:
   // When useSupabaseChat === true, SupabaseLiveChat MUST be
   // the only chat engine mounted. Legacy chat is forbidden in live state.
-  const isShowLive =
+  const isShowLiveUI =
     show?.stream_status === 'starting' ||
     show?.stream_status === 'live' ||
     show?.is_streaming === true ||
     show?.status === 'live';
-  const useSupabaseChat = isShowLive;
+  const useSupabaseChat = isShowLiveUI;
 
   useEffect(() => {
     console.log("🎬 [LiveShow] MOUNT - showId:", showId);
@@ -665,7 +665,6 @@ export default function LiveShow() {
   // ═══════════════════════════════════════════════════════════════════════════
   // LIFECYCLE GATING: Explicit handling of show states
   // ═══════════════════════════════════════════════════════════════════════════
-  
   // AUTHORITATIVE: stream_status === "live" is the ONLY rule for "is live"
   const isShowActuallyLive = isShowLive(show);
   
@@ -973,17 +972,6 @@ export default function LiveShow() {
         {/* Chat Messages Overlay */}
         {/* Container is device-gated (isMobileDevice), so chat mounts only on mobile.
             This prevents double polling and freeze under load. */}
-        {(() => { console.log("[AUTH DEBUG][LiveShow] rendering mobile chat with user:", user); return null; })()}
-        {(() => {
-          console.log("[CHAT PROPS DEBUG][LiveShow][MOBILE]", {
-            showId,
-            sellerId: show?.seller_id,
-            isShowOwner,
-            userId: user?.id ?? null,
-            userRole: user?.role ?? null,
-          });
-          return null;
-        })()}
         {showChatOverlay && (
           useSupabaseChat ? (
             <SupabaseLiveChat
@@ -1281,13 +1269,6 @@ export default function LiveShow() {
           )}
           
           {canShowProducts && allShowProducts.map((product) => {
-            console.log("[RENDER PRODUCT CARD] (desktop list)", {
-              cardProductId: product?.id,
-              cardTitle: product?.title,
-              cardShowProductId: product?.show_product_id,
-              cardQuantity: product?.quantity,
-              cardStatus: product?.status,
-            });
             const isFeatured = product.id === featuredProduct?.id;
             return (
               <div
@@ -1469,17 +1450,6 @@ export default function LiveShow() {
           {/* Container is device-gated (isDesktopDevice), so chat mounts only on desktop.
               This prevents double polling and freeze under load. */}
           <div className="flex-1 flex flex-col min-h-0">
-            {(() => { console.log("[AUTH DEBUG][LiveShow] rendering desktop chat with user:", user); return null; })()}
-            {(() => {
-              console.log("[CHAT PROPS DEBUG][LiveShow][DESKTOP]", {
-                showId,
-                sellerId: show?.seller_id,
-                isShowOwner,
-                userId: user?.id ?? null,
-                userRole: user?.role ?? null,
-              });
-              return null;
-            })()}
             {useSupabaseChat ? (
               <SupabaseLiveChat
                 showId={showId}
@@ -1514,15 +1484,7 @@ export default function LiveShow() {
       )}
 
       {/* Checkout Overlay - GATED: Only render when canBuy (stream_status === "live") */}
-      {canBuy && showCheckout && selectedProduct && seller && (() => {
-        console.log("[CHECKOUT RECEIVES PRODUCT]", {
-          checkoutProductId: selectedProduct?.id,
-          checkoutTitle: selectedProduct?.title,
-          checkoutShowProductId: selectedProduct?.show_product_id,
-          checkoutQuantity: selectedProduct?.quantity,
-          checkoutStatus: selectedProduct?.status,
-        });
-        return (
+      {canBuy && showCheckout && selectedProduct && seller && (
           <div className="fixed inset-0 z-[200]">
             <CheckoutOverlay
               product={selectedProduct}
@@ -1535,8 +1497,7 @@ export default function LiveShow() {
               }}
             />
           </div>
-        );
-      })()}
+      )}
 
       <style>{`
         .scrollbar-hide::-webkit-scrollbar {
