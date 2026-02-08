@@ -128,12 +128,15 @@ export default function LiveShow() {
   // - fallback → WebRTCViewer (waiting state if not configured)
   const useIvsPlayer = show?.streaming_provider === "ivs" && Boolean(show?.ivs_playback_url);
 
-  // Determine which chat system to use:
-  // SupabaseLiveChat renders when show is starting or live (lifecycle-based)
-  // Legacy chat is fallback for other states
-  const useSupabaseChat =
+  // LIVE CHAT INVARIANT:
+  // When useSupabaseChat === true, SupabaseLiveChat MUST be
+  // the only chat engine mounted. Legacy chat is forbidden in live state.
+  const isShowLive =
     show?.stream_status === 'starting' ||
-    show?.stream_status === 'live';
+    show?.stream_status === 'live' ||
+    show?.is_streaming === true ||
+    show?.status === 'live';
+  const useSupabaseChat = isShowLive;
 
   useEffect(() => {
     console.log("🎬 [LiveShow] MOUNT - showId:", showId);

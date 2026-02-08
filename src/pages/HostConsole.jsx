@@ -283,12 +283,15 @@ export default function HostConsole() {
     enabled: !!show?.seller_id
   });
 
-  // Determine which chat system to use:
-  // SupabaseLiveChat renders when show is starting or live (lifecycle-based)
-  // Legacy chat is fallback for other states
-  const useSupabaseChat =
+  // LIVE CHAT INVARIANT:
+  // When useSupabaseChat === true, SupabaseLiveChat MUST be
+  // the only chat engine mounted. Legacy chat is forbidden in live state.
+  const isShowLive =
     show?.stream_status === 'starting' ||
-    show?.stream_status === 'live';
+    show?.stream_status === 'live' ||
+    show?.is_streaming === true ||
+    show?.status === 'live';
+  const useSupabaseChat = isShowLive;
 
   // Sync Daily room URL from show data when it loads/changes
   useEffect(() => {
