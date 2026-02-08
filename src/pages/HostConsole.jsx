@@ -286,12 +286,13 @@ export default function HostConsole() {
   // LIVE CHAT INVARIANT:
   // When useSupabaseChat === true, SupabaseLiveChat MUST be
   // the only chat engine mounted. Legacy chat is forbidden in live state.
-  const isShowLive =
+  // UI-derived boolean — DO NOT shadow the imported isShowLive() function
+  const isShowLiveUI =
     show?.stream_status === 'starting' ||
     show?.stream_status === 'live' ||
     show?.is_streaming === true ||
     show?.status === 'live';
-  const useSupabaseChat = isShowLive;
+  const useSupabaseChat = isShowLiveUI;
 
   // Sync Daily room URL from show data when it loads/changes
   useEffect(() => {
