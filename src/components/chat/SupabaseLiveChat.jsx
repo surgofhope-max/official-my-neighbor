@@ -356,6 +356,9 @@ export default function SupabaseLiveChat({
         // Add to local messages immediately for responsiveness
         setMessages((prev) => [...prev, message]);
         knownMessageIdsRef.current.add(message.id);
+        if (message.sender_role === 'viewer') {
+          await fetchBuyerNames([message]);
+        }
         setNewMessage("");
         resetFadeTimer();
       }
@@ -428,17 +431,6 @@ export default function SupabaseLiveChat({
   // RENDER - MAIN CHAT
   // ─────────────────────────────────────────────────────────────────────
   
-  // AUDIT LOG - max-h-[50vh] debug
-  const wrapperClassName = `${isOverlay ? "fixed bottom-2 left-4 right-4 z-40 max-w-md" : "w-full h-full"} flex flex-col`;
-  const messageBoxClassName = `${isOverlay ? "max-h-[50vh] pb-20" : "flex-1"} overflow-y-auto mb-2 opacity-100 transition-opacity duration-500`;
-  console.log("[CHAT HEIGHT AUDIT]", {
-    isOverlay,
-    wrapperClassName,
-    messageBoxClassName,
-    hasMaxH50vh: messageBoxClassName.includes("max-h-[50vh]"),
-    wrapperHasFlexCol: wrapperClassName.includes("flex flex-col"),
-  });
-
   return (
     <div
       className={`
