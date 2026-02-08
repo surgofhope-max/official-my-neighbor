@@ -206,6 +206,31 @@ export default function SupabaseLiveChat({
   }, [showId]);
 
   // ─────────────────────────────────────────────────────────────────────
+  // APPLY INCOMING MESSAGES (shared by polling, realtime, send)
+  // ─────────────────────────────────────────────────────────────────────
+  const applyIncomingMessages = useCallback(async (newMessages) => {
+    const accepted = newMessages.filter((m) => !knownMessageIdsRef.current.has(m.id));
+    if (accepted.length === 0) return;
+
+    accepted.forEach((m) => knownMessageIdsRef.current.add(m.id));
+    if (knownMessageIdsRef.current.size > 150) {
+      const idsArray = Array.from(knownMessageIdsRef.current);
+      knownMessageIdsRef.current = new Set(idsArray.slice(-100));
+    }
+
+    setMessages((prev) => {
+      const merged = [...prev, ...accepted];
+      return merged.length > 100 ? merged.slice(-100) : merged;
+    });
+
+    resetFadeTimer();
+    const acceptedViewers = accepted.filter((m) => m.sender_role === "viewer");
+    if (acceptedViewers.length > 0) {
+      await fetchBuyerNames(acceptedViewers);
+    }
+  }, [fetchBuyerNames]);
+
+  // ─────────────────────────────────────────────────────────────────────
   // POLL FOR MESSAGES
   // ─────────────────────────────────────────────────────────────────────
   const pollMessages = useCallback(async () => {
@@ -224,34 +249,16 @@ export default function SupabaseLiveChat({
 
         // INCREMENTAL APPEND: Find only truly new messages using ref for O(1) lookup
         const onlyNew = serverMessages.filter((m) => !knownMessageIdsRef.current.has(m.id));
-        
+
         if (onlyNew.length > 0) {
-          // Update known IDs ref BEFORE state update
-          onlyNew.forEach((m) => knownMessageIdsRef.current.add(m.id));
-          
-          // Trim ref if it grows too large (keep last ~150 to allow some buffer)
-          if (knownMessageIdsRef.current.size > 150) {
-            const idsArray = Array.from(knownMessageIdsRef.current);
-            knownMessageIdsRef.current = new Set(idsArray.slice(-100));
-          }
-
-          // Update state with only new messages appended
-          setMessages((prev) => {
-            const merged = [...prev, ...onlyNew];
-            // Keep only last 100 messages (trim oldest)
-            return merged.length > 100 ? merged.slice(-100) : merged;
-          });
-
-          // Fetch buyer names ONLY for newly appended messages
-          fetchBuyerNames(onlyNew);
-          resetFadeTimer();
+          await applyIncomingMessages(onlyNew);
         }
       }
     }
 
     // Also check availability periodically
     await checkAvailability();
-  }, [showId, checkAvailability, fetchBuyerNames]);
+  }, [showId, checkAvailability, fetchBuyerNames, applyIncomingMessages]);
 
   // Start/stop polling
   useEffect(() => {
@@ -269,6 +276,39 @@ export default function SupabaseLiveChat({
       }
     };
   }, [showId, pollMessages]);
+
+  // ─────────────────────────────────────────────────────────────────────
+  // REALTIME SUBSCRIPTION (INSERT on live_show_messages)
+  // ─────────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!showId) return;
+
+    const channel = supabase
+      .channel(`live_show_messages:${showId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "live_show_messages",
+          filter: `show_id=eq.${showId}`,
+        },
+        async (payload) => {
+          const row = payload?.new;
+          if (!row?.id) return;
+          console.log("[REALTIME_CHAT] insert", { id: row.id, showId });
+          await applyIncomingMessages([row]);
+        }
+      )
+      .subscribe((status) => console.log("[REALTIME_CHAT] status", { status, showId }));
+
+    console.log("[REALTIME_CHAT] subscribed", { showId });
+
+    return () => {
+      supabase.removeChannel(channel);
+      console.log("[REALTIME_CHAT] unsubscribed", { showId });
+    };
+  }, [showId, applyIncomingMessages]);
 
   // ─────────────────────────────────────────────────────────────────────
   // AUTO-SCROLL TO BOTTOM
@@ -353,14 +393,8 @@ export default function SupabaseLiveChat({
       if (error) {
         setSendError(error);
       } else if (message) {
-        // Add to local messages immediately for responsiveness
-        setMessages((prev) => [...prev, message]);
-        knownMessageIdsRef.current.add(message.id);
-        if (message.sender_role === 'viewer') {
-          await fetchBuyerNames([message]);
-        }
+        await applyIncomingMessages([message]);
         setNewMessage("");
-        resetFadeTimer();
       }
     }
   };
