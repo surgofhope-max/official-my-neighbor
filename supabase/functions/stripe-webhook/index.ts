@@ -36,6 +36,111 @@ const TERMINAL_ORDER_STATUSES = ["paid", "picked_up", "completed", "cancelled", 
 // Terminal batch statuses that should never be regressed
 const TERMINAL_BATCH_STATUSES = ["picked_up", "completed", "cancelled"];
 
+// Paid-only batch: open batches can receive new paid orders
+const OPEN_BATCH_STATUSES = ["active", "pending"];
+const CLOSED_BATCH_STATUSES = ["ready", "completed", "picked_up", "cancelled"];
+
+/** Generate 9-digit completion code (same format as CheckoutOverlay) */
+function generateCompletionCode(): string {
+  return Math.floor(100000000 + Math.random() * 900000000).toString();
+}
+
+/** Generate batch number (same format as CheckoutOverlay) */
+function generateBatchNumber(showId: string, buyerId: string): string {
+  const shortShowId = showId.substring(0, 8);
+  const shortBuyerId = buyerId.substring(0, 8);
+  const timestamp = new Date().toISOString().split("T")[0].replace(/-/g, "");
+  return `BATCH-${shortShowId}-${shortBuyerId}-${timestamp}`;
+}
+
+/** Find an open batch for the given key (buyer_id, seller_id, show_id). */
+async function findOpenBatchForKey(
+  supabase: ReturnType<typeof createClient>,
+  key: { buyer_id: string; seller_id: string; show_id: string }
+): Promise<{ id: string } | null> {
+  const { data, error } = await supabase
+    .from("batches")
+    .select("id")
+    .eq("buyer_id", key.buyer_id)
+    .eq("seller_id", key.seller_id)
+    .eq("show_id", key.show_id)
+    .in("status", OPEN_BATCH_STATUSES)
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    console.warn("[WEBHOOK] findOpenBatchForKey error:", error.message);
+    return null;
+  }
+  return data as { id: string } | null;
+}
+
+/** Create a new batch for a paid order (called when no open batch exists). */
+async function createBatchForPaidOrder(
+  supabase: ReturnType<typeof createClient>,
+  key: { buyer_id: string; seller_id: string; show_id: string }
+): Promise<{ id: string } | null> {
+  const completionCode = generateCompletionCode();
+  const batchNumber = generateBatchNumber(key.show_id, key.buyer_id);
+
+  const { data, error } = await supabase
+    .from("batches")
+    .insert({
+      buyer_id: key.buyer_id,
+      seller_id: key.seller_id,
+      show_id: key.show_id,
+      batch_number: batchNumber,
+      completion_code: completionCode,
+      status: "active",
+      total_items: 0,
+      total_amount: 0,
+    })
+    .select("id")
+    .single();
+
+  if (error) {
+    console.warn("[WEBHOOK] createBatchForPaidOrder error:", error.message);
+    return null;
+  }
+  console.log("[WEBHOOK] Created batch", data.id, "for key", { buyer_id: key.buyer_id, seller_id: key.seller_id, show_id: key.show_id });
+  return data as { id: string };
+}
+
+/** Recompute batch totals from orders that have completed payment. */
+async function recomputeBatchTotalsFromPaidOrders(
+  supabase: ReturnType<typeof createClient>,
+  batchId: string
+): Promise<void> {
+  const { data: orders, error } = await supabase
+    .from("orders")
+    .select("price, delivery_fee")
+    .eq("batch_id", batchId)
+    .in("status", ["paid", "ready", "fulfilled", "completed"]);
+
+  if (error) {
+    console.warn("[WEBHOOK] recomputeBatchTotalsFromPaidOrders: failed to fetch orders:", error.message);
+    return;
+  }
+
+  const totalItems = (orders ?? []).length;
+  const totalAmount = (orders ?? []).reduce(
+    (sum, o) => sum + (Number(o.price) || 0) + (Number(o.delivery_fee) || 0),
+    0
+  );
+
+  const { error: updateErr } = await supabase
+    .from("batches")
+    .update({ total_items: totalItems, total_amount: totalAmount })
+    .eq("id", batchId);
+
+  if (updateErr) {
+    console.warn("[WEBHOOK] recomputeBatchTotalsFromPaidOrders: failed to update batch:", updateErr.message);
+  } else {
+    console.log("[WEBHOOK] Recomputed batch totals:", { batchId, totalItems, totalAmount });
+  }
+}
+
 serve(async (req: Request) => {
   // Handle CORS preflight
   if (req.method === "OPTIONS") {
@@ -204,9 +309,10 @@ async function handlePaymentSucceeded(
   console.log(`[WEBHOOK] Payment succeeded for order: ${orderId}`);
 
   // QA HARDENING: Fetch order first to check current status
+  // seller_entity_id = canonical sellers.id (for batch key)
   const { data: existingOrder, error: fetchError } = await supabase
     .from("orders")
-    .select("id, status, batch_id, buyer_id, seller_id, show_id")
+    .select("id, status, batch_id, buyer_id, seller_id, seller_entity_id, show_id")
     .eq("id", orderId)
     .maybeSingle();
 
@@ -274,73 +380,51 @@ async function handlePaymentSucceeded(
     console.error("[WEBHOOK] increment_show_sales_count exception:", e);
   }
 
-  // QA HARDENING: Safe batch status update
-  if (existingOrder.batch_id) {
-    await updateBatchStatusSafely(supabase, existingOrder.batch_id);
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PAID-ONLY BATCH ATTACH: Create or reuse ONE open batch per (buyer, seller, show)
+  // ═══════════════════════════════════════════════════════════════════════════
+  let resolvedBatchId: string | null = existingOrder.batch_id ?? null;
+  const sellerIdForBatch = (existingOrder as any).seller_entity_id || existingOrder.seller_id;
+
+  if (!existingOrder.buyer_id || !sellerIdForBatch || !existingOrder.show_id) {
+    console.warn("[WEBHOOK] Order missing batch key fields - skipping batch attach");
+  } else {
+    if (!resolvedBatchId) {
+      // Order has no batch: find or create open batch
+      const key = {
+        buyer_id: existingOrder.buyer_id,
+        seller_id: sellerIdForBatch,
+        show_id: existingOrder.show_id,
+      };
+      let batch = await findOpenBatchForKey(supabase, key);
+      if (!batch) {
+        batch = await createBatchForPaidOrder(supabase, key);
+      }
+      if (batch) {
+        const { error: attachErr } = await supabase
+          .from("orders")
+          .update({ batch_id: batch.id })
+          .eq("id", orderId);
+
+        if (attachErr) {
+          console.warn("[WEBHOOK] Failed to attach order to batch:", attachErr.message);
+        } else {
+          resolvedBatchId = batch.id;
+          console.log("[WEBHOOK] Attached order", orderId, "to batch", resolvedBatchId);
+        }
+      }
+    }
+
+    if (resolvedBatchId) {
+      await recomputeBatchTotalsFromPaidOrders(supabase, resolvedBatchId);
+    }
   }
 
   // Create notification for buyer (with deduplication)
-  await createPaymentNotificationSafely(supabase, existingOrder, orderId);
+  const orderForNotification = { ...existingOrder, batch_id: resolvedBatchId ?? undefined };
+  await createPaymentNotificationSafely(supabase, orderForNotification, orderId);
 
   console.log(`[WEBHOOK] Order ${orderId} marked as paid`);
-}
-
-/**
- * Safely update batch status - never regress terminal statuses
- */
-async function updateBatchStatusSafely(
-  supabase: ReturnType<typeof createClient>,
-  batchId: string
-) {
-  try {
-    // QA HARDENING: Fetch batch to check current status
-    const { data: batch, error: batchFetchError } = await supabase
-      .from("batches")
-      .select("id, status")
-      .eq("id", batchId)
-      .maybeSingle();
-
-    if (batchFetchError || !batch) {
-      console.warn(`[WEBHOOK] Batch ${batchId} not found - skipping batch update`);
-      return;
-    }
-
-    // QA HARDENING: Never regress terminal batch statuses
-    if (TERMINAL_BATCH_STATUSES.includes(batch.status)) {
-      console.log(`[WEBHOOK] Batch ${batchId} already in terminal state (${batch.status}) - skipping`);
-      return;
-    }
-
-    // Check if all orders in batch are paid
-    const { data: batchOrders, error: ordersError } = await supabase
-      .from("orders")
-      .select("status")
-      .eq("batch_id", batchId);
-
-    if (ordersError || !batchOrders) {
-      console.warn(`[WEBHOOK] Failed to fetch orders for batch ${batchId}`);
-      return;
-    }
-
-    const allPaid = batchOrders.every(
-      (o) => o.status === "paid" || o.status === "ready" || o.status === "picked_up"
-    );
-
-    if (allPaid) {
-      const { error: batchUpdateError } = await supabase
-        .from("batches")
-        .update({ status: "pending" })
-        .eq("id", batchId)
-        .not("status", "in", `(${TERMINAL_BATCH_STATUSES.join(",")})`); // Extra safety
-
-      if (batchUpdateError) {
-        console.warn(`[WEBHOOK] Failed to update batch ${batchId}:`, batchUpdateError.message);
-      }
-    }
-  } catch (err) {
-    // QA HARDENING: Never throw on batch update - log and continue
-    console.warn("[WEBHOOK] Error updating batch status:", err);
-  }
 }
 
 /**

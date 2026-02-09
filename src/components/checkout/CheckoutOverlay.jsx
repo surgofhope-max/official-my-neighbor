@@ -9,7 +9,6 @@ import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { getBuyerProfileByUserId, createBuyerProfile } from "@/api/buyers";
-import { findOrCreateBatch, updateBatch, deleteBatchById } from "@/api/batches";
 import { createOrderWithResult, deleteOrderById } from "@/api/orders";
 import { getProductById } from "@/api/products";
 import { createPaymentIntent, pollOrderPaymentStatus } from "@/api/payments";
@@ -363,32 +362,9 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
     // Validate product is still available
     await validateProductAvailability();
 
-    // Find or create batch
-    const batchNumber = generateBatchNumber(show.id, user.id);
-    const batchCompletionCode = generateCompletionCode();
-
-    const { batch, isNew: batchWasCreated } = await findOrCreateBatch({
-      auth_user_id: user.id,
-      auth_user_email: user.email,
-          seller_id: seller.id,
-          show_id: show.id,
-          batch_number: batchNumber,
-          completion_code: batchCompletionCode,
-    });
-
-    if (!batch) {
-      console.log("[CHECKOUT BLOCKED] reason: batch creation failed", {
-        batchNumber,
-        sellerId: seller?.id,
-        showId: show?.id,
-      });
-      throw new Error("Failed to create order batch");
-    }
-    console.log("[PROCESS ORDER] batch ready:", { batchId: batch?.id, batchNumber: batch?.batch_number });
-
-    // Use the batch's completion code (either existing or newly generated)
-    const finalCompletionCode = batch.completion_code || batchCompletionCode;
-    const finalBatchNumber = batch.batch_number || batchNumber;
+    // Paid-only batch: no batch creation here. Batch will be created on payment success (webhook).
+    const finalBatchNumber = generateBatchNumber(show.id, user.id);
+    const finalCompletionCode = generateCompletionCode();
 
     // ═══════════════════════════════════════════════════════════════════════════
     // DIAGNOSTIC LOGGING: Trace product ID at INSERT payload creation
@@ -401,8 +377,9 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
     // Create the order (with inventory enforcement at DB layer)
     // Use live payments if enabled, otherwise demo mode
     // DUAL-WRITE (Step T3.6): Pass both seller identifiers
+    // Paid-only: batch_id is null for live payment; batch created on payment success (webhook)
     const orderPayload = {
-      batch_id: batch.id,
+      batch_id: null,
       buyer_id: user.id,
       buyer_name: profileData.full_name,
       buyer_email: profileData.email,
@@ -462,16 +439,8 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
       window.dispatchEvent(new Event("lm:inventory_updated"));
     }, 300);
 
-    // Update batch totals
-    const newTotalItems = (batch.total_items || 0) + 1;
-    const newTotalAmount = (batch.total_amount || 0) + (product.price || 0) + (product.delivery_fee || 0);
-
-    await updateBatch(batch.id, {
-        total_items: newTotalItems,
-      total_amount: newTotalAmount,
-    });
-
-    return { order, completionCode: finalCompletionCode, batch, batchCreated: batchWasCreated, useLivePayment: USE_LIVE_PAYMENTS };
+    // Paid-only: batch totals updated by webhook on payment success
+    return { order, completionCode: finalCompletionCode, batch: null, batchCreated: false, useLivePayment: USE_LIVE_PAYMENTS };
   };
 
   const handleProfileSubmit = async (e) => {
@@ -529,20 +498,15 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
     setPaymentStep("processing");
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // ROLLBACK TRACKING: Track created artifacts for cleanup on failure
+    // ROLLBACK TRACKING: Track created order for cleanup on failure (no batch in paid-only flow)
     // ═══════════════════════════════════════════════════════════════════════════
     let createdOrderId = null;
-    let createdBatchId = null;
-    let createdBatchWasNew = false;
 
     try {
       // Process the order (creates pending order if live payments enabled)
       const result = await processOrder();
       
-      // Track created artifacts for potential rollback
       createdOrderId = result.order?.id || null;
-      createdBatchId = result.batch?.id || null;
-      createdBatchWasNew = !!result.batchCreated;
       
       if (result.useLivePayment) {
         // ═══════════════════════════════════════════════════════════════════════════
@@ -572,10 +536,8 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
         // Note: isSubmitting stays false so user can interact with PaymentElement
         setIsSubmitting(false);
         
-        // Clear rollback tracking on success - artifacts are now valid
+        // Clear rollback tracking on success
         createdOrderId = null;
-        createdBatchId = null;
-        createdBatchWasNew = false;
         
       } else {
         // Demo mode - order is already marked as paid
@@ -586,8 +548,6 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
         
         // Clear rollback tracking on success
         createdOrderId = null;
-        createdBatchId = null;
-        createdBatchWasNew = false;
       }
     } catch (error) {
       // ═══════════════════════════════════════════════════════════════════════════
@@ -597,10 +557,7 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
         console.warn("[checkout rollback] deleting order", createdOrderId);
         await deleteOrderById(createdOrderId);
       }
-      if (createdBatchWasNew && createdBatchId) {
-        console.warn("[checkout rollback] deleting batch", createdBatchId);
-        await deleteBatchById(createdBatchId);
-      }
+      // Paid-only: no batch creation in checkout, so no batch to delete on rollback
 
       setPaymentStep(null);
       setClientSecret(null);

@@ -133,7 +133,7 @@ export interface Order {
 }
 
 export interface CreateOrderInput {
-  batch_id: string;
+  batch_id?: string | null;
   buyer_id: string;
   buyer_name: string;
   buyer_email: string;
@@ -425,7 +425,7 @@ export async function createOrderWithResult(
     // - seller_entity_id: canonical sellers.id (new canonical reference)
     // ═══════════════════════════════════════════════════════════════════════════
     const insertPayload = {
-      batch_id: input.batch_id,
+      batch_id: input.batch_id ?? null,
       buyer_id: input.buyer_id,
       seller_id: input.seller_user_id,        // Legacy: auth.users.id (DB FK)
       seller_entity_id: input.seller_id,      // Canonical: sellers.id (entity PK)
@@ -482,7 +482,7 @@ export async function createOrderWithResult(
       seller_user_id: input.seller_user_id,  // Legacy: auth.users.id
       seller_id: input.seller_id,            // Canonical: sellers.id (entity PK)
       show_id: input.show_id,
-      batch_id: input.batch_id,
+      batch_id: input.batch_id ?? null,
       actor_user_id: input.buyer_id,  // Buyer is the actor
       metadata: {
         price: input.price,
