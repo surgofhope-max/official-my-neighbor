@@ -2,27 +2,11 @@ import React from "react";
 import { Bell } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { useQuery } from "@tanstack/react-query";
-import { supabaseApi as base44 } from "@/api/supabaseClient";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 
-export default function NotificationBell({ user }) {
+export default function NotificationBell({ user, unreadCount = 0 }) {
   const navigate = useNavigate();
-
-  const { data: unreadCount = 0 } = useQuery({
-    queryKey: ['notification-count', user?.id],
-    queryFn: async () => {
-      if (!user) return 0;
-      const notifications = await base44.entities.Notification.filter({
-        user_id: user.id,
-        read: false
-      });
-      return notifications.length;
-    },
-    enabled: !!user,
-    refetchInterval: 10000
-  });
 
   const handleClick = () => {
     navigate(createPageUrl("Notifications"));
