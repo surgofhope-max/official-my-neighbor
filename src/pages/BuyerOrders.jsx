@@ -587,60 +587,60 @@ export default function BuyerOrders() {
       <div className="max-w-7xl mx-auto px-4 py-6 sm:px-6 lg:px-8">
         {/* Stats Cards - ENHANCED with GIVI Wins */}
         <div className="grid grid-cols-4 gap-2 sm:gap-4 mb-6">
-          <Card className="border-0 shadow-lg bg-gradient-to-br from-purple-500 to-blue-500">
+          <Card className="border-0 shadow-lg bg-gradient-to-br from-blue-100 to-blue-200">
             <CardContent className="p-3 sm:p-6">
               <div className="text-center sm:flex sm:items-center sm:justify-between">
                 <div className="flex-1">
                   {/* FIX: Show Orders count derived from orders (authoritative) */}
-                  <p className="text-white/80 text-xs sm:text-sm mb-1">Orders</p>
-                  <p className="text-2xl sm:text-3xl font-bold text-white">{totalOrders}</p>
+                  <p className="text-slate-600 text-xs sm:text-sm mb-1">Orders</p>
+                  <p className="text-2xl sm:text-3xl font-bold text-slate-900">{totalOrders}</p>
                 </div>
-                <div className="hidden sm:flex w-12 h-12 bg-white/20 rounded-lg items-center justify-center">
-                  <ShoppingBag className="w-6 h-6 text-white" />
+                <div className="hidden sm:flex w-12 h-12 bg-blue-100/60 rounded-lg items-center justify-center">
+                  <ShoppingBag className="w-6 h-6 text-slate-900" />
                 </div>
               </div>
             </CardContent>
           </Card>
 
-          <Card className="border-0 shadow-lg bg-gradient-to-br from-green-500 to-emerald-500">
+          <Card className="border-0 shadow-lg bg-gradient-to-br from-slate-100 to-slate-200">
             <CardContent className="p-3 sm:p-6">
               <div className="text-center sm:flex sm:items-center sm:justify-between">
                 <div className="flex-1">
                   {/* FIX: Items = order count (each order = 1 item) */}
-                  <p className="text-white/80 text-xs sm:text-sm mb-1">Items</p>
-                  <p className="text-2xl sm:text-3xl font-bold text-white">{totalItems}</p>
+                  <p className="text-slate-600 text-xs sm:text-sm mb-1">Items</p>
+                  <p className="text-2xl sm:text-3xl font-bold text-slate-900">{totalItems}</p>
                 </div>
-                <div className="hidden sm:flex w-12 h-12 bg-white/20 rounded-lg items-center justify-center">
-                  <Package className="w-6 h-6 text-white" />
+                <div className="hidden sm:flex w-12 h-12 bg-slate-200/60 rounded-lg items-center justify-center">
+                  <Package className="w-6 h-6 text-slate-900" />
                 </div>
               </div>
             </CardContent>
           </Card>
 
-          <Card className="border-0 shadow-lg bg-gradient-to-br from-orange-500 to-red-500">
+          <Card className="border-0 shadow-lg bg-gradient-to-br from-blue-50 to-slate-200">
             <CardContent className="p-3 sm:p-6">
               <div className="text-center sm:flex sm:items-center sm:justify-between">
                 <div className="flex-1">
-                  <p className="text-white/80 text-xs sm:text-sm mb-1">Spent</p>
-                  <p className="text-xl sm:text-3xl font-bold text-white">${totalSpent.toFixed(2)}</p>
+                  <p className="text-slate-600 text-xs sm:text-sm mb-1">Spent</p>
+                  <p className="text-xl sm:text-3xl font-bold text-slate-900">${totalSpent.toFixed(2)}</p>
                 </div>
-                <div className="hidden sm:flex w-12 h-12 bg-white/20 rounded-lg items-center justify-center">
-                  <DollarSign className="w-6 h-6 text-white" />
+                <div className="hidden sm:flex w-12 h-12 bg-blue-100/60 rounded-lg items-center justify-center">
+                  <DollarSign className="w-6 h-6 text-slate-900" />
                 </div>
               </div>
             </CardContent>
           </Card>
 
           {/* NEW: GIVI Wins Card */}
-          <Card className="border-0 shadow-lg bg-gradient-to-br from-yellow-400 to-orange-500">
+          <Card className="border-0 shadow-lg bg-gradient-to-br from-slate-50 to-blue-100">
             <CardContent className="p-3 sm:p-6">
               <div className="text-center sm:flex sm:items-center sm:justify-between">
                 <div className="flex-1">
-                  <p className="text-white/80 text-xs sm:text-sm mb-1">GIVI Wins</p>
-                  <p className="text-2xl sm:text-3xl font-bold text-white">{giviWins}</p>
+                  <p className="text-slate-600 text-xs sm:text-sm mb-1">GIVI Wins</p>
+                  <p className="text-2xl sm:text-3xl font-bold text-slate-900">{giviWins}</p>
                 </div>
-                <div className="hidden sm:flex w-12 h-12 bg-white/20 rounded-lg items-center justify-center">
-                  <Trophy className="w-6 h-6 text-white" />
+                <div className="hidden sm:flex w-12 h-12 bg-blue-100/60 rounded-lg items-center justify-center">
+                  <Trophy className="w-6 h-6 text-slate-900" />
                 </div>
               </div>
             </CardContent>
