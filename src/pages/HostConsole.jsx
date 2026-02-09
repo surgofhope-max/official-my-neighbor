@@ -94,7 +94,7 @@ export default function HostConsole() {
   const [showFulfillmentDrawer, setShowFulfillmentDrawer] = useState(false);
   const [showFulfillmentDialog, setShowFulfillmentDialog] = useState(false);
   const [showPurchaseBanner, setShowPurchaseBanner] = useState(false);
-  const [purchaseBannerBuyerName, setPurchaseBannerBuyerName] = useState<string | null>(null);
+  const [purchaseBannerBuyerName, setPurchaseBannerBuyerName] = useState(null);
 
   // ═══════════════════════════════════════════════════════════════════════════
   // DEVICE-LOCKED CLASSIFICATION (NO VIEWPORT FLIPS)
@@ -120,7 +120,7 @@ export default function HostConsole() {
   // Ref to prevent NO_SHOWID guard from re-triggering after initial mount
   const noShowIdGuardRan = useRef(false);
   const lastPaidOrdersCountRef = useRef(null);
-  const seenPaidOrderIdsRef = useRef<Set<string> | null>(null);
+  const seenPaidOrderIdsRef = useRef(null);
 
   // CRITICAL: Immediate redirect if no showId - prevent "No Show ID" error from appearing
   // Only runs ONCE on initial mount
@@ -396,7 +396,9 @@ export default function HostConsole() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from('orders')
-        .select('id,show_id,price,delivery_fee,created_at,product_id,buyer_id,buyer:buyer_id(display_name),product:product_id(image_urls,title)')
+        .select(
+          'id,show_id,price,delivery_fee,created_at,product_id,buyer_id,buyer:buyer_id(display_name),product:product_id(image_urls,title)'
+        )
         .eq('show_id', showId)
         .in('status', ['paid', 'fulfilled', 'completed', 'ready'])
         .order('created_at', { ascending: false });
@@ -444,23 +446,34 @@ export default function HostConsole() {
 
   // Detect new paid orders by ID diff (truth-based: orders query filters status IN paid/fulfilled/completed/ready)
   useEffect(() => {
-    // First load for this show — initialize refs, do NOT show banner
+    const count = orders.length;
+
+    // First load for this show — initialize refs only
     if (seenPaidOrderIdsRef.current === null) {
       seenPaidOrderIdsRef.current = new Set(orders.map((o) => o.id));
-      lastPaidOrdersCountRef.current = orders.length;
+      lastPaidOrdersCountRef.current = count;
       return;
     }
 
-    const newOrders = orders.filter((o) => !seenPaidOrderIdsRef.current.has(o.id));
-    if (newOrders.length > 0) {
-      const newestNewOrder = newOrders[0];
-      setPurchaseBannerBuyerName(newestNewOrder?.buyer?.display_name ?? "Buyer");
-      setShowPurchaseBanner(true);
-      setTimeout(() => setShowPurchaseBanner(false), 2000);
+    // Detect new paid orders
+    if (count > lastPaidOrdersCountRef.current) {
+      const newOrders = orders.filter(
+        (o) => !seenPaidOrderIdsRef.current.has(o.id)
+      );
+
+      if (newOrders.length > 0) {
+        const newestNewOrder = newOrders[0]; // safe due to explicit ordering
+        setPurchaseBannerBuyerName(
+          newestNewOrder?.buyer?.display_name ?? "Buyer"
+        );
+        setShowPurchaseBanner(true);
+        setTimeout(() => setShowPurchaseBanner(false), 2000);
+      }
     }
 
+    // Update refs
     seenPaidOrderIdsRef.current = new Set(orders.map((o) => o.id));
-    lastPaidOrdersCountRef.current = orders.length;
+    lastPaidOrdersCountRef.current = count;
   }, [orders]);
 
   const featureProductMutation = useMutation({
