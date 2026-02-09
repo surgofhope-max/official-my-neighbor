@@ -264,6 +264,16 @@ async function handlePaymentSucceeded(
     throw new Error(updateError?.message || `Order ${orderId} not found or already updated`);
   }
 
+  // Increment shows.sales_count for LiveShow viewer banner (viewer-safe, no buyer/order details)
+  try {
+    if (existingOrder?.show_id) {
+      const { error: incErr } = await supabase.rpc("increment_show_sales_count", { p_show_id: existingOrder.show_id });
+      if (incErr) console.error("[WEBHOOK] increment_show_sales_count failed:", incErr);
+    }
+  } catch (e) {
+    console.error("[WEBHOOK] increment_show_sales_count exception:", e);
+  }
+
   // QA HARDENING: Safe batch status update
   if (existingOrder.batch_id) {
     await updateBatchStatusSafely(supabase, existingOrder.batch_id);
