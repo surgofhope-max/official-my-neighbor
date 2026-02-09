@@ -70,7 +70,7 @@ async function findOpenBatchForKey(
     .maybeSingle();
 
   if (error) {
-    console.warn("[WEBHOOK] findOpenBatchForKey error:", error.message);
+    console.error("[WEBHOOK] findOpenBatchForKey error:", error.message);
     return null;
   }
   return data as { id: string } | null;
@@ -100,7 +100,7 @@ async function createBatchForPaidOrder(
     .single();
 
   if (error) {
-    console.warn("[WEBHOOK] createBatchForPaidOrder error:", error.message);
+    console.error("[WEBHOOK] createBatchForPaidOrder error:", error.message);
     return null;
   }
   console.log("[WEBHOOK] Created batch", data.id, "for key", { buyer_id: key.buyer_id, seller_id: key.seller_id, show_id: key.show_id });
@@ -119,8 +119,8 @@ async function recomputeBatchTotalsFromPaidOrders(
     .in("status", ["paid", "ready", "fulfilled", "completed"]);
 
   if (error) {
-    console.warn("[WEBHOOK] recomputeBatchTotalsFromPaidOrders: failed to fetch orders:", error.message);
-    return;
+    console.error("[WEBHOOK] recomputeBatchTotalsFromPaidOrders: failed to fetch orders:", error.message);
+    throw new Error("WEBHOOK_BATCH_ATTACH_FAILED:recompute_fetch_orders");
   }
 
   const totalItems = (orders ?? []).length;
@@ -135,10 +135,10 @@ async function recomputeBatchTotalsFromPaidOrders(
     .eq("id", batchId);
 
   if (updateErr) {
-    console.warn("[WEBHOOK] recomputeBatchTotalsFromPaidOrders: failed to update batch:", updateErr.message);
-  } else {
-    console.log("[WEBHOOK] Recomputed batch totals:", { batchId, totalItems, totalAmount });
+    console.error("[WEBHOOK] recomputeBatchTotalsFromPaidOrders: failed to update batch:", updateErr.message);
+    throw new Error("WEBHOOK_BATCH_ATTACH_FAILED:recompute_update_batch");
   }
+  console.log("[WEBHOOK] Recomputed batch totals:", { batchId, totalItems, totalAmount });
 }
 
 serve(async (req: Request) => {
@@ -386,6 +386,15 @@ async function handlePaymentSucceeded(
   let resolvedBatchId: string | null = existingOrder.batch_id ?? null;
   const sellerIdForBatch = (existingOrder as any).seller_entity_id || existingOrder.seller_id;
 
+  const logCtx = (stage: string, attemptedBatchId?: string | null) => ({
+    order_id: orderId,
+    buyer_id: existingOrder.buyer_id,
+    seller_id: sellerIdForBatch,
+    show_id: existingOrder.show_id,
+    attempted_batch_id: attemptedBatchId ?? resolvedBatchId ?? null,
+    stage,
+  });
+
   if (!existingOrder.buyer_id || !sellerIdForBatch || !existingOrder.show_id) {
     console.warn("[WEBHOOK] Order missing batch key fields - skipping batch attach");
   } else {
@@ -400,23 +409,30 @@ async function handlePaymentSucceeded(
       if (!batch) {
         batch = await createBatchForPaidOrder(supabase, key);
       }
-      if (batch) {
-        const { error: attachErr } = await supabase
-          .from("orders")
-          .update({ batch_id: batch.id })
-          .eq("id", orderId);
-
-        if (attachErr) {
-          console.warn("[WEBHOOK] Failed to attach order to batch:", attachErr.message);
-        } else {
-          resolvedBatchId = batch.id;
-          console.log("[WEBHOOK] Attached order", orderId, "to batch", resolvedBatchId);
-        }
+      if (!batch) {
+        console.error("[WEBHOOK] Paid-only batch attach failed", logCtx("create_batch"));
+        throw new Error("WEBHOOK_BATCH_ATTACH_FAILED:create_batch");
       }
+      const { error: attachErr } = await supabase
+        .from("orders")
+        .update({ batch_id: batch.id })
+        .eq("id", orderId);
+
+      if (attachErr) {
+        console.error("[WEBHOOK] Paid-only batch attach failed", logCtx("attach_order", batch.id));
+        throw new Error("WEBHOOK_BATCH_ATTACH_FAILED:attach_order");
+      }
+      resolvedBatchId = batch.id;
+      console.log("[WEBHOOK] Attached order", orderId, "to batch", resolvedBatchId);
     }
 
     if (resolvedBatchId) {
-      await recomputeBatchTotalsFromPaidOrders(supabase, resolvedBatchId);
+      try {
+        await recomputeBatchTotalsFromPaidOrders(supabase, resolvedBatchId);
+      } catch (e) {
+        console.error("[WEBHOOK] Paid-only batch attach failed", logCtx("recompute_totals"));
+        throw new Error("WEBHOOK_BATCH_ATTACH_FAILED:recompute_totals");
+      }
     }
   }
 
