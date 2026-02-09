@@ -677,18 +677,19 @@ export default function LiveShow() {
   // Show ended or cancelled - graceful handling (no video, no buying)
   if (show.status === "ended" || show.status === "cancelled") {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-900 via-purple-900 to-blue-900 p-4">
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-b from-[#1fb3e3] via-blue-100 to-slate-50 p-4">
         <Card className="max-w-md w-full">
           <CardContent className="p-8 text-center">
-            <AlertCircle className="w-16 h-16 text-yellow-500 mx-auto mb-4" />
-            <h3 className="text-lg font-semibold text-white mb-2">
-              {show.status === "ended" ? "Show Has Ended" : "Show Cancelled"}
+            <ShoppingBag className="w-16 h-16 text-blue-500 mx-auto mb-4" />
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">
+              Well… shucks. This show just ended.
             </h3>
-            <p className="text-white/70 mb-4">
-              {show.status === "ended" 
-                ? "This live show has ended. Check out other shows on the marketplace!"
-                : "This show has been cancelled by the seller."
-              }
+            <p className="text-gray-600 mb-4 text-left">
+              Thanks for hanging out with us!
+              <br /><br />
+              Whether you caught the live show or arrived a little late, welcome to MyNeighbor.Live — Arizona's exclusive local marketplace for live shopping, local sellers, and local pickup.
+              <br /><br />
+              Stick around and explore what's happening across Arizona.
             </p>
             <Button
               onClick={() => navigate(createPageUrl("Marketplace"), { replace: true })}
