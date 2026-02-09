@@ -1120,8 +1120,13 @@ export default function HostConsole() {
 
       {/* Global Purchase Confirmation Banner */}
       {showPurchaseBanner && (
-        <div className="fixed top-20 left-1/2 -translate-x-1/2 bg-green-600 text-white px-5 py-2 rounded-full shadow-lg z-[9999] text-sm font-semibold pointer-events-none">
-          🎉 New purchase — {purchaseBannerBuyerName ?? "Buyer"}!
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[9999] pointer-events-none flex flex-col items-center justify-center px-8 py-4 rounded-xl bg-black/60 backdrop-blur-md border border-white/20 shadow-[0_0_24px_rgba(234,179,8,0.25)] animate-in fade-in-0 zoom-in-95 duration-300">
+          <span className="text-xl font-bold text-amber-400">
+            {purchaseBannerBuyerName ?? "Buyer"}
+          </span>
+          <span className="text-sm text-white/80 font-medium">
+            Purchase made
+          </span>
         </div>
       )}
 

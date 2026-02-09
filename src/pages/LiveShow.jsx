@@ -865,7 +865,7 @@ export default function LiveShow() {
           }}
           className="bg-green-600 text-white px-5 py-2 rounded-full shadow-lg text-sm font-semibold"
         >
-          🎉 New purchase just made!
+          Someone just made a purchase
         </div>
       )}
 

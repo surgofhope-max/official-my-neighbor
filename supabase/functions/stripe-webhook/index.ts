@@ -206,7 +206,7 @@ async function handlePaymentSucceeded(
   // QA HARDENING: Fetch order first to check current status
   const { data: existingOrder, error: fetchError } = await supabase
     .from("orders")
-    .select("id, status, batch_id, buyer_id, seller_id")
+    .select("id, status, batch_id, buyer_id, seller_id, show_id")
     .eq("id", orderId)
     .maybeSingle();
 
