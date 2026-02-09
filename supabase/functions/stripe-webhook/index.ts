@@ -424,6 +424,27 @@ async function handlePaymentSucceeded(
       }
       resolvedBatchId = batch.id;
       console.log("[WEBHOOK] Attached order", orderId, "to batch", resolvedBatchId);
+
+      // Promote batch to pending on first paid order
+      if (resolvedBatchId) {
+        const { error: promoteErr } = await supabase
+          .from("batches")
+          .update({ status: "pending" })
+          .eq("id", resolvedBatchId)
+          .eq("status", "active");
+
+        if (promoteErr) {
+          console.error("[WEBHOOK] failed to promote batch to pending", {
+            batch_id: resolvedBatchId,
+            error: promoteErr,
+          });
+          throw new Error("WEBHOOK_BATCH_PROMOTION_FAILED");
+        } else {
+          console.log("[WEBHOOK] batch promoted to pending", {
+            batch_id: resolvedBatchId,
+          });
+        }
+      }
     }
 
     if (resolvedBatchId) {
