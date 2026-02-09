@@ -94,7 +94,8 @@ export default function HostConsole() {
   const [showFulfillmentDrawer, setShowFulfillmentDrawer] = useState(false);
   const [showFulfillmentDialog, setShowFulfillmentDialog] = useState(false);
   const [showPurchaseBanner, setShowPurchaseBanner] = useState(false);
-  
+  const [purchaseBannerBuyerName, setPurchaseBannerBuyerName] = useState<string | null>(null);
+
   // ═══════════════════════════════════════════════════════════════════════════
   // DEVICE-LOCKED CLASSIFICATION (NO VIEWPORT FLIPS)
   // Prevents dual DailyBroadcaster AND dual SupabaseLiveChat mount.
@@ -119,6 +120,7 @@ export default function HostConsole() {
   // Ref to prevent NO_SHOWID guard from re-triggering after initial mount
   const noShowIdGuardRan = useRef(false);
   const lastPaidOrdersCountRef = useRef(null);
+  const seenPaidOrderIdsRef = useRef<Set<string> | null>(null);
 
   // CRITICAL: Immediate redirect if no showId - prevent "No Show ID" error from appearing
   // Only runs ONCE on initial mount
@@ -396,7 +398,8 @@ export default function HostConsole() {
         .from('orders')
         .select('id,show_id,price,delivery_fee,created_at,product_id,buyer_id,buyer:buyer_id(display_name),product:product_id(image_urls,title)')
         .eq('show_id', showId)
-        .in('status', ['paid', 'fulfilled', 'completed', 'ready']);
+        .in('status', ['paid', 'fulfilled', 'completed', 'ready'])
+        .order('created_at', { ascending: false });
 
       if (error) throw error;
       return data || [];
@@ -433,24 +436,32 @@ export default function HostConsole() {
     }
   }, [activeGIVI?.id, activeGIVI?.status, activeGIVI?.winner_ids]);
 
-  // Detect new paid orders (truth-based: orders query filters status IN paid/fulfilled/completed/ready)
+  // Reset seen-order refs when show changes (avoid false positives on navigation)
   useEffect(() => {
-    const count = orders.length;
+    seenPaidOrderIdsRef.current = null;
+    lastPaidOrdersCountRef.current = null;
+  }, [showId]);
 
-    // Initialize on first load — do NOT show banner
-    if (lastPaidOrdersCountRef.current === null) {
-      lastPaidOrdersCountRef.current = count;
+  // Detect new paid orders by ID diff (truth-based: orders query filters status IN paid/fulfilled/completed/ready)
+  useEffect(() => {
+    // First load for this show — initialize refs, do NOT show banner
+    if (seenPaidOrderIdsRef.current === null) {
+      seenPaidOrderIdsRef.current = new Set(orders.map((o) => o.id));
+      lastPaidOrdersCountRef.current = orders.length;
       return;
     }
 
-    // Only trigger when count increases (new paid order)
-    if (count > lastPaidOrdersCountRef.current) {
+    const newOrders = orders.filter((o) => !seenPaidOrderIdsRef.current.has(o.id));
+    if (newOrders.length > 0) {
+      const newestNewOrder = newOrders[0];
+      setPurchaseBannerBuyerName(newestNewOrder?.buyer?.display_name ?? "Buyer");
       setShowPurchaseBanner(true);
       setTimeout(() => setShowPurchaseBanner(false), 2000);
     }
 
-    lastPaidOrdersCountRef.current = count;
-  }, [orders.length]);
+    seenPaidOrderIdsRef.current = new Set(orders.map((o) => o.id));
+    lastPaidOrdersCountRef.current = orders.length;
+  }, [orders]);
 
   const featureProductMutation = useMutation({
     mutationFn: async (product) => {
@@ -1097,7 +1108,7 @@ export default function HostConsole() {
       {/* Global Purchase Confirmation Banner */}
       {showPurchaseBanner && (
         <div className="fixed top-20 left-1/2 -translate-x-1/2 bg-green-600 text-white px-5 py-2 rounded-full shadow-lg z-[9999] text-sm font-semibold pointer-events-none">
-          🎉 New purchase just made!
+          🎉 New purchase — {purchaseBannerBuyerName ?? "Buyer"}!
         </div>
       )}
 
