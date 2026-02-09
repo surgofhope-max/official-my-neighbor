@@ -118,7 +118,7 @@ export default function HostConsole() {
   
   // Ref to prevent NO_SHOWID guard from re-triggering after initial mount
   const noShowIdGuardRan = useRef(false);
-  const lastSalesCountRef = useRef(null);
+  const lastPaidOrdersCountRef = useRef(null);
 
   // CRITICAL: Immediate redirect if no showId - prevent "No Show ID" error from appearing
   // Only runs ONCE on initial mount
@@ -433,24 +433,24 @@ export default function HostConsole() {
     }
   }, [activeGIVI?.id, activeGIVI?.status, activeGIVI?.winner_ids]);
 
-  // Detect sales_count changes and show global purchase banner
+  // Detect new paid orders (truth-based: orders query filters status IN paid/fulfilled/completed/ready)
   useEffect(() => {
-    if (!show || typeof show.sales_count !== "number") return;
+    const count = orders.length;
 
-    // Initialize on first load
-    if (lastSalesCountRef.current === null) {
-      lastSalesCountRef.current = show.sales_count;
+    // Initialize on first load — do NOT show banner
+    if (lastPaidOrdersCountRef.current === null) {
+      lastPaidOrdersCountRef.current = count;
       return;
     }
 
-    // Detect increment
-    if (show.sales_count > lastSalesCountRef.current) {
+    // Only trigger when count increases (new paid order)
+    if (count > lastPaidOrdersCountRef.current) {
       setShowPurchaseBanner(true);
       setTimeout(() => setShowPurchaseBanner(false), 2000);
     }
 
-    lastSalesCountRef.current = show.sales_count;
-  }, [show?.sales_count]);
+    lastPaidOrdersCountRef.current = count;
+  }, [orders.length]);
 
   const featureProductMutation = useMutation({
     mutationFn: async (product) => {
