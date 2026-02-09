@@ -181,11 +181,7 @@ export default function UnifiedSearchBar({ placeholder = "Search shows, sellers,
         navigate(createPageUrl("SellerStorefront") + `?sellerId=${data.id}`);
         break;
       case 'show':
-        if (data.status === "live") {
-          navigate(createPageUrl("LiveShow") + `?showId=${data.id}`);
-        } else {
-          navigate(createPageUrl("LiveShows"));
-        }
+        navigate(createPageUrl("LiveShow") + `?showId=${data.id}`);
         break;
       case 'product':
         // Navigate to seller storefront if product has seller_id
