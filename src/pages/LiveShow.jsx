@@ -1539,7 +1539,14 @@ export default function LiveShow() {
               seller={seller}
               show={show}
               buyerProfile={buyerProfile}
+              checkoutIntentId={activeCheckoutIntentId}
               onClose={() => {
+                setShowCheckout(false);
+                setSelectedProduct(null);
+                setActiveCheckoutIntentId(null);
+                setBuyNowError(null);
+              }}
+              onIntentExpired={() => {
                 setShowCheckout(false);
                 setSelectedProduct(null);
                 setActiveCheckoutIntentId(null);
