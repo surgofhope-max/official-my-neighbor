@@ -238,7 +238,6 @@ serve(async (req: Request) => {
     // ═══════════════════════════════════════════════════════════════════════════
     // STEP 2.2: Create PENDING order (triggers inventory decrement)
     // ═══════════════════════════════════════════════════════════════════════════
-    const quantity = lockedIntent.quantity ?? 1;
     const orderPrice = Number(product.price) || 0;
     const completionCode = Math.floor(100000000 + Math.random() * 900000000).toString();
 
