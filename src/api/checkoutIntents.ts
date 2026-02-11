@@ -109,23 +109,6 @@ export async function pollIntentConverted(
 }
 
 /**
- * Get a checkout intent by id (for polling after payment).
- * RLS: buyer can only select own intents.
- */
-export async function getCheckoutIntent(
-  intentId: string | null
-): Promise<{ intent_status: string; converted_order_id: string | null } | null> {
-  if (!intentId) return null;
-  const { data, error } = await supabase
-    .from("checkout_intents")
-    .select("intent_status, converted_order_id")
-    .eq("id", intentId)
-    .single();
-  if (error || !data) return null;
-  return data as { intent_status: string; converted_order_id: string | null };
-}
-
-/**
  * Poll until intent is converted or max attempts reached.
  * Returns converted_order_id when status === "converted".
  */
