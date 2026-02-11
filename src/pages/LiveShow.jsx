@@ -7,6 +7,7 @@ import { adaptShowProductsForBuyer } from "@/lib/adapters/buyerShowProductsAdapt
 import { getShowByIdWithStats } from "@/api/shows";
 import { getSellerById } from "@/api/sellers";
 import { getBuyerProfileByUserId } from "@/api/buyers";
+import { createCheckoutIntent } from "@/api/checkoutIntents";
 import { getEffectiveUserContext } from "@/lib/auth/effectiveUser";
 import { isAdmin } from "@/lib/auth/routeGuards";
 import { useSupabaseAuth } from "@/lib/auth/SupabaseAuthProvider";
@@ -76,6 +77,9 @@ export default function LiveShow() {
   const [buyerProfile, setBuyerProfile] = useState(null);
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [showCheckout, setShowCheckout] = useState(false);
+  const [activeCheckoutIntentId, setActiveCheckoutIntentId] = useState(null);
+  const [isCreatingCheckoutIntent, setIsCreatingCheckoutIntent] = useState(false);
+  const [buyNowError, setBuyNowError] = useState(null);
   const [previousPrice, setPreviousPrice] = useState(null);
   const [priceJustChanged, setPriceJustChanged] = useState(false);
   const [expandedProduct, setExpandedProduct] = useState(null);
@@ -497,7 +501,7 @@ export default function LiveShow() {
     }
   }, [featuredProduct?.id]);
 
-  const handleBuyNow = (product) => {
+  const handleBuyNow = async (product) => {
     // ═══════════════════════════════════════════════════════════════════════════
     // DIAGNOSTIC LOGGING: Trace product ID at buy click
     // ═══════════════════════════════════════════════════════════════════════════
@@ -530,6 +534,14 @@ export default function LiveShow() {
       return;
     }
 
+    if (isCreatingCheckoutIntent) {
+      return;
+    }
+    if (!seller?.id || !show?.id) {
+      setBuyNowError("Checkout is not ready. Please try again.");
+      return;
+    }
+
     // Validate product is still available
     if (product.status === "sold_out" || product.status === "locked") {
       console.log("[GATE BLOCKED] reason: product status blocked", {
@@ -550,14 +562,33 @@ export default function LiveShow() {
       return;
     }
 
-    console.log("[SET selectedProduct]", {
-      selectedProductId: product?.id,
-      selectedTitle: product?.title,
-      selectedShowProductId: product?.show_product_id,
-    });
-    setSelectedProduct(product);
-    setExpandedProduct(null);
-    setShowCheckout(true);
+    setBuyNowError(null);
+    setIsCreatingCheckoutIntent(true);
+
+    try {
+      const intent = await createCheckoutIntent({
+        buyer_id: user.id,
+        seller_id: seller.id,
+        show_id: show.id,
+        product_id: product.id,
+        quantity: 1,
+      });
+      setActiveCheckoutIntentId(intent.id);
+      console.log("[SET selectedProduct]", {
+        selectedProductId: product?.id,
+        selectedTitle: product?.title,
+        selectedShowProductId: product?.show_product_id,
+      });
+      setSelectedProduct(product);
+      setExpandedProduct(null);
+      setShowCheckout(true);
+    } catch (err) {
+      const message = err?.message || "Could not start checkout. Please try again.";
+      setBuyNowError(message);
+      setActiveCheckoutIntentId(null);
+    } finally {
+      setIsCreatingCheckoutIntent(false);
+    }
   };
 
   // Daily SDK viewer count callback (UI-only, no DB writes)
@@ -1192,7 +1223,7 @@ export default function LiveShow() {
                         'hover:scale-[1.02] active:scale-95'
                       }`}
                     onClick={() => handleBuyNow(expandedProduct)}
-                    disabled={!canBuy || expandedProduct.status === "locked" || expandedProduct.status === "sold_out"}
+                    disabled={!canBuy || expandedProduct.status === "locked" || expandedProduct.status === "sold_out" || isCreatingCheckoutIntent}
                   >
                     {/* Background Aura for Active State */}
                     {canBuy && expandedProduct.status !== 'locked' && expandedProduct.status !== 'sold_out' && (
@@ -1316,7 +1347,7 @@ export default function LiveShow() {
                         e.stopPropagation();
                         handleBuyNow(product);
                       }}
-                      disabled={product.status === "locked" || product.status === "sold_out"}
+                      disabled={product.status === "locked" || product.status === "sold_out" || isCreatingCheckoutIntent}
                     >
                       {/* Background Aura */}
                       {product.status !== 'locked' && product.status !== 'sold_out' && (
@@ -1484,6 +1515,22 @@ export default function LiveShow() {
         />
       )}
 
+      {/* Buy Now error (inline, user-safe) */}
+      {buyNowError && (
+        <div className="fixed bottom-20 left-4 right-4 z-[150] bg-red-900/90 text-white text-sm font-medium px-4 py-3 rounded-lg shadow-lg flex items-center justify-between gap-2">
+          <span>{buyNowError}</span>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="text-white hover:bg-white/20 h-8 w-8 shrink-0"
+            onClick={() => setBuyNowError(null)}
+            aria-label="Dismiss"
+          >
+            <XIcon className="w-4 h-4" />
+          </Button>
+        </div>
+      )}
+
       {/* Checkout Overlay - GATED: Only render when canBuy (stream_status === "live") */}
       {canBuy && showCheckout && selectedProduct && seller && (
           <div className="fixed inset-0 z-[200]">
@@ -1495,6 +1542,8 @@ export default function LiveShow() {
               onClose={() => {
                 setShowCheckout(false);
                 setSelectedProduct(null);
+                setActiveCheckoutIntentId(null);
+                setBuyNowError(null);
               }}
             />
           </div>

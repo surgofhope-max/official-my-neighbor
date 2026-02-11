@@ -9,9 +9,8 @@ import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { getBuyerProfileByUserId, createBuyerProfile } from "@/api/buyers";
-import { createOrderWithResult, deleteOrderById } from "@/api/orders";
 import { getProductById } from "@/api/products";
-import { createPaymentIntent, pollOrderPaymentStatus } from "@/api/payments";
+import { createPaymentIntent, pollOrderPaymentStatus, pollCheckoutIntentConverted } from "@/api/payments";
 import { checkAccountActiveAsync } from "@/lib/auth/accountGuards";
 import { isShowLive } from "@/api/streamSync";
 import { loadStripe } from "@stripe/stripe-js";
@@ -21,14 +20,13 @@ import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-
 const USE_LIVE_PAYMENTS = import.meta.env.VITE_STRIPE_ENABLED === "true";
 
 // Inner component for Stripe payment form (must be inside <Elements>)
-function StripePaymentForm({ 
-  onPaymentSuccess, 
-  onPaymentError, 
-  isSubmitting, 
+function StripePaymentForm({
+  onPaymentSuccess,
+  onPaymentError,
+  isSubmitting,
   setIsSubmitting,
-  orderId,
-  completionCode,
-  seller 
+  checkoutIntentId,
+  seller,
 }) {
   const stripe = useStripe();
   const elements = useElements();
@@ -65,28 +63,20 @@ function StripePaymentForm({
         // Payment failed
         setPaymentError(error.message || "Payment failed. Please try again.");
         onPaymentError(error.message || "Payment failed");
-      } else if (paymentIntent && paymentIntent.status === "succeeded") {
-        // Payment succeeded immediately
-        onPaymentSuccess(orderId, completionCode);
-      } else if (paymentIntent && paymentIntent.status === "processing") {
-        // Payment is processing - poll for status
-        const status = await pollOrderPaymentStatus(orderId, 30, 2000);
-        if (status === "paid") {
-          onPaymentSuccess(orderId, completionCode);
+      } else if (paymentIntent && (paymentIntent.status === "succeeded" || paymentIntent.status === "processing")) {
+        if (checkoutIntentId) {
+          const converted = await pollCheckoutIntentConverted(checkoutIntentId, 30, 2000);
+          if (converted) {
+            onPaymentSuccess(converted.orderId, converted.completionCode);
+          } else {
+            setPaymentError("Payment is still processing. You'll receive confirmation shortly.");
+          }
         } else {
-          setPaymentError("Payment is still processing. You'll receive confirmation shortly.");
+          setPaymentError("Checkout session missing. Please try again.");
         }
       } else {
-        // Unexpected state - poll for status
-        const status = await pollOrderPaymentStatus(orderId, 30, 2000);
-        if (status === "paid") {
-          onPaymentSuccess(orderId, completionCode);
-        } else if (status === "cancelled") {
-          setPaymentError("Payment was cancelled.");
-          onPaymentError("Payment was cancelled");
-        } else {
-          setPaymentError("Payment is processing. You'll receive confirmation shortly.");
-        }
+        // Fallback: show processing message
+        setPaymentError("Payment is still processing. You'll receive confirmation shortly.");
       }
     } catch (err) {
       setPaymentError(err.message || "An unexpected error occurred.");
@@ -100,13 +90,13 @@ function StripePaymentForm({
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div className="bg-white border border-gray-200 rounded-lg p-4">
-        <PaymentElement 
+        <PaymentElement
           options={{
             layout: "tabs",
           }}
         />
       </div>
-      
+
       {paymentError && (
         <Alert variant="destructive">
           <AlertCircle className="h-4 w-4" />
@@ -139,7 +129,7 @@ function StripePaymentForm({
           </>
         )}
       </Button>
-      
+
       <p className="text-xs text-center text-gray-500">
         Secure payment powered by Stripe
       </p>
@@ -147,7 +137,7 @@ function StripePaymentForm({
   );
 }
 
-export default function CheckoutOverlay({ product, seller, show, buyerProfile, onClose }) {
+export default function CheckoutOverlay({ product, seller, show, buyerProfile, checkoutIntentId, onClose, onIntentExpired }) {
   const navigate = useNavigate();
   const [step, setStep] = useState(buyerProfile ? "confirm" : "profile");
   const [profileData, setProfileData] = useState({
@@ -167,6 +157,46 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
   const [paymentStep, setPaymentStep] = useState(null); // null | "processing" | "awaiting_confirmation"
   const [pendingOrderId, setPendingOrderId] = useState(null);
   const [clientSecret, setClientSecret] = useState(null);
+  const [lockExpiresAt, setLockExpiresAt] = useState(null);
+  const [sessionExpired, setSessionExpired] = useState(false);
+  const [intentValid, setIntentValid] = useState(null);
+
+  // On mount: fetch checkout_intents by id; if invalid or expired, close overlay and show banner (do not render Stripe)
+  useEffect(() => {
+    if (!checkoutIntentId) {
+      setIntentValid(false);
+      setSessionExpired(true);
+      if (typeof onIntentExpired === "function") onIntentExpired();
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase
+        .from("checkout_intents")
+        .select("intent_status, intent_expires_at")
+        .eq("id", checkoutIntentId)
+        .single();
+      if (cancelled) return;
+      if (error || !data) {
+        setIntentValid(false);
+        setSessionExpired(true);
+        if (typeof onIntentExpired === "function") onIntentExpired();
+        return;
+      }
+      const valid = data.intent_status === "intent" && new Date(data.intent_expires_at) > new Date();
+      setIntentValid(valid);
+      if (!valid) {
+        setSessionExpired(true);
+        if (typeof onIntentExpired === "function") onIntentExpired();
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [checkoutIntentId, onClose, onIntentExpired]);
+
+  // On unmount: clear client secret so Stripe Elements are not left mounted
+  useEffect(() => {
+    return () => setClientSecret(null);
+  }, []);
 
   // ═══════════════════════════════════════════════════════════════════════════
   // STRIPE CONNECT: Initialize Stripe with connected account ID
@@ -250,6 +280,22 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
       document.body.style.overflow = 'unset';
     };
   }, []);
+
+  // Force close checkout when lock expires (4 min); no payment after expiry
+  useEffect(() => {
+    if (!lockExpiresAt || !onIntentExpired) return;
+    const t = new Date(lockExpiresAt).getTime() - Date.now();
+    if (t <= 0) {
+      onIntentExpired();
+      handleClose();
+      return;
+    }
+    const timer = setTimeout(() => {
+      onIntentExpired();
+      handleClose();
+    }, t);
+    return () => clearTimeout(timer);
+  }, [lockExpiresAt, onIntentExpired]);
 
   const handleClose = () => {
     setIsVisible(false);
@@ -476,14 +522,12 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
   };
 
   const handleCheckout = async () => {
-    // QA HARDENING: Prevent double-click/double-submit
-    if (isSubmitting) {
+    if (isSubmitting) return;
+    if (!checkoutIntentId) {
+      setCheckoutError("Checkout session not found. Please try again from the product.");
       return;
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // SUSPENSION CHECK: Block checkout for suspended accounts
-    // ═══════════════════════════════════════════════════════════════════════════
     if (user?.id) {
       const { canProceed, error: guardError } = await checkAccountActiveAsync(supabase, user.id);
       if (!canProceed) {
@@ -497,94 +541,38 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
     setIsSoldOut(false);
     setPaymentStep("processing");
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // ROLLBACK TRACKING: Track created order for cleanup on failure (no batch in paid-only flow)
-    // ═══════════════════════════════════════════════════════════════════════════
-    let createdOrderId = null;
-
     try {
-      // Process the order (creates pending order if live payments enabled)
-      const result = await processOrder();
-      
-      createdOrderId = result.order?.id || null;
-      
-      if (result.useLivePayment) {
-        // ═══════════════════════════════════════════════════════════════════════════
-        // MODEL A: Live payment flow - Stripe PaymentElement is the ONLY completion path
-        // handleCheckout ONLY creates order + PaymentIntent, NEVER completes the order
-        // setOrderComplete(true) is ONLY called after stripe.confirmPayment() succeeds
-        // ═══════════════════════════════════════════════════════════════════════════
-        
-        // Verify Stripe client is configured before creating pending order
-        if (!stripePromise || !import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY) {
-          throw new Error("Stripe is not configured. Please contact support.");
-        }
-        
-        setPendingOrderId(result.order.id);
-        setCompletionCode(result.completionCode);
-        
-        // Create PaymentIntent via Edge Function
-        const { clientSecret: secret, error: paymentError } = await createPaymentIntent(result.order.id);
-        
-        if (paymentError || !secret) {
-          throw new Error(paymentError || "Failed to initialize payment");
-        }
-        
-        // Set clientSecret to trigger Stripe Elements UI render
-        setClientSecret(secret);
-        setPaymentStep("stripe_elements");
-        // Note: isSubmitting stays false so user can interact with PaymentElement
-        setIsSubmitting(false);
-        
-        // Clear rollback tracking on success
-        createdOrderId = null;
-        
-      } else {
-        // Demo mode - order is already marked as paid
-        setOrderId(result.order.id);
-        setCompletionCode(result.completionCode);
-        setOrderComplete(true);
-        setPaymentStep(null);
-        
-        // Clear rollback tracking on success
-        createdOrderId = null;
+      if (!stripePromise || !import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY) {
+        throw new Error("Stripe is not configured. Please contact support.");
       }
-    } catch (error) {
-      // ═══════════════════════════════════════════════════════════════════════════
-      // ROLLBACK CLEANUP: Delete orphan order/batch on failure
-      // ═══════════════════════════════════════════════════════════════════════════
-      if (createdOrderId) {
-        console.warn("[checkout rollback] deleting order", createdOrderId);
-        await deleteOrderById(createdOrderId);
-      }
-      // Paid-only: no batch creation in checkout, so no batch to delete on rollback
 
+      const result = await createPaymentIntent(checkoutIntentId);
+      const errMsg = result.error || null;
+
+      if (errMsg && (errMsg.toLowerCase().includes("expired") || errMsg.toLowerCase().includes("intent expired"))) {
+        if (typeof onIntentExpired === "function") onIntentExpired();
+        handleClose();
+        return;
+      }
+
+      if (errMsg || !result.clientSecret) {
+        throw new Error(errMsg || "Failed to initialize payment");
+      }
+
+      setClientSecret(result.clientSecret);
+      setLockExpiresAt(result.lockExpiresAt || null);
+      setPaymentStep("stripe_elements");
+      setIsSubmitting(false);
+    } catch (error) {
       setPaymentStep(null);
       setClientSecret(null);
-      // Check for sold out error
-      console.log("[ERROR HANDLER] caught error:", {
-        message: error?.message,
-        isSoldOut: error?.isSoldOut,
-        displayMessage: error?.displayMessage,
-        stack: error?.stack?.split('\n').slice(0, 5).join('\n'),
-      });
-      if (error.isSoldOut || error.message === "SOLD_OUT") {
-        console.log("[SOLD OUT MESSAGE TRIGGERED] source: error.isSoldOut or SOLD_OUT message", {
-          isSoldOut: error.isSoldOut,
-          message: error.message,
-        });
-        setIsSoldOut(true);
-        setCheckoutError(error.displayMessage || "Sorry, this item is no longer available.");
-      } else if (error.message?.includes("out of stock") || error.message?.includes("sold out")) {
-        console.log("[SOLD OUT MESSAGE TRIGGERED] source: error message contains 'out of stock' or 'sold out'", {
-          message: error.message,
-        });
-        setIsSoldOut(true);
-        setCheckoutError("Sorry, this item just sold out!");
-      } else {
-        console.log("[CHECKOUT ERROR] non-soldout error:", error.message);
-        setCheckoutError(error.message || "Checkout failed. Please try again.");
+      const msg = error?.message || "Checkout failed. Please try again.";
+      if (msg.toLowerCase().includes("expired") || msg.toLowerCase().includes("intent expired")) {
+        if (typeof onIntentExpired === "function") onIntentExpired();
+        handleClose();
+        return;
       }
+      setCheckoutError(msg);
     } finally {
       if (!clientSecret) {
         setIsSubmitting(false);
@@ -630,6 +618,26 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
           </h3>
           <p className="text-gray-600 mb-4">
             {statusMessage}. Orders can only be placed during live shows.
+          </p>
+          <Button onClick={handleClose} className="w-full">
+            Close
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  // Session expired: show banner only; do not render Stripe Elements
+  if (sessionExpired || intentValid === false) {
+    return (
+      <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+        <div className="bg-white rounded-lg p-6 max-w-sm mx-4 text-center">
+          <AlertCircle className="w-12 h-12 text-orange-500 mx-auto mb-4" />
+          <h3 className="text-lg font-semibold text-gray-900 mb-2">
+            Session expired — item is being restocked
+          </h3>
+          <p className="text-gray-600 mb-4">
+            This checkout session has expired. The product is being returned to the show.
           </p>
           <Button onClick={handleClose} className="w-full">
             Close
@@ -910,8 +918,8 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
                           <Loader2 className="w-8 h-8 animate-spin mx-auto text-purple-600" />
                           <p className="text-gray-600">Creating order...</p>
                         </div>
-                      ) : paymentStep === "stripe_elements" && clientSecret && stripePromise ? (
-                        // Stripe Elements payment form
+                      ) : paymentStep === "stripe_elements" && clientSecret && stripePromise && intentValid !== false && !sessionExpired ? (
+                        // Stripe Elements payment form (only when intent valid and not expired)
                         <Elements 
                           stripe={stripePromise} 
                           options={{ 
@@ -930,8 +938,7 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
                             onPaymentError={handlePaymentError}
                             isSubmitting={isSubmitting}
                             setIsSubmitting={setIsSubmitting}
-                            orderId={pendingOrderId}
-                            completionCode={completionCode}
+                            checkoutIntentId={checkoutIntentId}
                             seller={seller}
                           />
                         </Elements>
@@ -957,8 +964,8 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, o
                       <Button
                         className="w-full bg-gradient-to-r from-purple-600 to-blue-500 text-lg py-6"
                         onClick={handleCheckout}
-                            disabled={isSubmitting}
-                          >
+                        disabled={isSubmitting || intentValid !== true}
+                      >
                             {isSubmitting ? (
                               <>
                                 <Loader2 className="w-5 h-5 mr-2 animate-spin" />

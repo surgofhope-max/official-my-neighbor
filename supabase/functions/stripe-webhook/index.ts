@@ -299,93 +299,113 @@ async function handlePaymentSucceeded(
   paymentIntent: Stripe.PaymentIntent,
   eventId: string
 ) {
-  const orderId = paymentIntent.metadata?.order_id;
-  
-  if (!orderId) {
-    console.error("[WEBHOOK] No order_id in PaymentIntent metadata");
+  const checkoutIntentId = paymentIntent.metadata?.checkout_intent_id;
+  if (!checkoutIntentId) {
+    console.error("[WEBHOOK] No checkout_intent_id in PaymentIntent metadata");
     return;
   }
 
-  console.log(`[WEBHOOK] Payment succeeded for order: ${orderId}`);
+  console.log(`[WEBHOOK] Payment succeeded for checkout_intent: ${checkoutIntentId}`);
 
-  // QA HARDENING: Fetch order first to check current status
-  // seller_entity_id = canonical sellers.id (for batch key)
-  const { data: existingOrder, error: fetchError } = await supabase
-    .from("orders")
-    .select("id, status, batch_id, buyer_id, seller_id, seller_entity_id, show_id")
-    .eq("id", orderId)
-    .maybeSingle();
-
-  if (fetchError) {
-    console.error("[WEBHOOK] Failed to fetch order:", fetchError.message);
-    return;
-  }
-
-  // QA HARDENING: Handle missing order gracefully
-  if (!existingOrder) {
-    console.warn(`[WEBHOOK] Order ${orderId} not found - skipping`);
-    return;
-  }
-
-  // QA HARDENING: Idempotency - skip if already in terminal state
-  if (TERMINAL_ORDER_STATUSES.includes(existingOrder.status)) {
-    console.log(`[WEBHOOK] Order ${orderId} already in terminal state (${existingOrder.status}) - skipping`);
-    return;
-  }
-
-  // DB-backed idempotency claim: first writer wins
-  // If Stripe retries/replays the same event, the UNIQUE index will reject duplicates.
-  const { error: claimErr } = await supabase
-    .from("orders")
-    .update({ last_stripe_event_id: eventId })
-    .eq("id", orderId);
-
-  if (claimErr) {
-    // Duplicate delivery or already-claimed event: exit safely
-    if (
-      claimErr.message?.toLowerCase().includes("duplicate") ||
-      claimErr.code === "23505"
-    ) {
-      console.log(`[WEBHOOK] Duplicate Stripe event ignored: ${eventId} (order ${orderId})`);
-      return;
-    }
-
-    console.error("[WEBHOOK] Failed to claim idempotency key on order:", claimErr);
-    throw new Error("Failed idempotency claim");
-  }
-
-  // Update order status to paid + persist payment_intent_id for refunds
-  const { data: updatedOrder, error: updateError } = await supabase
-    .from("orders")
-    .update({
-      status: "paid",
-      payment_intent_id: paymentIntent.id,
-    })
-    .eq("id", orderId)
-    .select("id")
+  const { data: intent, error: intentErr } = await supabase
+    .from("checkout_intents")
+    .select("*")
+    .eq("id", checkoutIntentId)
     .single();
 
-  if (updateError || !updatedOrder) {
-    console.error("[WEBHOOK] Failed to update order status:", updateError?.message || "No row matched");
-    throw new Error(updateError?.message || `Order ${orderId} not found or already updated`);
+  if (intentErr || !intent) {
+    console.error("[WEBHOOK] Checkout intent not found:", checkoutIntentId, intentErr?.message);
+    return;
   }
 
-  // Increment shows.sales_count for LiveShow viewer banner (viewer-safe, no buyer/order details)
+  if (intent.intent_status === "converted") {
+    console.log(`[WEBHOOK] Intent ${checkoutIntentId} already converted - idempotent skip`);
+    return;
+  }
+
+  const { data: product, error: productErr } = await supabase
+    .from("products")
+    .select("id, title, price, quantity")
+    .eq("id", intent.product_id)
+    .single();
+
+  if (productErr || !product) {
+    console.error("[WEBHOOK] Product not found for intent:", intent.product_id);
+    return;
+  }
+
+  const { data: seller, error: sellerErr } = await supabase
+    .from("sellers")
+    .select("id, user_id")
+    .eq("id", intent.seller_id)
+    .single();
+
+  if (sellerErr || !seller) {
+    console.error("[WEBHOOK] Seller not found for intent:", intent.seller_id);
+    return;
+  }
+
+  const completionCode = generateCompletionCode();
+  const quantity = intent.quantity ?? 1;
+  const price = Number(product.price) || 0;
+  const deliveryFee = 0;
+
+  const { data: newOrder, error: orderInsertErr } = await supabase
+    .from("orders")
+    .insert({
+      batch_id: null,
+      buyer_id: intent.buyer_id,
+      seller_id: seller.user_id,
+      seller_entity_id: intent.seller_id,
+      product_id: intent.product_id,
+      show_id: intent.show_id,
+      completion_code: completionCode,
+      price,
+      delivery_fee: deliveryFee,
+      status: "paid",
+      payment_intent_id: paymentIntent.id,
+      last_stripe_event_id: eventId,
+    })
+    .select("id, status, batch_id, buyer_id, seller_id, seller_entity_id, show_id")
+    .single();
+
+  if (orderInsertErr || !newOrder) {
+    console.error("[WEBHOOK] Failed to create order from intent:", orderInsertErr?.message);
+    throw new Error(orderInsertErr?.message || "Failed to create order");
+  }
+
+  const orderId = newOrder.id;
+  console.log(`[WEBHOOK] Created order ${orderId} from intent ${checkoutIntentId}`);
+
+  const { error: intentUpdateErr } = await supabase
+    .from("checkout_intents")
+    .update({
+      intent_status: "converted",
+      converted_order_id: orderId,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", checkoutIntentId)
+    .in("intent_status", ["locked"]);
+
+  if (intentUpdateErr) {
+    console.error("[WEBHOOK] Failed to mark intent converted:", intentUpdateErr.message);
+    throw new Error("Failed to mark intent converted");
+  }
+
   try {
-    if (existingOrder?.show_id) {
-      const { error: incErr } = await supabase.rpc("increment_show_sales_count", { p_show_id: existingOrder.show_id });
-      if (incErr) console.error("[WEBHOOK] increment_show_sales_count failed:", incErr);
-    }
+    const { error: incErr } = await supabase.rpc("increment_show_sales_count", { p_show_id: intent.show_id });
+    if (incErr) console.error("[WEBHOOK] increment_show_sales_count failed:", incErr);
   } catch (e) {
     console.error("[WEBHOOK] increment_show_sales_count exception:", e);
   }
 
+  let resolvedBatchId: string | null = newOrder.batch_id ?? null;
+  const sellerIdForBatch = (newOrder as any).seller_entity_id || newOrder.seller_id;
+  const existingOrder = newOrder;
+
   // ═══════════════════════════════════════════════════════════════════════════
   // PAID-ONLY BATCH ATTACH: Create or reuse ONE open batch per (buyer, seller, show)
   // ═══════════════════════════════════════════════════════════════════════════
-  let resolvedBatchId: string | null = existingOrder.batch_id ?? null;
-  const sellerIdForBatch = (existingOrder as any).seller_entity_id || existingOrder.seller_id;
-
   const logCtx = (stage: string, attemptedBatchId?: string | null) => ({
     order_id: orderId,
     buyer_id: existingOrder.buyer_id,
@@ -457,11 +477,10 @@ async function handlePaymentSucceeded(
     }
   }
 
-  // Create notification for buyer (with deduplication)
-  const orderForNotification = { ...existingOrder, batch_id: resolvedBatchId ?? undefined };
+  const orderForNotification = { ...existingOrder, batch_id: resolvedBatchId ?? undefined, seller_entity_id: sellerIdForBatch };
   await createPaymentNotificationSafely(supabase, orderForNotification, orderId);
 
-  console.log(`[WEBHOOK] Order ${orderId} marked as paid`);
+  console.log(`[WEBHOOK] Order ${orderId} marked as paid (from intent ${checkoutIntentId})`);
 }
 
 /**
@@ -560,103 +579,70 @@ async function createPaymentNotificationSafely(
 }
 
 /**
- * Handle failed payment - update order status
- *
- * QA HARDENING: Defensive handling, never throw
+ * Handle failed payment - mark intent expired if not converted.
+ * Converted intents are NEVER expired or cancelled.
  */
 async function handlePaymentFailed(
   supabase: ReturnType<typeof createClient>,
   paymentIntent: Stripe.PaymentIntent
 ) {
-  const orderId = paymentIntent.metadata?.order_id;
-  
-  if (!orderId) {
-    console.error("[WEBHOOK] No order_id in PaymentIntent metadata");
+  const checkoutIntentId = paymentIntent.metadata?.checkout_intent_id;
+  if (!checkoutIntentId) {
+    console.error("[WEBHOOK] No checkout_intent_id in PaymentIntent metadata");
     return;
   }
 
-  console.log(`[WEBHOOK] Payment failed for order: ${orderId}`);
-
-  // Get the failure reason
   const failureMessage = paymentIntent.last_payment_error?.message || "Payment failed";
+  console.log(`[WEBHOOK] Payment failed for intent ${checkoutIntentId}: ${failureMessage}`);
 
-  // QA HARDENING: Check if order exists and is in pending state
-  const { data: existingOrder } = await supabase
-    .from("orders")
-    .select("id, status")
-    .eq("id", orderId)
-    .maybeSingle();
+  const { data: intent } = await supabase
+    .from("checkout_intents")
+    .select("id, intent_status")
+    .eq("id", checkoutIntentId)
+    .single();
 
-  if (!existingOrder) {
-    console.warn(`[WEBHOOK] Order ${orderId} not found for failed payment`);
-    return;
-  }
+  if (!intent) return;
+  if (intent.intent_status === "converted") return;
 
-  // QA HARDENING: Only update if still pending (allow retry)
-  if (existingOrder.status !== "pending") {
-    console.log(`[WEBHOOK] Order ${orderId} not in pending state (${existingOrder.status}) - skipping failure update`);
-    return;
-  }
-
-  // Keep status as pending to allow retry - just log the failure
-  console.log(`[WEBHOOK] Payment failed for order ${orderId}: ${failureMessage}`);
+  await supabase
+    .from("checkout_intents")
+    .update({ intent_status: "cancelled", updated_at: new Date().toISOString() })
+    .eq("id", checkoutIntentId)
+    .in("intent_status", ["intent", "locked"]);
 }
 
 /**
- * Handle canceled payment - restore inventory
- *
- * QA HARDENING: Idempotency and defensive handling
+ * Handle canceled payment - mark intent cancelled if not converted.
+ * No order exists yet in intent flow; converted intents are NEVER expired or cancelled.
  */
 async function handlePaymentCanceled(
   supabase: ReturnType<typeof createClient>,
   paymentIntent: Stripe.PaymentIntent
 ) {
-  const orderId = paymentIntent.metadata?.order_id;
-  
-  if (!orderId) {
-    console.error("[WEBHOOK] No order_id in PaymentIntent metadata");
+  const checkoutIntentId = paymentIntent.metadata?.checkout_intent_id;
+  if (!checkoutIntentId) {
+    console.error("[WEBHOOK] No checkout_intent_id in PaymentIntent metadata");
     return;
   }
 
-  console.log(`[WEBHOOK] Payment canceled for order: ${orderId}`);
+  console.log(`[WEBHOOK] Payment canceled for intent: ${checkoutIntentId}`);
 
-  // QA HARDENING: Check current order status first
-  const { data: existingOrder } = await supabase
-    .from("orders")
-    .select("id, status")
-    .eq("id", orderId)
-    .maybeSingle();
+  const { data: intent } = await supabase
+    .from("checkout_intents")
+    .select("id, intent_status")
+    .eq("id", checkoutIntentId)
+    .single();
 
-  if (!existingOrder) {
-    console.warn(`[WEBHOOK] Order ${orderId} not found for cancellation`);
-    return;
-  }
+  if (!intent) return;
+  if (intent.intent_status === "converted") return;
 
-  // QA HARDENING: Idempotency - skip if already cancelled or in terminal state
-  if (existingOrder.status === "cancelled") {
-    console.log(`[WEBHOOK] Order ${orderId} already cancelled - skipping`);
-    return;
-  }
+  await supabase
+    .from("checkout_intents")
+    .update({ intent_status: "cancelled", updated_at: new Date().toISOString() })
+    .eq("id", checkoutIntentId)
+    .in("intent_status", ["intent", "locked"]);
 
-  if (TERMINAL_ORDER_STATUSES.includes(existingOrder.status) && existingOrder.status !== "pending") {
-    console.log(`[WEBHOOK] Order ${orderId} in terminal state (${existingOrder.status}) - cannot cancel`);
-    return;
-  }
-
-  // Mark order as cancelled - this will trigger inventory restore via DB trigger
-  const { error } = await supabase
-    .from("orders")
-    .update({
-      status: "cancelled",
-    })
-    .eq("id", orderId);
-
-  if (error) {
-    console.error("[WEBHOOK] Failed to cancel order:", error.message);
-    throw error;
-  }
-
-  console.log(`[WEBHOOK] Order ${orderId} cancelled, inventory restored by DB trigger`);
+  console.log("[WEBHOOK] Intent", checkoutIntentId, "marked cancelled");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

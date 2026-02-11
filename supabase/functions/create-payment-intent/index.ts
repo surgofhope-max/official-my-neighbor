@@ -1,20 +1,18 @@
 /**
  * Supabase Edge Function: create-payment-intent
  *
- * Creates a Stripe PaymentIntent for an order using MODEL A (Direct Charges).
- * Called by frontend after order is created with "pending" status.
+ * Step 4: Creates a Stripe PaymentIntent from a checkout_intent (no order yet).
+ * Called by frontend when user clicks "Continue to Payment".
  *
  * Flow:
- * 1. Frontend creates order (status: pending, inventory reserved)
- * 2. Frontend calls this function with order_id
- * 3. Function creates PaymentIntent ON THE CONNECTED ACCOUNT (seller)
- * 4. Returns client_secret for Stripe Elements (frontend must use same stripeAccount)
+ * 1. Frontend calls with checkout_intent_id
+ * 2. Validate intent: buyer_id === auth.uid(), intent_status === 'intent', now() < intent_expires_at
+ * 3. Transition intent: intent → locked, set lock_expires_at = now() + 4 minutes
+ * 4. Create PaymentIntent on seller's connected account with metadata: checkout_intent_id, buyer_id, seller_id, product_id, show_id
+ * 5. Store stripe_payment_intent_id on intent
+ * 6. Return client_secret, payment_intent_id, lock_expires_at
  *
- * MODEL A: Direct Charges on Connected Account
- * - PaymentIntent is created ON the seller's connected account
- * - Platform collects application_fee_amount (5%)
- * - clientSecret belongs to connected account context
- * - Frontend MUST use loadStripe(pk, { stripeAccount: acct_xxx })
+ * MODEL A: Direct Charges on Connected Account (unchanged).
  */
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
@@ -27,40 +25,38 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type",
 };
 
+const LOCK_TTL_MINUTES = 4;
+
 interface CreatePaymentIntentRequest {
-  order_id: string;
+  checkout_intent_id: string;
 }
 
 interface CreatePaymentIntentResponse {
   client_secret: string;
   payment_intent_id: string;
+  lock_expires_at: string;
 }
 
 serve(async (req: Request) => {
-  // Handle CORS preflight
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
 
   try {
-    // Get Stripe secret key from environment
     const stripeSecretKey = Deno.env.get("STRIPE_SECRET_KEY");
     if (!stripeSecretKey) {
       throw new Error("STRIPE_SECRET_KEY not configured");
     }
 
-    // Initialize Stripe
     const stripe = new Stripe(stripeSecretKey, {
       apiVersion: "2023-10-16",
       httpClient: Stripe.createFetchHttpClient(),
     });
 
-    // Initialize Supabase with service role for full access
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    // Get authenticated user from request
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) {
       return new Response(
@@ -69,10 +65,8 @@ serve(async (req: Request) => {
       );
     }
 
-    // Verify the user's JWT
     const token = authHeader.replace("Bearer ", "");
     const { data: { user }, error: authError } = await supabase.auth.getUser(token);
-    
     if (authError || !user) {
       return new Response(
         JSON.stringify({ error: "Invalid or expired token" }),
@@ -80,49 +74,89 @@ serve(async (req: Request) => {
       );
     }
 
-    // Parse request body
-    const { order_id }: CreatePaymentIntentRequest = await req.json();
-
-    if (!order_id) {
+    const { checkout_intent_id }: CreatePaymentIntentRequest = await req.json();
+    if (!checkout_intent_id) {
       return new Response(
-        JSON.stringify({ error: "order_id is required" }),
+        JSON.stringify({ error: "checkout_intent_id is required" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    // Fetch the order
-    const { data: order, error: orderError } = await supabase
-      .from("orders")
+    const { data: intent, error: intentError } = await supabase
+      .from("checkout_intents")
       .select("*")
-      .eq("id", order_id)
+      .eq("id", checkout_intent_id)
       .single();
 
-    if (orderError || !order) {
+    if (intentError || !intent) {
       return new Response(
-        JSON.stringify({ error: "Order not found" }),
-        { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        JSON.stringify({ error: "Checkout session expired" }),
+        { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    // Verify the order belongs to the authenticated user
-    if (order.buyer_id !== user.id) {
+    if (intent.buyer_id !== user.id) {
       return new Response(
-        JSON.stringify({ error: "Unauthorized access to order" }),
+        JSON.stringify({ error: "Unauthorized access to checkout intent" }),
         { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    // Verify order is in pending state
-    if (order.status !== "pending") {
+    if (intent.intent_status !== "intent") {
       return new Response(
-        JSON.stringify({ error: `Order status is ${order.status}, expected pending` }),
+        JSON.stringify({ error: "Checkout session expired" }),
+        { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const now = new Date();
+    const intentExpiresAt = new Date(intent.intent_expires_at);
+    if (now >= intentExpiresAt) {
+      return new Response(
+        JSON.stringify({ error: "Checkout session expired" }),
+        { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const lockExpiresAt = new Date(now.getTime() + LOCK_TTL_MINUTES * 60 * 1000);
+    const lockExpiresAtIso = lockExpiresAt.toISOString();
+
+    const { data: product, error: productError } = await supabase
+      .from("products")
+      .select("id, title, price, quantity, status")
+      .eq("id", intent.product_id)
+      .single();
+
+    if (productError || !product) {
+      return new Response(
+        JSON.stringify({ error: "Product not found" }),
+        { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    if (product.status !== "active" || (product.quantity ?? 0) < (intent.quantity ?? 1)) {
+      return new Response(
+        JSON.stringify({ error: "Product no longer available" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    // Calculate amount in cents
-    const amountInCents = Math.round((order.price || 0) * 100);
+    const { data: seller, error: sellerError } = await supabase
+      .from("sellers")
+      .select("id, user_id, stripe_account_id, business_name")
+      .eq("id", intent.seller_id)
+      .single();
 
+    if (sellerError || !seller?.stripe_account_id) {
+      return new Response(
+        JSON.stringify({ error: "Seller Stripe account not connected" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const quantity = intent.quantity ?? 1;
+    const pricePerUnit = Number(product.price) || 0;
+    const amountInCents = Math.round(pricePerUnit * quantity * 100);
     if (amountInCents < 50) {
       return new Response(
         JSON.stringify({ error: "Order amount too small (minimum $0.50)" }),
@@ -130,127 +164,63 @@ serve(async (req: Request) => {
       );
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Get seller's Stripe account for Connect (REQUIRED for Model A)
-    // DUAL-READ: Prefer seller_entity_id (canonical), fallback to seller_id (legacy)
-    // - New orders: seller_entity_id = sellers.id (canonical entity PK)
-    // - Legacy orders: seller_id = sellers.user_id (auth.users.id FK)
-    // ═══════════════════════════════════════════════════════════════════════════
-    const sellerEntityId = (order as any).seller_entity_id || null;
-
-    let seller: any = null;
-
-    // Try canonical lookup first (seller_entity_id → sellers.id)
-    if (sellerEntityId) {
-      const { data } = await supabase
-        .from("sellers")
-        .select("id, user_id, stripe_account_id, business_name")
-        .eq("id", sellerEntityId)
-        .single();
-      seller = data;
-    }
-
-    // Fallback to legacy lookup (seller_id → sellers.user_id)
-    if (!seller && order.seller_id) {
-      const { data } = await supabase
-        .from("sellers")
-        .select("id, user_id, stripe_account_id, business_name")
-        .eq("user_id", order.seller_id)
-        .single();
-      seller = data;
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // MODEL A: Direct Charges on Connected Account
-    // - Seller MUST have stripe_account_id
-    // - PaymentIntent is created ON the connected account
-    // - NO transfer_data.destination (that's for destination charges)
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    // Require seller to have Stripe Connect for live payments
-    if (!seller?.stripe_account_id) {
-      return new Response(
-        JSON.stringify({ error: "Seller Stripe account not connected" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    const connectedAccountId = seller.stripe_account_id;
-
-    // Calculate platform fee (5%)
     const platformFee = Math.round(amountInCents * 0.05);
 
-    // Create PaymentIntent params - NO transfer_data (that's destination charges)
-    const paymentIntentParams: Stripe.PaymentIntentCreateParams = {
-      amount: amountInCents,
-      currency: "usd",
-      automatic_payment_methods: {
-        enabled: true,
-      },
-      // Platform fee collected from this direct charge
-      application_fee_amount: platformFee,
-      metadata: {
-        order_id: order.id,
-        buyer_id: order.buyer_id,
-        seller_user_id: order.seller_id || "",           // Legacy: auth.users.id
-        seller_entity_id: seller?.id || sellerEntityId || "",  // Canonical: sellers.id
-        product_id: order.product_id || "",
-        show_id: order.show_id || "",
-        platform: "livemarket",
-      },
-      description: `Order for ${order.product_title}`,
-      receipt_email: order.buyer_email || undefined,
-    };
-
-    // Audit log BEFORE creating PaymentIntent
-    console.log("[create-payment-intent] MODELA direct charge", {
-      orderId: order?.id,
-      sellerId: seller?.id,
-      connectedAccountId,
-      amountInCents,
-      platformFee,
-      hasTransferData: !!paymentIntentParams.transfer_data,
-    });
-
-    // Create PaymentIntent ON THE CONNECTED ACCOUNT (Direct Charges / Model A)
     const paymentIntent = await stripe.paymentIntents.create(
-      paymentIntentParams,
-      { stripeAccount: connectedAccountId }
+      {
+        amount: amountInCents,
+        currency: "usd",
+        automatic_payment_methods: { enabled: true },
+        application_fee_amount: platformFee,
+        metadata: {
+          checkout_intent_id: intent.id,
+          buyer_id: intent.buyer_id,
+          seller_id: intent.seller_id,
+          product_id: intent.product_id,
+          show_id: intent.show_id,
+          platform: "livemarket",
+        },
+        description: `Order for ${product.title}`,
+      },
+      { stripeAccount: seller.stripe_account_id }
     );
 
-    // Audit log AFTER creating PaymentIntent
-    console.log("[create-payment-intent] PI created", {
-      orderId: order?.id,
-      connectedAccountId,
-      paymentIntentId: paymentIntent?.id,
-    });
+    const { error: updateIntentErr } = await supabase
+      .from("checkout_intents")
+      .update({
+        intent_status: "locked",
+        lock_expires_at: lockExpiresAtIso,
+        stripe_payment_intent_id: paymentIntent.id,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", checkout_intent_id)
+      .in("intent_status", ["intent"]);
+
+    if (updateIntentErr) {
+      console.error("[create-payment-intent] Failed to lock intent:", updateIntentErr);
+      return new Response(
+        JSON.stringify({ error: "Failed to lock checkout intent" }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
     const response: CreatePaymentIntentResponse = {
       client_secret: paymentIntent.client_secret!,
       payment_intent_id: paymentIntent.id,
+      lock_expires_at: lockExpiresAtIso,
     };
 
     return new Response(
       JSON.stringify(response),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
-
   } catch (error) {
     console.error("Error creating payment intent:", error);
-    
     return new Response(
-      JSON.stringify({ 
-        error: error instanceof Error ? error.message : "Internal server error" 
+      JSON.stringify({
+        error: error instanceof Error ? error.message : "Internal server error",
       }),
-      { 
-        status: 500, 
-        headers: { ...corsHeaders, "Content-Type": "application/json" } 
-      }
+      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
 });
-
-
-
-
-
