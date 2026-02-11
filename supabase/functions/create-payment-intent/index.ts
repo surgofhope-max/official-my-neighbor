@@ -76,6 +76,17 @@ serve(async (req: Request) => {
 
     const { checkout_intent_id }: CreatePaymentIntentRequest = await req.json();
     if (!checkout_intent_id) {
+      console.error("CREATE_PI_VALIDATION_FAILED", {
+        stage: "CHECKOUT_INTENT_ID_MISSING",
+        checkout_intent_id,
+        intent_status: null,
+        intent_expires_at: null,
+        now: new Date().toISOString(),
+        buyer_id_from_intent: null,
+        auth_user_id: user?.id ?? null,
+        seller_id: null,
+        stripe_account_id: null,
+      });
       return new Response(
         JSON.stringify({ error: "checkout_intent_id is required" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -135,6 +146,17 @@ serve(async (req: Request) => {
     }
 
     if (product.status !== "active" || (product.quantity ?? 0) < (intent.quantity ?? 1)) {
+      console.error("CREATE_PI_VALIDATION_FAILED", {
+        stage: "PRODUCT_UNAVAILABLE",
+        checkout_intent_id,
+        intent_status: intent?.intent_status ?? null,
+        intent_expires_at: intent?.intent_expires_at ?? null,
+        now: new Date().toISOString(),
+        buyer_id_from_intent: intent?.buyer_id ?? null,
+        auth_user_id: user?.id ?? null,
+        seller_id: intent?.seller_id ?? null,
+        stripe_account_id: null,
+      });
       return new Response(
         JSON.stringify({ error: "Product no longer available" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -148,6 +170,17 @@ serve(async (req: Request) => {
       .single();
 
     if (sellerError || !seller?.stripe_account_id) {
+      console.error("CREATE_PI_VALIDATION_FAILED", {
+        stage: sellerError || !seller ? "SELLER_NOT_FOUND" : "SELLER_STRIPE_NOT_CONNECTED",
+        checkout_intent_id,
+        intent_status: intent?.intent_status ?? null,
+        intent_expires_at: intent?.intent_expires_at ?? null,
+        now: new Date().toISOString(),
+        buyer_id_from_intent: intent?.buyer_id ?? null,
+        auth_user_id: user?.id ?? null,
+        seller_id: intent?.seller_id ?? null,
+        stripe_account_id: seller?.stripe_account_id ?? null,
+      });
       return new Response(
         JSON.stringify({ error: "Seller Stripe account not connected" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -158,6 +191,17 @@ serve(async (req: Request) => {
     const pricePerUnit = Number(product.price) || 0;
     const amountInCents = Math.round(pricePerUnit * quantity * 100);
     if (amountInCents < 50) {
+      console.error("CREATE_PI_VALIDATION_FAILED", {
+        stage: "AMOUNT_INVALID",
+        checkout_intent_id,
+        intent_status: intent?.intent_status ?? null,
+        intent_expires_at: intent?.intent_expires_at ?? null,
+        now: new Date().toISOString(),
+        buyer_id_from_intent: intent?.buyer_id ?? null,
+        auth_user_id: user?.id ?? null,
+        seller_id: intent?.seller_id ?? null,
+        stripe_account_id: seller?.stripe_account_id ?? null,
+      });
       return new Response(
         JSON.stringify({ error: "Order amount too small (minimum $0.50)" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -165,6 +209,14 @@ serve(async (req: Request) => {
     }
 
     const platformFee = Math.round(amountInCents * 0.05);
+
+    console.log("CREATE_PI_VALIDATION_PASSED", {
+      checkout_intent_id,
+      buyer_id: intent.buyer_id,
+      seller_id: intent.seller_id,
+      amount: amountInCents,
+      currency: "usd",
+    });
 
     const paymentIntent = await stripe.paymentIntents.create(
       {
