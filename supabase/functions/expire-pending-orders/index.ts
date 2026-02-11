@@ -10,7 +10,7 @@ serve(async () => {
 
   // TTL: 7 minutes + 60s buffer = 8 minutes
   const expirationCutoff = new Date(
-    Date.now() - (8 * 60 * 1000)
+    Date.now() - (5 * 60 * 1000)
   ).toISOString();
 
   const { data: expiredOrders, error: fetchError } = await supabase

@@ -210,46 +210,136 @@ serve(async (req: Request) => {
 
     const platformFee = Math.round(amountInCents * 0.05);
 
-    console.log("CREATE_PI_VALIDATION_PASSED", {
-      checkout_intent_id,
-      buyer_id: intent.buyer_id,
-      seller_id: intent.seller_id,
-      amount: amountInCents,
-      currency: "usd",
-    });
+    const nowIso = new Date().toISOString();
 
-    const paymentIntent = await stripe.paymentIntents.create(
-      {
-        amount: amountInCents,
-        currency: "usd",
-        automatic_payment_methods: { enabled: true },
-        application_fee_amount: platformFee,
-        metadata: {
-          checkout_intent_id: intent.id,
-          buyer_id: intent.buyer_id,
-          seller_id: intent.seller_id,
-          product_id: intent.product_id,
-          show_id: intent.show_id,
-          platform: "livemarket",
-        },
-        description: `Order for ${product.title}`,
-      },
-      { stripeAccount: seller.stripe_account_id }
-    );
-
-    const { error: updateIntentErr } = await supabase
+    // ═══════════════════════════════════════════════════════════════════════════
+    // STEP 2.1: ATOMIC LOCK — only one caller can transition intent→locked
+    // ═══════════════════════════════════════════════════════════════════════════
+    const { data: lockedIntent, error: lockErr } = await supabase
       .from("checkout_intents")
       .update({
         intent_status: "locked",
         lock_expires_at: lockExpiresAtIso,
+        updated_at: nowIso,
+      })
+      .eq("id", checkout_intent_id)
+      .eq("intent_status", "intent")
+      .gt("intent_expires_at", nowIso)
+      .select("*")
+      .single();
+
+    if (lockErr || !lockedIntent) {
+      return new Response(
+        JSON.stringify({ error: "Checkout session locked or expired" }),
+        { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // STEP 2.2: Create PENDING order (triggers inventory decrement)
+    // ═══════════════════════════════════════════════════════════════════════════
+    const quantity = lockedIntent.quantity ?? 1;
+    const orderPrice = Number(product.price) || 0;
+    const completionCode = Math.floor(100000000 + Math.random() * 900000000).toString();
+
+    const { data: pendingOrder, error: orderErr } = await supabase
+      .from("orders")
+      .insert({
+        batch_id: null,
+        buyer_id: lockedIntent.buyer_id,
+        seller_id: seller.user_id,
+        seller_entity_id: lockedIntent.seller_id,
+        product_id: lockedIntent.product_id,
+        show_id: lockedIntent.show_id,
+        quantity,
+        completion_code: completionCode,
+        price: orderPrice,
+        delivery_fee: 0,
+        status: "pending",
+      })
+      .select("id")
+      .single();
+
+    if (orderErr || !pendingOrder) {
+      await supabase
+        .from("checkout_intents")
+        .update({ intent_status: "intent", lock_expires_at: null, updated_at: new Date().toISOString() })
+        .eq("id", checkout_intent_id)
+        .eq("intent_status", "locked");
+      return new Response(
+        JSON.stringify({ error: "Unable to reserve inventory" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // STEP 2.3: Create Stripe PaymentIntent (after lock + pending order)
+    // ═══════════════════════════════════════════════════════════════════════════
+    let paymentIntent: { id: string; client_secret: string | null };
+    try {
+      paymentIntent = await stripe.paymentIntents.create(
+        {
+          amount: amountInCents,
+          currency: "usd",
+          automatic_payment_methods: { enabled: true },
+          application_fee_amount: platformFee,
+          metadata: {
+            order_id: pendingOrder.id,
+            checkout_intent_id: checkout_intent_id,
+            buyer_id: intent.buyer_id,
+            seller_id: intent.seller_id,
+            seller_entity_id: intent.seller_id,
+            product_id: intent.product_id,
+            show_id: intent.show_id,
+            platform: "livemarket",
+          },
+          description: `Order for ${product.title}`,
+        },
+        { stripeAccount: seller.stripe_account_id }
+      );
+    } catch (stripeErr) {
+      console.error("[create-payment-intent] Stripe PI create failed:", stripeErr);
+      await supabase
+        .from("orders")
+        .update({ status: "cancelled", updated_at: new Date().toISOString() })
+        .eq("id", pendingOrder.id);
+      await supabase
+        .from("checkout_intents")
+        .update({ intent_status: "intent", lock_expires_at: null, updated_at: new Date().toISOString() })
+        .eq("id", checkout_intent_id)
+        .eq("intent_status", "locked");
+      return new Response(
+        JSON.stringify({ error: "Failed to initialize payment" }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // STEP 2.4: Store stripe_payment_intent_id on checkout_intents
+    // ═══════════════════════════════════════════════════════════════════════════
+    const { error: updateIntentErr } = await supabase
+      .from("checkout_intents")
+      .update({
         stripe_payment_intent_id: paymentIntent.id,
         updated_at: new Date().toISOString(),
       })
       .eq("id", checkout_intent_id)
-      .in("intent_status", ["intent"]);
+      .eq("intent_status", "locked");
 
     if (updateIntentErr) {
-      console.error("[create-payment-intent] Failed to lock intent:", updateIntentErr);
+      console.error("[create-payment-intent] Failed to store stripe_payment_intent_id:", updateIntentErr);
+      try {
+        await stripe.paymentIntents.cancel(paymentIntent.id, { stripeAccount: seller.stripe_account_id });
+      } catch (_) {}
+      await supabase
+        .from("orders")
+        .update({ status: "cancelled", updated_at: new Date().toISOString() })
+        .eq("id", pendingOrder.id);
+      await supabase
+        .from("checkout_intents")
+        .update({ intent_status: "intent", lock_expires_at: null, updated_at: new Date().toISOString() })
+        .eq("id", checkout_intent_id)
+        .eq("intent_status", "locked");
       return new Response(
         JSON.stringify({ error: "Failed to lock checkout intent" }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -261,6 +351,8 @@ serve(async (req: Request) => {
       payment_intent_id: paymentIntent.id,
       lock_expires_at: lockExpiresAtIso,
     };
+
+    console.log("CREATE_PI_SUCCESS", { checkout_intent_id, order_id: pendingOrder.id, payment_intent_id: paymentIntent.id });
 
     return new Response(
       JSON.stringify(response),
