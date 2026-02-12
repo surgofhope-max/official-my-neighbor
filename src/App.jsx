@@ -75,6 +75,7 @@ function App() {
         </Router>
         <Toaster />
         <VisualEditAgent />
+        <Analytics />
       </QueryClientProvider>
       <Analytics />
     </AuthProvider>
