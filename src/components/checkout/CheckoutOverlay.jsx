@@ -285,6 +285,13 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, c
   useEffect(() => {
     if (!lockExpiresAt || !onIntentExpired) return;
     const t = new Date(lockExpiresAt).getTime() - Date.now();
+    console.log("CHECKOUT_DEBUG_LOCK_TIMER", {
+      lockExpiresAt,
+      parsedMs: new Date(lockExpiresAt).getTime(),
+      nowMs: Date.now(),
+      t,
+      lockExpiresAtIsoIfValid: isNaN(new Date(lockExpiresAt).getTime()) ? null : new Date(lockExpiresAt).toISOString(),
+    });
     if (t <= 0) {
       onIntentExpired();
       handleClose();
@@ -547,6 +554,14 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, c
       }
 
       const result = await createPaymentIntent(checkoutIntentId);
+      console.log("CHECKOUT_DEBUG_RESULT", {
+        checkoutIntentId,
+        clientSecretPresent: !!result?.clientSecret,
+        lockExpiresAt: result?.lockExpiresAt,
+        lockExpiresAtType: typeof result?.lockExpiresAt,
+        error: result?.error,
+        nowIso: new Date().toISOString(),
+      });
       const errMsg = result.error || null;
 
       if (errMsg && (errMsg.toLowerCase().includes("expired") || errMsg.toLowerCase().includes("intent expired"))) {
