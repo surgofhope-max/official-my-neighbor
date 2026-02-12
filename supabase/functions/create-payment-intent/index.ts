@@ -259,7 +259,23 @@ serve(async (req: Request) => {
       .select("id")
       .single();
 
-    if (orderErr || !pendingOrder) {
+    if (orderErr) {
+      console.error("ORDER INSERT ERROR:", orderErr);
+      await supabase
+        .from("checkout_intents")
+        .update({ intent_status: "intent", lock_expires_at: null, updated_at: new Date().toISOString() })
+        .eq("id", checkout_intent_id)
+        .eq("intent_status", "locked");
+      return new Response(
+        JSON.stringify({
+          error: "ORDER_INSERT_FAILED",
+          message: orderErr.message,
+          details: orderErr,
+        }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+    if (!pendingOrder) {
       await supabase
         .from("checkout_intents")
         .update({ intent_status: "intent", lock_expires_at: null, updated_at: new Date().toISOString() })
