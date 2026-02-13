@@ -471,7 +471,10 @@ export default function GIVIViewerOverlay({ show, seller }) {
     // SAFETY CHECK: Verify buyer safety agreement before entering GIVI
     if (user.user_metadata?.buyer_safety_agreed !== true) {
       console.log("🛡️ User hasn't agreed to buyer safety - redirecting");
-      window.location.href = `/BuyerSafetyAgreement?redirect=LiveShow`;
+      const sid = show?.id;
+      window.location.href = sid
+        ? `/BuyerSafetyAgreement?redirect=LiveShow&showId=${encodeURIComponent(sid)}`
+        : `/BuyerSafetyAgreement?redirect=LiveShow`;
       return;
     }
 

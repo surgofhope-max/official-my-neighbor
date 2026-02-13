@@ -706,7 +706,9 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, c
               <Button
                 onClick={() => {
                   handleClose();
-                  navigate(createPageUrl("BuyerSafetyAgreement") + `?redirect=LiveShow`);
+                  const sid = show?.id;
+                  const qs = sid ? `?redirect=LiveShow&showId=${encodeURIComponent(sid)}` : `?redirect=LiveShow`;
+                  navigate(createPageUrl("BuyerSafetyAgreement") + qs);
                 }}
                 className="w-full bg-gradient-to-r from-purple-600 to-blue-600"
               >
