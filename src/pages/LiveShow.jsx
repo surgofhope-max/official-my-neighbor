@@ -704,6 +704,13 @@ export default function LiveShow() {
   // - canBuy: Only allow purchasing when stream_status === "live"
   const canShowProducts = show?.stream_status === "starting" || show?.stream_status === "live";
   const canBuy = isShowActuallyLive; // stream_status === "live"
+
+  // Watcher to detect canBuy flipping while overlay is open
+  useEffect(() => {
+    if (showCheckout) {
+      console.log("LIVE_SHOW_CHECKOUT_STATE", { canBuy, showCheckout, selectedProductId: selectedProduct?.id, activeCheckoutIntentId, streamStatus: show?.stream_status });
+    }
+  }, [canBuy, showCheckout, selectedProduct, activeCheckoutIntentId, show?.stream_status]);
   
   // Show ended or cancelled - graceful handling (no video, no buying)
   if (show.status === "ended" || show.status === "cancelled") {
@@ -1541,12 +1548,14 @@ export default function LiveShow() {
               buyerProfile={buyerProfile}
               checkoutIntentId={activeCheckoutIntentId}
               onClose={() => {
+                console.log("LIVE_SHOW_CLOSE_OVERLAY", "onClose", { canBuy, showCheckout, selectedProductId: selectedProduct?.id, activeCheckoutIntentId });
                 setShowCheckout(false);
                 setSelectedProduct(null);
                 setActiveCheckoutIntentId(null);
                 setBuyNowError(null);
               }}
               onIntentExpired={() => {
+                console.log("LIVE_SHOW_CLOSE_OVERLAY", "onIntentExpired", { canBuy, showCheckout, selectedProductId: selectedProduct?.id, activeCheckoutIntentId });
                 setShowCheckout(false);
                 setSelectedProduct(null);
                 setActiveCheckoutIntentId(null);

@@ -138,6 +138,7 @@ function StripePaymentForm({
 }
 
 export default function CheckoutOverlay({ product, seller, show, buyerProfile, checkoutIntentId, onClose, onIntentExpired }) {
+  console.log("CHECKOUT_OVERLAY_MOUNT", { checkoutIntentId, productId: product?.id, showId: show?.id });
   const navigate = useNavigate();
   const [step, setStep] = useState(buyerProfile ? "confirm" : "profile");
   const [profileData, setProfileData] = useState({
@@ -167,6 +168,7 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, c
     if (!checkoutIntentId) {
       setIntentValid(false);
       setSessionExpired(true);
+      console.log("CHECKOUT_CLOSE_REASON", "MOUNT_EFFECT_NO_INTENT", { checkoutIntentId, lockExpiresAt, paymentStep });
       if (typeof onIntentExpired === "function") onIntentExpired();
       return;
     }
@@ -181,6 +183,7 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, c
       if (error || !data) {
         setIntentValid(false);
         setSessionExpired(true);
+        console.log("CHECKOUT_CLOSE_REASON", "MOUNT_EFFECT_FETCH_ERROR", { checkoutIntentId, lockExpiresAt, paymentStep });
         if (typeof onIntentExpired === "function") onIntentExpired();
         return;
       }
@@ -188,11 +191,18 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, c
       setIntentValid(valid);
       if (!valid) {
         setSessionExpired(true);
+        console.log("CHECKOUT_CLOSE_REASON", "MOUNT_EFFECT_INVALID", { checkoutIntentId, lockExpiresAt, paymentStep });
         if (typeof onIntentExpired === "function") onIntentExpired();
       }
     })();
     return () => { cancelled = true; };
   }, [checkoutIntentId, onClose, onIntentExpired]);
+
+  useEffect(() => {
+    return () => {
+      console.log("CHECKOUT_OVERLAY_UNMOUNT", { checkoutIntentId, productId: product?.id, showId: show?.id });
+    };
+  }, []);
 
   // On unmount: clear client secret so Stripe Elements are not left mounted
   useEffect(() => {
@@ -284,6 +294,12 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, c
 
   // Force close checkout when lock expires (4 min); no payment after expiry
   useEffect(() => {
+    console.log("LOCK_TIMER_DEBUG", {
+      lockExpiresAt,
+      parsed: new Date(lockExpiresAt).toISOString(),
+      now: new Date().toISOString(),
+      diffMs: lockExpiresAt ? new Date(lockExpiresAt).getTime() - Date.now() : null
+    });
     if (!lockExpiresAt || !onIntentExpired) return;
     const t = new Date(lockExpiresAt).getTime() - Date.now();
     console.log("CHECKOUT_DEBUG_LOCK_TIMER", {
@@ -294,12 +310,16 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, c
       lockExpiresAtIsoIfValid: isNaN(new Date(lockExpiresAt).getTime()) ? null : new Date(lockExpiresAt).toISOString(),
     });
     if (t <= 0) {
+      console.log("CHECKOUT_CLOSE_REASON", "LOCK_TIMER_T_LE_0", { checkoutIntentId, lockExpiresAt, paymentStep });
       onIntentExpired();
+      console.log("CHECKOUT_HANDLE_CLOSE", "LOCK_TIMER_T_LE_0", { checkoutIntentId, lockExpiresAt, paymentStep });
       handleClose();
       return;
     }
     const timer = setTimeout(() => {
+      console.log("CHECKOUT_CLOSE_REASON", "LOCK_TIMER_TIMEOUT", { checkoutIntentId, lockExpiresAt, paymentStep });
       onIntentExpired();
+      console.log("CHECKOUT_HANDLE_CLOSE", "LOCK_TIMER_TIMEOUT", { checkoutIntentId, lockExpiresAt, paymentStep });
       handleClose();
     }, t);
     return () => clearTimeout(timer);
@@ -559,6 +579,7 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, c
       }
 
       const result = await createPaymentIntent(checkoutIntentId);
+      console.log("CREATE_PI_RESULT_FULL", result);
       console.log("CHECKOUT_DEBUG_RESULT", {
         checkoutIntentId,
         clientSecretPresent: !!result?.clientSecret,
@@ -570,7 +591,9 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, c
       const errMsg = result.error || null;
 
       if (errMsg && (errMsg.toLowerCase().includes("expired") || errMsg.toLowerCase().includes("intent expired"))) {
+        console.log("CHECKOUT_CLOSE_REASON", "HANDLE_CHECKOUT_ERRMSG_EXPIRED", { checkoutIntentId, lockExpiresAt, paymentStep });
         if (typeof onIntentExpired === "function") onIntentExpired();
+        console.log("CHECKOUT_HANDLE_CLOSE", "HANDLE_CHECKOUT_ERRMSG_EXPIRED", { checkoutIntentId, lockExpiresAt, paymentStep });
         handleClose();
         return;
       }
@@ -588,7 +611,9 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, c
       setClientSecret(null);
       const msg = error?.message || "Checkout failed. Please try again.";
       if (msg.toLowerCase().includes("expired") || msg.toLowerCase().includes("intent expired")) {
+        console.log("CHECKOUT_CLOSE_REASON", "HANDLE_CHECKOUT_CATCH_EXPIRED", { checkoutIntentId, lockExpiresAt, paymentStep });
         if (typeof onIntentExpired === "function") onIntentExpired();
+        console.log("CHECKOUT_HANDLE_CLOSE", "HANDLE_CHECKOUT_CATCH_EXPIRED", { checkoutIntentId, lockExpiresAt, paymentStep });
         handleClose();
         return;
       }
@@ -602,6 +627,7 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, c
   };
 
   const handleViewOrder = () => {
+    console.log("CHECKOUT_HANDLE_CLOSE", "HANDLE_VIEW_ORDER", { checkoutIntentId, lockExpiresAt, paymentStep });
     handleClose();
     setTimeout(() => navigate(createPageUrl("BuyerOrders")), 300);
   };
@@ -640,7 +666,7 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, c
           <p className="text-gray-600 mb-4">
             {statusMessage}. Orders can only be placed during live shows.
           </p>
-          <Button onClick={handleClose} className="w-full">
+          <Button onClick={() => { console.log("CHECKOUT_HANDLE_CLOSE", "BUTTON_CLOSE_NOT_LIVE", { checkoutIntentId, lockExpiresAt, paymentStep }); handleClose(); }} className="w-full">
             Close
           </Button>
         </div>
@@ -660,7 +686,7 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, c
           <p className="text-gray-600 mb-4">
             This checkout session has expired. The product is being returned to the show.
           </p>
-          <Button onClick={handleClose} className="w-full">
+          <Button onClick={() => { console.log("CHECKOUT_HANDLE_CLOSE", "BUTTON_CLOSE_SESSION_EXPIRED", { checkoutIntentId, lockExpiresAt, paymentStep }); handleClose(); }} className="w-full">
             Close
           </Button>
         </div>
@@ -675,7 +701,7 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, c
       {/* Backdrop */}
       <div 
         className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-        onClick={handleClose}
+        onClick={() => { console.log("CHECKOUT_HANDLE_CLOSE", "BACKDROP_CLICK", { checkoutIntentId, lockExpiresAt, paymentStep }); handleClose(); }}
       />
       
       {/* Bottom Sheet */}
@@ -703,6 +729,7 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, c
               </p>
               <Button
                 onClick={() => {
+                  console.log("CHECKOUT_HANDLE_CLOSE", "BUTTON_SAFETY_AGREEMENT", { checkoutIntentId, lockExpiresAt, paymentStep });
                   handleClose();
                   navigate(createPageUrl("BuyerSafetyAgreement") + `?redirect=LiveShow`);
                 }}
@@ -726,7 +753,7 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, c
                   </div>
                   <CardTitle className="text-2xl font-bold text-center">Order Complete!</CardTitle>
                   <button
-                    onClick={handleClose}
+                    onClick={() => { console.log("CHECKOUT_HANDLE_CLOSE", "BUTTON_CLOSE_ORDER_COMPLETE", { checkoutIntentId, lockExpiresAt, paymentStep }); handleClose(); }}
                     className="absolute top-4 right-4 p-2 hover:bg-gray-100 rounded-full transition-colors"
                   >
                     <X className="w-5 h-5 text-gray-600" />
@@ -786,7 +813,7 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, c
                   </Alert>
 
                   <div className="flex gap-3">
-                    <Button variant="outline" className="flex-1" onClick={handleClose}>
+                    <Button variant="outline" className="flex-1" onClick={() => { console.log("CHECKOUT_HANDLE_CLOSE", "BUTTON_BACK_TO_SHOW", { checkoutIntentId, lockExpiresAt, paymentStep }); handleClose(); }}>
                       Back to Show
                     </Button>
                     <Button className="flex-1 bg-gradient-to-r from-purple-600 to-blue-500" onClick={handleViewOrder}>
@@ -803,7 +830,7 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, c
                     {step === "profile" ? "Your Information" : "Complete Purchase"}
                   </CardTitle>
                   <button
-                    onClick={handleClose}
+                    onClick={() => { console.log("CHECKOUT_HANDLE_CLOSE", "BUTTON_CLOSE_MAIN", { checkoutIntentId, lockExpiresAt, paymentStep }); handleClose(); }}
                     className="absolute top-4 right-4 p-2 hover:bg-gray-100 rounded-full transition-colors"
                   >
                     <X className="w-5 h-5 text-gray-600" />
@@ -930,7 +957,7 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, c
                         <Button
                           variant="outline"
                           className="w-full text-lg py-6"
-                          onClick={handleClose}
+                          onClick={() => { console.log("CHECKOUT_HANDLE_CLOSE", "BUTTON_BACK_TO_SHOW_IS_SOLD_OUT", { checkoutIntentId, lockExpiresAt, paymentStep }); handleClose(); }}
                         >
                           Back to Show
                         </Button>
