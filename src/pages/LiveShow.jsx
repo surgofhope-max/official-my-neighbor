@@ -68,7 +68,6 @@ export default function LiveShow() {
       Loading…
     </div>
   );
-  console.log("[AUTH DEBUG][LiveShow] isLoadingAuth:", isLoadingAuth, "user:", user);
 
   const [buyerProfile, setBuyerProfile] = useState(null);
   const [selectedProduct, setSelectedProduct] = useState(null);
@@ -139,15 +138,6 @@ export default function LiveShow() {
   const useSupabaseChat = isShowLiveUI;
 
   useEffect(() => {
-    console.log("🎬 [LiveShow] MOUNT - showId:", showId);
-    
-    // AUDIT LOG - TEMPORARY: Verify Supabase client origin
-    console.log("[SUPABASE_CLIENT_AUDIT]", {
-      clientFile: "LiveShow.jsx imports from @/lib/supabase/supabaseClient",
-      hasServiceRole: false,
-      showId: showId
-    });
-    
     window.scrollTo(0, 0);
     
     // Minimal overscroll prevention
@@ -155,7 +145,6 @@ export default function LiveShow() {
     document.documentElement.style.overscrollBehavior = 'none';
     
     return () => {
-      console.log("🧹 [LiveShow] UNMOUNT - showId:", showId);
       document.body.style.overscrollBehavior = '';
       document.documentElement.style.overscrollBehavior = '';
     };
@@ -163,7 +152,6 @@ export default function LiveShow() {
 
   // Load buyer profile when canonical user becomes available
   useEffect(() => {
-    console.log("[AUTH DEBUG][LiveShow] buyerProfile effect fired. user?.id:", user?.id);
     const loadBuyerProfile = async () => {
       if (!user) {
         setBuyerProfile(null);
@@ -217,13 +205,6 @@ export default function LiveShow() {
         setShowLoading(false);
         return;
       }
-
-      console.log("[SHOW_FETCH]", {
-        showId,
-        gotId: showData?.id,
-        sales_count: showData?.sales_count,
-        updated_at: showData?.updated_at
-      });
 
       // ═══════════════════════════════════════════════════════════════════════
       // MERGE GUARD: Preserve SDK viewer_count when server returns stale 0
@@ -401,13 +382,11 @@ export default function LiveShow() {
     // Initialize on first load
     if (lastSalesCountRef.current === null) {
       lastSalesCountRef.current = show.sales_count;
-      console.log("[BANNER] init sales_count:", show.sales_count);
       return;
     }
 
     // Detect increment
     if (show.sales_count > lastSalesCountRef.current) {
-      console.log("[BANNER] sales_count changed:", { from: lastSalesCountRef.current, to: show.sales_count });
       setShowPurchaseBanner(true);
       setTimeout(() => setShowPurchaseBanner(false), 2000);
     }
@@ -462,8 +441,6 @@ export default function LiveShow() {
     if (activeGIVI?.status === "result" && activeGIVI?.winner_ids?.length > 0) {
       const bannerShownKey = `givi_banner_shown_${activeGIVI.id}`;
       if (localStorage.getItem(bannerShownKey) !== 'true') {
-        console.log("🎊 Showing winner banner for viewer");
-        console.log("   Winner Names:", activeGIVI.winner_names);
         setShowWinnerBanner(true);
         localStorage.setItem(bannerShownKey, 'true');
       }
@@ -499,31 +476,14 @@ export default function LiveShow() {
 
   const handleBuyNow = async (product) => {
     // ═══════════════════════════════════════════════════════════════════════════
-    // DIAGNOSTIC LOGGING: Trace product ID at buy click
-    // ═══════════════════════════════════════════════════════════════════════════
-    console.log("[BUY NOW CLICK] product.id:", product?.id);
-    console.log("[BUY NOW CLICK] product.show_product_id:", product?.show_product_id);
-    console.log("[BUY NOW CLICK] product.product_id:", product?.product_id);
-    console.log("[BUY NOW CLICK] product.title:", product?.title);
-    console.log("[BUY NOW CLICK] full product:", product);
-
-    // ═══════════════════════════════════════════════════════════════════════════
     // LIFECYCLE GATING: Only allow buying when show is actually live
     // ═══════════════════════════════════════════════════════════════════════════
     if (!isShowLive(show)) {
-      console.log("[GATE BLOCKED] reason: show not live", {
-        streamStatus: show?.stream_status,
-        showStatus: show?.status,
-        productId: product?.id,
-      });
       console.warn("[LiveShow] Buy blocked - show is not live (stream_status !== 'live')");
       return;
     }
     
     if (!user) {
-      console.log("[GATE BLOCKED] reason: no user logged in", {
-        productId: product?.id,
-      });
       // Store return URL for post-login redirect
       sessionStorage.setItem('login_return_url', window.location.href);
       navigate(createPageUrl("Login"));
@@ -540,21 +500,9 @@ export default function LiveShow() {
 
     // Validate product is still available
     if (product.status === "sold_out" || product.status === "locked") {
-      console.log("[GATE BLOCKED] reason: product status blocked", {
-        productStatus: product?.status,
-        productQuantity: product?.quantity,
-        productId: product?.id,
-        productTitle: product?.title,
-      });
       return;
     }
     if ((product.quantity || 0) <= 0) {
-      console.log("[GATE BLOCKED] reason: product quantity <= 0", {
-        productQuantity: product?.quantity,
-        productStatus: product?.status,
-        productId: product?.id,
-        productTitle: product?.title,
-      });
       return;
     }
 
@@ -570,11 +518,6 @@ export default function LiveShow() {
         quantity: 1,
       });
       setActiveCheckoutIntentId(intent.id);
-      console.log("[SET selectedProduct]", {
-        selectedProductId: product?.id,
-        selectedTitle: product?.title,
-        selectedShowProductId: product?.show_product_id,
-      });
       setSelectedProduct(product);
       setExpandedProduct(null);
       setShowCheckout(true);
@@ -627,7 +570,6 @@ export default function LiveShow() {
   // CRITICAL: Check showId FIRST - if missing after params load, redirect
   // But don't redirect during initial navigation - wait for params to resolve
   if (!showId && !showLoading) {
-    console.log("❌ LiveShow - No showId after params loaded, redirecting");
     navigate(createPageUrl("Marketplace"), { replace: true });
     return null;
   }
@@ -701,13 +643,6 @@ export default function LiveShow() {
   const canShowProducts = show?.stream_status === "starting" || show?.stream_status === "live";
   const canBuy = isShowActuallyLive; // stream_status === "live"
 
-  // Watcher to detect canBuy flipping while overlay is open
-  useEffect(() => {
-    if (showCheckout) {
-      console.log("LIVE_SHOW_CHECKOUT_STATE", { canBuy, showCheckout, selectedProductId: selectedProduct?.id, activeCheckoutIntentId, streamStatus: show?.stream_status });
-    }
-  }, [canBuy, showCheckout, selectedProduct, activeCheckoutIntentId, show?.stream_status]);
-  
   // Show ended or cancelled - graceful handling (no video, no buying)
   if (show.status === "ended" || show.status === "cancelled") {
     return (
@@ -1546,14 +1481,12 @@ export default function LiveShow() {
               buyerProfile={buyerProfile}
               checkoutIntentId={activeCheckoutIntentId}
               onClose={() => {
-                console.log("LIVE_SHOW_CLOSE_OVERLAY", "onClose", { canBuy, showCheckout, selectedProductId: selectedProduct?.id, activeCheckoutIntentId });
                 setShowCheckout(false);
                 setSelectedProduct(null);
                 setActiveCheckoutIntentId(null);
                 setBuyNowError(null);
               }}
               onIntentExpired={() => {
-                console.log("LIVE_SHOW_CLOSE_OVERLAY", "onIntentExpired", { canBuy, showCheckout, selectedProductId: selectedProduct?.id, activeCheckoutIntentId });
                 setShowCheckout(false);
                 setSelectedProduct(null);
                 setActiveCheckoutIntentId(null);

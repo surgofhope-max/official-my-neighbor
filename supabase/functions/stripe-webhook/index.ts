@@ -217,15 +217,6 @@ serve(async (req: Request) => {
     
     console.log(`[WEBHOOK] Processing event: ${event.type} (${event.id})${connectedAccountId ? ` [Connect: ${connectedAccountId}]` : ''}`);
 
-    console.log(
-      "[WEBHOOK_EVENT_RECEIVED]",
-      JSON.stringify({
-        eventType: event.type,
-        paymentIntentId: event.data?.object?.id ?? null,
-        metadata: event.data?.object?.metadata ?? null
-      })
-    );
-
     // Handle different event types
     switch (event.type) {
       case "payment_intent.succeeded": {
@@ -704,15 +695,6 @@ async function handlePaymentFailed(
   const checkoutIntentId = paymentIntent.metadata?.checkout_intent_id;
 
   if (orderIdFromMeta) {
-    console.log(
-      "[WEBHOOK_CANCEL_ORDER]",
-      JSON.stringify({
-        event: "payment_intent.payment_failed",
-        orderId: orderIdFromMeta,
-        paymentIntentId: paymentIntent.id,
-        metadata: paymentIntent.metadata
-      })
-    );
     await supabase
       .from("orders")
       .update({ status: "cancelled", updated_at: new Date().toISOString() })
@@ -753,15 +735,6 @@ async function handlePaymentCanceled(
   const checkoutIntentId = paymentIntent.metadata?.checkout_intent_id;
 
   if (orderIdFromMeta) {
-    console.log(
-      "[WEBHOOK_CANCEL_ORDER]",
-      JSON.stringify({
-        event: "payment_intent.canceled",
-        orderId: orderIdFromMeta,
-        paymentIntentId: paymentIntent.id,
-        metadata: paymentIntent.metadata
-      })
-    );
     await supabase
       .from("orders")
       .update({ status: "cancelled", updated_at: new Date().toISOString() })
