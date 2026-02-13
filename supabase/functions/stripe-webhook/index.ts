@@ -308,7 +308,7 @@ async function handlePaymentSucceeded(
   if (orderIdFromMeta) {
     const { data: existingOrder, error: fetchErr } = await supabase
       .from("orders")
-      .select("id, status, batch_id, buyer_id, seller_id, seller_entity_id, show_id")
+      .select("id, status, batch_id, buyer_id, seller_id, seller_entity_id, show_id, product_id")
       .eq("id", orderIdFromMeta)
       .single();
 
@@ -322,6 +322,28 @@ async function handlePaymentSucceeded(
       return;
     }
 
+    let snapshotTitle: string | null = null;
+    let snapshotImageUrl: string | null = null;
+    let snapshotDescription: string | null = null;
+
+    if (existingOrder?.product_id) {
+      const { data: p, error: pErr } = await supabase
+        .from("products")
+        .select("id, title, image_urls, description")
+        .eq("id", existingOrder.product_id)
+        .single();
+
+      if (pErr || !p) {
+        console.error("[WEBHOOK][PATH A] Product fetch failed for snapshot:", existingOrder.product_id, pErr?.message);
+      } else {
+        snapshotTitle = p.title ?? null;
+        snapshotImageUrl = (Array.isArray(p.image_urls) ? p.image_urls[0] : null) ?? null;
+        snapshotDescription = p.description ?? null;
+      }
+    } else {
+      console.error("[WEBHOOK][PATH A] existingOrder missing product_id; cannot snapshot");
+    }
+
     const { error: updateErr } = await supabase
       .from("orders")
       .update({
@@ -329,6 +351,9 @@ async function handlePaymentSucceeded(
         payment_intent_id: paymentIntent.id,
         last_stripe_event_id: eventId,
         updated_at: new Date().toISOString(),
+        product_title: snapshotTitle,
+        product_image_url: snapshotImageUrl,
+        product_description: snapshotDescription,
       })
       .eq("id", orderIdFromMeta)
       .in("status", ["pending"]);
