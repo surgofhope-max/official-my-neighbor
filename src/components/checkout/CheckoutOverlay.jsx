@@ -161,13 +161,18 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, c
   const [sessionExpired, setSessionExpired] = useState(false);
   const [intentValid, setIntentValid] = useState(null);
   const checkoutInFlightRef = useRef(false);
+  const onIntentExpiredRef = useRef(onIntentExpired);
+  const onCloseRef = useRef(onClose);
+
+  useEffect(() => { onIntentExpiredRef.current = onIntentExpired; }, [onIntentExpired]);
+  useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
 
   // On mount: fetch checkout_intents by id; if invalid or expired, close overlay and show banner (do not render Stripe)
   useEffect(() => {
     if (!checkoutIntentId) {
       setIntentValid(false);
       setSessionExpired(true);
-      if (typeof onIntentExpired === "function") onIntentExpired();
+      if (typeof onIntentExpiredRef.current === "function") onIntentExpiredRef.current();
       return;
     }
     let cancelled = false;
@@ -181,18 +186,20 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, c
       if (error || !data) {
         setIntentValid(false);
         setSessionExpired(true);
-        if (typeof onIntentExpired === "function") onIntentExpired();
+        if (typeof onIntentExpiredRef.current === "function") onIntentExpiredRef.current();
         return;
       }
-      const valid = data.intent_status === "intent" && new Date(data.intent_expires_at) > new Date();
+      const notExpired = data?.intent_expires_at ? new Date(data.intent_expires_at) > new Date() : false;
+      const status = data?.intent_status;
+      const valid = (status === "intent" || status === "locked") && notExpired;
       setIntentValid(valid);
       if (!valid) {
         setSessionExpired(true);
-        if (typeof onIntentExpired === "function") onIntentExpired();
+        if (typeof onIntentExpiredRef.current === "function") onIntentExpiredRef.current();
       }
     })();
     return () => { cancelled = true; };
-  }, [checkoutIntentId, onClose, onIntentExpired]);
+  }, [checkoutIntentId]);
 
   // On unmount: clear client secret so Stripe Elements are not left mounted
   useEffect(() => {
@@ -284,19 +291,19 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, c
 
   // Force close checkout when lock expires (4 min); no payment after expiry
   useEffect(() => {
-    if (!lockExpiresAt || !onIntentExpired) return;
+    if (!lockExpiresAt) return;
     const t = new Date(lockExpiresAt).getTime() - Date.now();
     if (t <= 0) {
-      onIntentExpired();
+      if (typeof onIntentExpiredRef.current === "function") onIntentExpiredRef.current();
       handleClose();
       return;
     }
     const timer = setTimeout(() => {
-      onIntentExpired();
+      if (typeof onIntentExpiredRef.current === "function") onIntentExpiredRef.current();
       handleClose();
     }, t);
     return () => clearTimeout(timer);
-  }, [lockExpiresAt, onIntentExpired]);
+  }, [lockExpiresAt]);
 
   const handleClose = () => {
     setIsVisible(false);
