@@ -63,16 +63,12 @@ export default function LiveShow() {
   
   // Use canonical auth from SupabaseAuthProvider (single source of truth)
   const { user, isLoadingAuth } = useSupabaseAuth();
+  const authLoadingUI = (
+    <div className="w-full h-full flex items-center justify-center text-white/70 text-sm">
+      Loading…
+    </div>
+  );
   console.log("[AUTH DEBUG][LiveShow] isLoadingAuth:", isLoadingAuth, "user:", user);
-
-  // Wait for auth to hydrate before rendering to prevent user=null flash
-  if (isLoadingAuth) {
-    return (
-      <div className="w-full h-full flex items-center justify-center text-white/70 text-sm">
-        Loading…
-      </div>
-    );
-  }
 
   const [buyerProfile, setBuyerProfile] = useState(null);
   const [selectedProduct, setSelectedProduct] = useState(null);
@@ -873,6 +869,8 @@ export default function LiveShow() {
 
   const productImages = expandedProduct?.image_urls || [];
   const hasMultipleImages = productImages.length > 1;
+
+  if (isLoadingAuth) return authLoadingUI;
 
   return (
     <div style={{ 
