@@ -530,6 +530,12 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, c
   };
 
   const handleCheckout = async () => {
+    console.log("AUDIT_COMPLETE_PAYMENT_TRIGGER", {
+      checkoutIntentId,
+      productId: product?.id,
+      buyerId: buyerProfile?.id,
+      timestamp: new Date().toISOString()
+    });
     // hard single-flight guard (prevents double click/tap before state updates)
     if (checkoutInFlightRef.current) return;
     checkoutInFlightRef.current = true;
@@ -558,6 +564,10 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, c
         throw new Error("Stripe is not configured. Please contact support.");
       }
 
+      console.log("AUDIT_CALLING_CREATE_PAYMENT_INTENT", {
+        checkoutIntentId,
+        timestamp: new Date().toISOString()
+      });
       const result = await createPaymentIntent(checkoutIntentId);
       const errMsg = result.error || null;
 

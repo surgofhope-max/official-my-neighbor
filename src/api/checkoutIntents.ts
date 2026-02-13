@@ -46,6 +46,13 @@ export async function createCheckoutIntent(
     intent_expires_at: intentExpiresAt,
   };
 
+  console.log("AUDIT_CREATE_CHECKOUT_INTENT_BEFORE_INSERT", {
+    product_id: input.product_id,
+    buyer_id: input.buyer_id,
+    seller_id: input.seller_id,
+    show_id: input.show_id,
+    timestamp: new Date().toISOString()
+  });
   const { data, error } = await supabase
     .from("checkout_intents")
     .insert(payload)
@@ -56,6 +63,11 @@ export async function createCheckoutIntent(
     throw new Error(error.message || "Failed to create checkout intent");
   }
 
+  console.log("AUDIT_CREATE_CHECKOUT_INTENT_AFTER_INSERT", {
+    newIntentId: data?.id,
+    product_id: input.product_id,
+    timestamp: new Date().toISOString()
+  });
   if (!data) {
     throw new Error("Failed to create checkout intent");
   }

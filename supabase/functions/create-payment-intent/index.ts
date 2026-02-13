@@ -42,6 +42,10 @@ serve(async (req: Request) => {
     return new Response("ok", { headers: corsHeaders });
   }
 
+  console.log("AUDIT_EDGE_RECEIVED", {
+    body: await req.clone().json(),
+    timestamp: new Date().toISOString()
+  });
   try {
     const stripeSecretKey = Deno.env.get("STRIPE_SECRET_KEY");
     if (!stripeSecretKey) {
