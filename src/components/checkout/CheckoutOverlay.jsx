@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { supabase } from "@/lib/supabase/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -160,6 +160,7 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, c
   const [lockExpiresAt, setLockExpiresAt] = useState(null);
   const [sessionExpired, setSessionExpired] = useState(false);
   const [intentValid, setIntentValid] = useState(null);
+  const checkoutInFlightRef = useRef(false);
 
   // On mount: fetch checkout_intents by id; if invalid or expired, close overlay and show banner (do not render Stripe)
   useEffect(() => {
@@ -529,26 +530,30 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, c
   };
 
   const handleCheckout = async () => {
-    if (isSubmitting) return;
-    if (!checkoutIntentId) {
-      setCheckoutError("Checkout session not found. Please try again from the product.");
-      return;
-    }
-
-    if (user?.id) {
-      const { canProceed, error: guardError } = await checkAccountActiveAsync(supabase, user.id);
-      if (!canProceed) {
-        setCheckoutError(guardError);
-        return;
-      }
-    }
-
-    setIsSubmitting(true);
-    setCheckoutError(null);
-    setIsSoldOut(false);
-    setPaymentStep("processing");
+    // hard single-flight guard (prevents double click/tap before state updates)
+    if (checkoutInFlightRef.current) return;
+    checkoutInFlightRef.current = true;
 
     try {
+      if (isSubmitting) return;
+      if (!checkoutIntentId) {
+        setCheckoutError("Checkout session not found. Please try again from the product.");
+        return;
+      }
+
+      if (user?.id) {
+        const { canProceed, error: guardError } = await checkAccountActiveAsync(supabase, user.id);
+        if (!canProceed) {
+          setCheckoutError(guardError);
+          return;
+        }
+      }
+
+      setIsSubmitting(true);
+      setCheckoutError(null);
+      setIsSoldOut(false);
+      setPaymentStep("processing");
+
       if (!stripePromise || !import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY) {
         throw new Error("Stripe is not configured. Please contact support.");
       }
@@ -589,6 +594,7 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, c
       }
       setCheckoutError(msg);
     } finally {
+      checkoutInFlightRef.current = false;
       if (!clientSecret) {
         setIsSubmitting(false);
       }
