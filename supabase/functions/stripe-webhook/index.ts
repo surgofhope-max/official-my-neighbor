@@ -430,7 +430,7 @@ async function handlePaymentSucceeded(
 
   const { data: product, error: productErr } = await supabase
     .from("products")
-    .select("id, title, price, quantity")
+    .select("id, title, price, quantity, image_urls, description")
     .eq("id", intent.product_id)
     .single();
 
@@ -470,6 +470,9 @@ async function handlePaymentSucceeded(
       status: "paid",
       payment_intent_id: paymentIntent.id,
       last_stripe_event_id: eventId,
+      product_title: product.title,
+      product_image_url: product.image_urls?.[0] ?? null,
+      product_description: product.description ?? null,
     })
     .select("id, status, batch_id, buyer_id, seller_id, seller_entity_id, show_id")
     .single();
