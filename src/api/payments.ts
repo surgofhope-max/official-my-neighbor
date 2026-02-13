@@ -54,11 +54,15 @@ export async function createPaymentIntent(
 
     if (error) {
       console.warn("Failed to create payment intent:", error.message);
+      const mapped =
+        error?.message?.toLowerCase().includes("product no longer available")
+          ? "Out of stock"
+          : error?.message || "Failed to initialize payment";
       return {
         clientSecret: null,
         paymentIntentId: null,
         lockExpiresAt: null,
-        error: error.message || "Failed to initialize payment",
+        error: mapped,
       };
     }
 
