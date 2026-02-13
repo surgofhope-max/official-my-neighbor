@@ -54,10 +54,21 @@ export async function createPaymentIntent(
 
     if (error) {
       console.warn("Failed to create payment intent:", error.message);
-      const mapped =
-        error?.message?.toLowerCase().includes("product no longer available")
-          ? "Out of stock"
-          : error?.message || "Failed to initialize payment";
+
+      let mapped = error.message || "Failed to initialize payment";
+
+      try {
+        // For 4xx/5xx, Supabase wraps the real body in error.context
+        if (error.context) {
+          const body = await error.context.json();
+          if (body?.error === "Product no longer available") {
+            mapped = "Out of stock";
+          }
+        }
+      } catch (_) {
+        // Safely ignore JSON parsing errors
+      }
+
       return {
         clientSecret: null,
         paymentIntentId: null,
