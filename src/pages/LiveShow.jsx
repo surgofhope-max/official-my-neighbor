@@ -474,6 +474,22 @@ export default function LiveShow() {
     }
   }, [featuredProduct?.id]);
 
+  // Keep expanded product detail in sync with refreshed allShowProducts (price/title/description)
+  useEffect(() => {
+    if (!expandedProduct?.id) return;
+    const latest = allShowProducts.find((p) => p.id === expandedProduct.id);
+    if (!latest) return;
+    if (
+      latest.price !== expandedProduct.price ||
+      latest.title !== expandedProduct.title ||
+      latest.description !== expandedProduct.description ||
+      latest.quantity !== expandedProduct.quantity ||
+      latest.status !== expandedProduct.status
+    ) {
+      setExpandedProduct(latest);
+    }
+  }, [allShowProducts, expandedProduct?.id]);
+
   const handleBuyNow = async (product) => {
     // ═══════════════════════════════════════════════════════════════════════════
     // LIFECYCLE GATING: Only allow buying when show is actually live
