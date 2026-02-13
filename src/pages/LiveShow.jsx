@@ -828,15 +828,15 @@ export default function LiveShow() {
         <div
           style={{
             position: "fixed",
-            top: "16px",
+            top: "20px",
             left: "50%",
             transform: "translateX(-50%)",
             zIndex: 99999,
-            pointerEvents: "none"
+            pointerEvents: "none",
           }}
-          className="bg-green-600 text-white px-5 py-2 rounded-full shadow-lg text-sm font-semibold"
+          className="text-yellow-300 text-lg font-bold animate-pulse"
         >
-          Someone just made a purchase
+          PURCHASE JUST MADE
         </div>
       )}
 
