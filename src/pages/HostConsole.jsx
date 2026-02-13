@@ -1583,7 +1583,7 @@ export default function HostConsole() {
                                 step="0.01"
                                 value={newPrice}
                                 onChange={(e) => setNewPrice(e.target.value)}
-                                className="h-6 w-16 text-xs"
+                                className="h-6 w-16 text-xs text-white bg-transparent caret-white"
                                 autoFocus
                                 onKeyDown={(e) => {
                                   if (e.key === 'Enter') handleSavePrice(product.id);
