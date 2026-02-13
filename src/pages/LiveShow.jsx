@@ -118,8 +118,8 @@ export default function LiveShow() {
   // Classification is determined ONCE by device type, NOT viewport width.
   // This ensures SDKs don't remount on orientation change.
   // ═══════════════════════════════════════════════════════════════════════════
-  // const { isMobileDevice, isDesktopDevice } = useDeviceClass();
-  // useMobilePortraitLock(isMobileDevice);
+  const { isMobileDevice, isDesktopDevice } = useDeviceClass();
+  useMobilePortraitLock(isMobileDevice);
 
   // Determine which player to use based on streaming_provider field:
   // - "ivs" with ivs_playback_url → IVSPlayer (OBS/external encoder)
