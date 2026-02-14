@@ -12,6 +12,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -95,6 +96,10 @@ export default function HostConsole() {
   const [showFulfillmentDialog, setShowFulfillmentDialog] = useState(false);
   const [showPurchaseBanner, setShowPurchaseBanner] = useState(false);
   const [purchaseBannerBuyerName, setPurchaseBannerBuyerName] = useState(null);
+  const [editDetailsProductId, setEditDetailsProductId] = useState(null);
+  const [draftTitle, setDraftTitle] = useState("");
+  const [draftDescription, setDraftDescription] = useState("");
+  const [isEditDetailsOpen, setIsEditDetailsOpen] = useState(false);
 
   // ═══════════════════════════════════════════════════════════════════════════
   // DEVICE-LOCKED CLASSIFICATION (NO VIEWPORT FLIPS)
@@ -682,6 +687,33 @@ export default function HostConsole() {
       alert(`Failed to remove product from show: ${error.message}`);
     }
   });
+
+  const updateDetailsMutation = useMutation({
+    mutationFn: async () => {
+      if (!editDetailsProductId) return null;
+      const updated = await updateProduct(editDetailsProductId, {
+        title: draftTitle.trim(),
+        description: draftDescription ?? "",
+      });
+      if (!updated) throw new Error("Failed to update product details");
+      return updated;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["show-products", showId] });
+      setIsEditDetailsOpen(false);
+      setEditDetailsProductId(null);
+    },
+    onError: (error) => {
+      alert(`Failed to update details: ${error.message}`);
+    },
+  });
+
+  const openEditDetailsModal = (product) => {
+    setDraftTitle(product.title || "");
+    setDraftDescription(product.description || "");
+    setEditDetailsProductId(product.id);
+    setIsEditDetailsOpen(true);
+  };
 
   const handleStreamStart = (stream) => {
     console.log("📡 HostConsole - Stream started for ShowID:", showId);
@@ -1569,7 +1601,21 @@ export default function HostConsole() {
                         )}
                       </div>
                       <div className="flex-1 min-w-0">
-                        <h3 className="text-white font-semibold text-sm line-clamp-2">{product.title}</h3>
+                        <div className="flex items-start gap-1">
+                          <h3 className="text-white font-semibold text-sm line-clamp-2 flex-1">{product.title}</h3>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="h-6 w-6 flex-shrink-0 text-white/70 hover:text-white"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openEditDetailsModal(product);
+                            }}
+                            title="Edit Details"
+                          >
+                            <Edit2 className="w-3 h-3" />
+                          </Button>
+                        </div>
                         {product.category && (
                           <p className="text-white/50 text-xs mt-0.5">{product.category}</p>
                         )}
@@ -1845,6 +1891,61 @@ export default function HostConsole() {
               onCancel={() => setShowProductDialog(false)}
               isSubmitting={createProductMutation.isPending}
             />
+          </DialogContent>
+        </Dialog>
+
+        {/* Edit Details Dialog - DESKTOP ONLY */}
+        <Dialog
+          open={isEditDetailsOpen}
+          onOpenChange={(open) => {
+            if (!open) {
+              setIsEditDetailsOpen(false);
+              setEditDetailsProductId(null);
+            }
+          }}
+        >
+          <DialogContent className="max-w-md bg-white">
+            <DialogHeader>
+              <DialogTitle className="text-gray-900 text-xl">Edit Product Details</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4 pt-2">
+              <div>
+                <label className="text-sm font-medium text-gray-700">Title</label>
+                <Input
+                  value={draftTitle}
+                  onChange={(e) => setDraftTitle(e.target.value)}
+                  className="mt-1"
+                  placeholder="Product title"
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium text-gray-700">Description</label>
+                <Textarea
+                  value={draftDescription}
+                  onChange={(e) => setDraftDescription(e.target.value)}
+                  className="mt-1 min-h-[80px]"
+                  placeholder="Product description"
+                />
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setIsEditDetailsOpen(false);
+                    setEditDetailsProductId(null);
+                  }}
+                  disabled={updateDetailsMutation.isPending}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={() => updateDetailsMutation.mutate()}
+                  disabled={updateDetailsMutation.isPending}
+                >
+                  {updateDetailsMutation.isPending ? "Saving..." : "Save"}
+                </Button>
+              </div>
+            </div>
           </DialogContent>
         </Dialog>
 
