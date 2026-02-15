@@ -660,7 +660,7 @@ function ChatMessage({ message, isCurrentUser, isOverlay, buyerName }) {
         </div>
 
         {/* Message Text */}
-        <p className="text-white text-sm break-words">{message.message}</p>
+        <p className="text-white text-sm break-words font-semibold">{message.message}</p>
       </div>
     </div>
   );

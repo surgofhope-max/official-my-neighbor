@@ -309,7 +309,7 @@ export default function LiveChatOverlay({ showId, isSeller = false, onClose, inp
                   )}
                 </div>
                 <p 
-                  className="text-xs text-white leading-relaxed"
+                  className="text-xs text-white leading-relaxed font-semibold"
                   style={{
                     textShadow: '0 2px 4px rgba(0,0,0,0.8), 0 1px 2px rgba(0,0,0,0.6)'
                   }}
