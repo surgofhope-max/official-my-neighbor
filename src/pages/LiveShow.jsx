@@ -1132,6 +1132,13 @@ export default function LiveShow() {
                     <ShoppingBag className="w-10 h-10 text-white/30" />
                   </div>
                 )}
+                {expandedProduct?.box_number != null && (
+                  <div className="absolute top-2 left-2 z-10 pointer-events-none">
+                    <div className="w-8 h-8 rounded-full bg-yellow-400 text-black font-bold text-sm flex items-center justify-center shadow-md">
+                      {expandedProduct.box_number}
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Right - Fixed Content (60%) */}
