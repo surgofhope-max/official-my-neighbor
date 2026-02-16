@@ -398,6 +398,10 @@ export default function HostConsole() {
   // Reduced orders polling from 5s to 15s
   const { data: orders = [] } = useQuery({
     queryKey: ['show-orders', showId],
+    enabled: !!showId,
+    keepPreviousData: true,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: true,
     queryFn: async () => {
       const { data, error } = await supabase
         .from('orders')
