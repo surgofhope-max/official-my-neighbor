@@ -852,7 +852,7 @@ export default function LiveShow() {
           }}
           className="text-yellow-300 text-lg font-bold animate-pulse"
         >
-          PURCHASE JUST MADE
+          PURCHASE IN PROGRESS
         </div>
       )}
 
