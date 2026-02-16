@@ -83,7 +83,7 @@ export async function getLiveShowMessages(
       .from("live_show_messages")
       .select("*")
       .eq("show_id", showId)
-      .order("created_at", { ascending: true })
+      .order("created_at", { ascending: false })
       .limit(limit);
 
     // If afterId provided, only get messages after that one

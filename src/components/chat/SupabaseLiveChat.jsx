@@ -254,7 +254,8 @@ export default function SupabaseLiveChat({
           const onlyNew = serverMessages.filter((m) => !knownMessageIdsRef.current.has(m.id));
 
           if (onlyNew.length > 0) {
-            await applyIncomingMessages(onlyNew);
+            const ordered = [...onlyNew].reverse();
+            await applyIncomingMessages(ordered);
           }
         }
       }
