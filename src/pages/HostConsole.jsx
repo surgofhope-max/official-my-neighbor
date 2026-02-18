@@ -100,6 +100,9 @@ export default function HostConsole() {
   const [draftTitle, setDraftTitle] = useState("");
   const [draftDescription, setDraftDescription] = useState("");
   const [isEditDetailsOpen, setIsEditDetailsOpen] = useState(false);
+  const [showCloneDialog, setShowCloneDialog] = useState(false);
+  const [targetShowId, setTargetShowId] = useState("");
+  const [sellerShowsForClone, setSellerShowsForClone] = useState([]);
 
   // ═══════════════════════════════════════════════════════════════════════════
   // DEVICE-LOCKED CLASSIFICATION (NO VIEWPORT FLIPS)
@@ -114,6 +117,29 @@ export default function HostConsole() {
   useEffect(() => {
     console.log("[HostConsole] Device classification:", { isMobileDevice, isDesktopDevice, reason: deviceClassReason });
   }, []);
+
+  // Load seller shows when Clone dialog opens
+  useEffect(() => {
+    if (!showCloneDialog || !currentSeller?.id) return;
+
+    const loadSellerShows = async () => {
+      try {
+        const { data, error } = await supabase
+          .from("shows")
+          .select("id, title, status")
+          .eq("seller_id", currentSeller.id)
+          .order("created_at", { ascending: false });
+
+        if (!error && data) {
+          setSellerShowsForClone(data);
+        }
+      } catch (err) {
+        console.error("Failed to load seller shows for clone:", err);
+      }
+    };
+
+    loadSellerShows();
+  }, [showCloneDialog, currentSeller?.id]);
   
   // ═══════════════════════════════════════════════════════════════════════════
   // MVP PHASE-1: Seller viewer count sourced from Daily SDK (UI-only)
@@ -1532,6 +1558,13 @@ export default function HostConsole() {
                 Recent Orders
               </Button>
               
+              <Button
+                onClick={() => setShowCloneDialog(true)}
+                className="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-3"
+              >
+                Clone Remaining Products
+              </Button>
+              
               {/* HIDDEN: Pickup Verification moved to SellerOrders - UI guard only, logic preserved */}
               {false && (
                 <Button
@@ -1952,6 +1985,55 @@ export default function HostConsole() {
             </div>
           </DialogContent>
         </Dialog>
+
+        {/* Clone Remaining Products Modal - DESKTOP ONLY (UI shell, no mutation yet) */}
+        {showCloneDialog && (
+          <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50">
+            <div className="bg-gray-900 p-6 rounded-lg w-full max-w-md space-y-4">
+              <h2 className="text-xl font-bold text-white">
+                Clone Remaining Products
+              </h2>
+
+              <p className="text-gray-400 text-sm">
+                Select a target show to receive remaining products from this show.
+              </p>
+
+              <select
+                value={targetShowId}
+                onChange={(e) => setTargetShowId(e.target.value)}
+                className="w-full p-2 rounded bg-gray-800 text-white"
+              >
+                <option value="">Select Target Show</option>
+                {sellerShowsForClone
+                  .filter(s => s.id !== showId)
+                  .map(show => (
+                    <option key={show.id} value={show.id}>
+                      {show.title} ({show.status})
+                    </option>
+                  ))}
+              </select>
+
+              <div className="flex justify-end space-x-2 pt-4">
+                <Button
+                  onClick={() => {
+                    setShowCloneDialog(false);
+                    setTargetShowId("");
+                  }}
+                  className="bg-gray-700 hover:bg-gray-600 text-white"
+                >
+                  Cancel
+                </Button>
+
+                <Button
+                  disabled={!targetShowId}
+                  className={!targetShowId ? "bg-purple-600 text-white opacity-50 cursor-not-allowed" : "bg-purple-600 hover:bg-purple-700 text-white"}
+                >
+                  Clone (Coming Soon)
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Fulfillment Bottom Drawer - MOBILE VERSION */}
         <BottomDrawer
