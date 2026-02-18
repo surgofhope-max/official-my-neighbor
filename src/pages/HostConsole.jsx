@@ -103,6 +103,7 @@ export default function HostConsole() {
   const [showCloneDialog, setShowCloneDialog] = useState(false);
   const [targetShowId, setTargetShowId] = useState("");
   const [sellerShowsForClone, setSellerShowsForClone] = useState([]);
+  const [isCloning, setIsCloning] = useState(false);
 
   // ═══════════════════════════════════════════════════════════════════════════
   // DEVICE-LOCKED CLASSIFICATION (NO VIEWPORT FLIPS)
@@ -851,6 +852,71 @@ export default function HostConsole() {
 
   const handleSaveProduct = (productData) => {
     createProductMutation.mutate(productData);
+  };
+
+  const handleCloneProducts = async () => {
+    if (!targetShowId || !currentSeller?.id || !showId) return;
+    if (targetShowId === showId) return;
+
+    try {
+      setIsCloning(true);
+
+      const remainingProducts = products.filter(
+        p => p.quantity > 0 && p.status === "active"
+      );
+
+      if (remainingProducts.length === 0) {
+        setShowCloneDialog(false);
+        setTargetShowId("");
+        setIsCloning(false);
+        return;
+      }
+
+      let successCount = 0;
+
+      for (const sourceProduct of remainingProducts) {
+
+        // 1️⃣ Create new product
+        const newProduct = await createProduct({
+          seller_id: currentSeller.id,
+          title: sourceProduct.title,
+          description: sourceProduct.description ?? null,
+          price: sourceProduct.price,
+          original_price: sourceProduct.original_price ?? null,
+          quantity: sourceProduct.quantity,
+          image_urls: sourceProduct.image_urls ?? [],
+          category: sourceProduct.category ?? null,
+          givi_type: sourceProduct.givi_type ?? null,
+          status: "active",
+        });
+
+        if (!newProduct) continue;
+
+        // 2️⃣ Link to target show
+        await createShowProduct({
+          show_id: targetShowId,
+          product_id: newProduct.id,
+          seller_id: currentSeller.id,
+          is_featured: false,
+          is_givi: false,
+        });
+
+        successCount++;
+      }
+
+      // 3️⃣ Refresh ONLY target show products
+      queryClient.invalidateQueries({
+        queryKey: ['show-products', targetShowId],
+      });
+
+      setShowCloneDialog(false);
+      setTargetShowId("");
+
+    } catch (err) {
+      console.error("Clone error:", err);
+    } finally {
+      setIsCloning(false);
+    }
   };
 
   const handleStartEditPrice = (product) => {
@@ -2025,10 +2091,11 @@ export default function HostConsole() {
                 </Button>
 
                 <Button
-                  disabled={!targetShowId}
-                  className={!targetShowId ? "bg-purple-600 text-white opacity-50 cursor-not-allowed" : "bg-purple-600 hover:bg-purple-700 text-white"}
+                  onClick={handleCloneProducts}
+                  disabled={!targetShowId || isCloning}
+                  className={!targetShowId || isCloning ? "bg-purple-600 text-white opacity-50 cursor-not-allowed" : "bg-purple-600 hover:bg-purple-700 text-white"}
                 >
-                  Clone (Coming Soon)
+                  {isCloning ? "Cloning..." : "Clone Products"}
                 </Button>
               </div>
             </div>
