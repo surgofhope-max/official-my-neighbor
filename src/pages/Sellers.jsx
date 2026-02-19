@@ -303,7 +303,7 @@ export default function Sellers() {
                 Want to become a seller?
               </h3>
               <p className="text-gray-600 mb-4">
-                Join LiveMarket and start selling your products through live streams
+                Join myneighbor.live and start selling your products through live streams
               </p>
               <button
                 onClick={() => navigate(createPageUrl("SellerSafetyAgreement"))}

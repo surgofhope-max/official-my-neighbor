@@ -883,7 +883,7 @@ export default function BuyerProfile() {
             <Clock className="h-5 w-5 text-yellow-600" />
             <AlertDescription className="text-gray-900">
               <strong>Your seller application is under review.</strong> We'll notify you once it's approved. 
-              In the meantime, you can continue shopping on LiveMarket.
+              In the meantime, you can continue shopping on myneighbor.live.
             </AlertDescription>
           </Alert>
         )}
@@ -1122,7 +1122,7 @@ export default function BuyerProfile() {
               <div className="relative text-center">
                 <h3 className="text-2xl font-bold text-white mb-2">Want to start selling?</h3>
                 <p className="text-white/90 mb-4">
-                  Join LiveMarket as a seller and reach customers through live shows
+                  Join myneighbor.live as a seller and reach customers through live shows
                 </p>
                 <Button
                   size="lg"
@@ -1179,7 +1179,7 @@ export default function BuyerProfile() {
             <div className="text-center py-12">
               <ShoppingBag className="w-16 h-16 text-gray-400 mx-auto mb-4" />
               <h3 className="text-lg font-semibold text-gray-900 mb-2">No Orders Yet</h3>
-              <p className="text-gray-600 mb-4">Start shopping on LiveMarket</p>
+              <p className="text-gray-600 mb-4">Start shopping on myneighbor.live</p>
               <Button onClick={() => {
                 setShowOrdersDialog(false);
                 navigate(createPageUrl("Marketplace"));
@@ -1318,7 +1318,7 @@ export default function BuyerProfile() {
           </DialogHeader>
           <div className="text-center space-y-4">
             <p className="text-lg text-gray-700">
-              You're now a <strong className="text-purple-600">Seller</strong> on LiveMarket!
+              You're now a <strong className="text-purple-600">Seller</strong> on myneighbor.live!
             </p>
             <p className="text-gray-600">
               You can now create products, host live shows, and start selling to customers.

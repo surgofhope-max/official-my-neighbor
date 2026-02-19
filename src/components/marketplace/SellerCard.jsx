@@ -82,7 +82,7 @@ export default function SellerCard({ seller, onClick, initialFollowStatus }) {
             type="seller"
             id={seller.id}
             title={seller.business_name || "Seller"}
-            description={seller.bio || `Shop from ${seller.business_name || "this seller"} on AZ Live Market`}
+            description={seller.bio || `Shop from ${seller.business_name || "this seller"} on myneighbor.live`}
             imageUrl={seller.background_image_url || seller.profile_image_url}
             variant="ghost"
             size="icon"

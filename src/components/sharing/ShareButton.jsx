@@ -117,8 +117,8 @@ export default function ShareButton({
   const handleNativeShare = async () => {
     const shareUrl = generateShareUrl();
     const shareData = {
-      title: title || `Check this out on AZ Live Market!`,
-      text: description || `Join this ${type} on AZ Live Market! 🎉`,
+      title: title || `Check this out on myneighbor.live!`,
+      text: description || `Join this ${type} on myneighbor.live! 🎉`,
       url: shareUrl
     };
 
@@ -162,7 +162,7 @@ export default function ShareButton({
     const shareUrl = generateShareUrl();
     const encodedUrl = encodeURIComponent(shareUrl);
     const encodedTitle = encodeURIComponent(title || 'Check this out!');
-    const encodedText = encodeURIComponent(description || `Join this ${type} on AZ Live Market!`);
+    const encodedText = encodeURIComponent(description || `Join this ${type} on myneighbor.live!`);
 
     let shareLink = '';
 
