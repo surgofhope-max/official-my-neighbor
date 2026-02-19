@@ -2,15 +2,26 @@ import React from "react";
 
 export default function About() {
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-purple-50 to-blue-50 pb-20">
-      <div className="max-w-4xl mx-auto px-4 py-8 space-y-8">
+    <div className="relative min-h-screen pb-20">
+      {/* Background Image */}
+      <div
+        className="absolute inset-0 bg-cover bg-center"
+        style={{
+          backgroundImage: "url('https://dpdrkbinnebyksuezgq.supabase.co/storage/v1/object/public/seller-images/06acba31-f911-4dac-9aa0-94a2627484a5.jpg')"
+        }}
+      />
+
+      {/* Dark Overlay */}
+      <div className="absolute inset-0 bg-gradient-to-b from-black/70 via-black/60 to-black/70" />
+
+      <div className="relative z-10 max-w-4xl mx-auto px-4 py-8 space-y-8">
 
         {/* Hero Section */}
         <div className="text-center space-y-3">
-          <h1 className="text-3xl sm:text-4xl font-bold text-gray-900">
+          <h1 className="text-3xl sm:text-4xl font-bold text-white">
             What is MyNeighbor.Live?
           </h1>
-          <p className="text-gray-600 text-base sm:text-lg">
+          <p className="text-gray-200 text-base sm:text-lg">
             Just neighbors doing business with neighbors — Arizona local, live, and personal.
           </p>
         </div>
