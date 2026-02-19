@@ -1,4 +1,5 @@
 import React, { useRef } from "react";
+import marketplaceBubble from "@/assets/marketplace-bubble.jpg";
 import { 
   ChevronLeft, 
   ChevronRight, 
@@ -40,7 +41,7 @@ const ALL_COMMUNITIES_OPTION = {
   name: "all",
   label: "Marketplace",
   icon_name: null,
-  bg_image_url: "https://images.unsplash.com/photo-1488459716781-31db52582fe9?w=400&h=300&fit=crop",
+  bg_image_url: marketplaceBubble,
   color_gradient: "from-purple-500 to-blue-500"
 };
 
