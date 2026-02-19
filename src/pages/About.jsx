@@ -4,10 +4,17 @@ import arizonaDesert from "@/assets/arizona-desert.jpg";
 export default function About() {
   return (
     <div className="min-h-screen relative pb-20 overflow-hidden">
+      {/* Black base - prevents gray flash while image loads */}
+      <div className="absolute inset-0 bg-black" />
+
       {/* Background Image */}
       <div
-        className="absolute inset-0 bg-cover bg-center"
-        style={{ backgroundImage: `url(${arizonaDesert})` }}
+        className="absolute inset-0 bg-center"
+        style={{
+          backgroundImage: `url(${arizonaDesert})`,
+          backgroundSize: window.innerWidth < 768 ? "contain" : "cover",
+          backgroundPosition: "center"
+        }}
       />
 
       {/* Dark Overlay */}
