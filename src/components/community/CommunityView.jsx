@@ -6,6 +6,7 @@ import { MapPin, Package, Store, Home, ShoppingCart, Sparkles, Truck, Leaf, Vide
 import LiveShowCard from "../marketplace/LiveShowCard";
 import UnifiedSearchBar from "../search/UnifiedSearchBar";
 import CommunityCreationCTA from "./CommunityCreationCTA";
+import CommunityInfoSection from "./CommunityInfoSection";
 
 const iconMap = {
   Package, Store, Home, ShoppingCart, Sparkles, Truck, Leaf, Video, Key, Wrench, Heart, Gem
@@ -203,6 +204,9 @@ export default function CommunityView({
 
         {/* Community Creation CTA */}
         <CommunityCreationCTA />
+
+        {/* Community Info Section */}
+        <CommunityInfoSection />
       </div>
     </>
   );
