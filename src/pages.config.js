@@ -29,6 +29,7 @@ import SellerOnboarding from './pages/SellerOnboarding';
 import Login from './pages/Login';
 import Signup from './pages/Signup';
 import ResetPassword from './pages/ResetPassword';
+import About from './pages/About';
 import __Layout from './Layout.jsx';
 
 
@@ -64,6 +65,7 @@ export const PAGES = {
     "login": Login,
     "signup": Signup,
     "reset-password": ResetPassword,
+    "about": About,
 }
 
 export const pagesConfig = {

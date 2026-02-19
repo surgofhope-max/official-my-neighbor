@@ -253,7 +253,7 @@ export default function Layout({ children, currentPageName }) {
   }, [user?.id, forceRefreshIdentity]);
 
   // Pages where header should be shown (lowercase to match normalized route keys)
-  const pagesWithHeader = ['marketplace', 'sellerdashboard', 'buyerprofile', 'admindashboard'];
+  const pagesWithHeader = ['marketplace', 'sellerdashboard', 'buyerprofile', 'admindashboard', 'about'];
   const shouldShowHeader = pagesWithHeader.includes(currentPageName);
 
   // Check if admin is impersonating
