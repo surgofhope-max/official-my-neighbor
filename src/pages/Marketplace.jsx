@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { supabase } from "@/lib/supabase/supabaseClient";
 import { useQuery } from "@tanstack/react-query";
 import { SHOWS_PUBLIC_FIELDS } from "@/api/shows";
@@ -131,8 +131,21 @@ const fallbackCommunities = {
   pawn_shops: { name: "pawn_shops", label: "Pawn Shops", icon_name: "Store", color_gradient: "from-yellow-500 to-orange-500" },
 };
 
+const scrollSection = (ref, direction) => {
+  if (!ref?.current) return;
+  const amount = 320;
+  ref.current.scrollBy({
+    left: direction === "left" ? -amount : amount,
+    behavior: "smooth"
+  });
+};
+
 export default function Marketplace() {
   const navigate = useNavigate();
+  const liveFromFollowedRef = useRef(null);
+  const liveShowsRef = useRef(null);
+  const upcomingShowsRef = useRef(null);
+  const featuredSellersRef = useRef(null);
   const [selectedCommunity, setSelectedCommunity] = useState("all");
   const [user, setUser] = useState(null);
   const [canonicalUserRole, setCanonicalUserRole] = useState(null);
@@ -512,7 +525,16 @@ export default function Marketplace() {
               <h2 className="text-xl sm:text-2xl font-bold text-gray-900">Live From Sellers You Follow</h2>
             </div>
             
-            <div className="overflow-x-scroll snap-x snap-mandatory scrollbar-hide -mx-4">
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => scrollSection(liveFromFollowedRef, "left")}
+                className="hidden lg:flex absolute left-0 top-1/2 -translate-y-1/2 z-20 w-10 h-10 items-center justify-center rounded-full bg-white/90 shadow hover:bg-white transition-colors"
+                aria-label="Scroll left"
+              >
+                ←
+              </button>
+              <div ref={liveFromFollowedRef} className="overflow-x-scroll snap-x snap-mandatory scrollbar-hide -mx-4">
               <div className="flex px-4" style={{ scrollSnapType: 'x mandatory' }}>
                 {Array.from({ length: Math.ceil(liveShowsFromFollowedSellers.length / 4) }).map((_, blockIndex) => {
                   const startIdx = blockIndex * 4;
@@ -536,6 +558,15 @@ export default function Marketplace() {
                   );
                 })}
               </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => scrollSection(liveFromFollowedRef, "right")}
+                className="hidden lg:flex absolute right-0 top-1/2 -translate-y-1/2 z-20 w-10 h-10 items-center justify-center rounded-full bg-white/90 shadow hover:bg-white transition-colors"
+                aria-label="Scroll right"
+              >
+                →
+              </button>
             </div>
           </section>
         )}
@@ -551,7 +582,16 @@ export default function Marketplace() {
               </Badge>
             </div>
             
-            <div className="overflow-x-scroll snap-x snap-mandatory scrollbar-hide -mx-4">
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => scrollSection(liveShowsRef, "left")}
+                className="hidden lg:flex absolute left-0 top-1/2 -translate-y-1/2 z-20 w-10 h-10 items-center justify-center rounded-full bg-white/90 shadow hover:bg-white transition-colors"
+                aria-label="Scroll left"
+              >
+                ←
+              </button>
+              <div ref={liveShowsRef} className="overflow-x-scroll snap-x snap-mandatory scrollbar-hide -mx-4">
               <div className="flex px-4" style={{ scrollSnapType: 'x mandatory' }}>
                 {Array.from({ length: Math.ceil(filteredLiveShows.length / 4) }).map((_, blockIndex) => {
                   const startIdx = blockIndex * 4;
@@ -575,6 +615,15 @@ export default function Marketplace() {
                   );
                 })}
               </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => scrollSection(liveShowsRef, "right")}
+                className="hidden lg:flex absolute right-0 top-1/2 -translate-y-1/2 z-20 w-10 h-10 items-center justify-center rounded-full bg-white/90 shadow hover:bg-white transition-colors"
+                aria-label="Scroll right"
+              >
+                →
+              </button>
             </div>
           </section>
         )}
@@ -590,7 +639,16 @@ export default function Marketplace() {
               </Badge>
             </div>
             
-            <div className="overflow-x-scroll snap-x snap-mandatory scrollbar-hide -mx-4">
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => scrollSection(upcomingShowsRef, "left")}
+                className="hidden lg:flex absolute left-0 top-1/2 -translate-y-1/2 z-20 w-10 h-10 items-center justify-center rounded-full bg-white/90 shadow hover:bg-white transition-colors"
+                aria-label="Scroll left"
+              >
+                ←
+              </button>
+              <div ref={upcomingShowsRef} className="overflow-x-scroll snap-x snap-mandatory scrollbar-hide -mx-4">
               <div className="flex px-4" style={{ scrollSnapType: 'x mandatory' }}>
                 {Array.from({ length: Math.ceil(filteredUpcomingShows.length / 4) }).map((_, blockIndex) => {
                   const startIdx = blockIndex * 4;
@@ -615,6 +673,15 @@ export default function Marketplace() {
                   );
                 })}
               </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => scrollSection(upcomingShowsRef, "right")}
+                className="hidden lg:flex absolute right-0 top-1/2 -translate-y-1/2 z-20 w-10 h-10 items-center justify-center rounded-full bg-white/90 shadow hover:bg-white transition-colors"
+                aria-label="Scroll right"
+              >
+                →
+              </button>
             </div>
           </section>
         )}
@@ -626,7 +693,16 @@ export default function Marketplace() {
               <h2 className="text-2xl sm:text-3xl font-bold text-gray-900">Featured Sellers</h2>
             </div>
             
-            <div className="overflow-x-scroll overflow-y-visible snap-x snap-mandatory scrollbar-hide -mx-4">
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => scrollSection(featuredSellersRef, "left")}
+                className="hidden lg:flex absolute left-0 top-1/2 -translate-y-1/2 z-20 w-10 h-10 items-center justify-center rounded-full bg-white/90 shadow hover:bg-white transition-colors"
+                aria-label="Scroll left"
+              >
+                ←
+              </button>
+              <div ref={featuredSellersRef} className="overflow-x-scroll overflow-y-visible snap-x snap-mandatory scrollbar-hide -mx-4">
               <div className="flex px-4" style={{ scrollSnapType: 'x mandatory' }}>
                 {Array.from({ length: Math.ceil(sellers.length / 4) }).map((_, blockIndex) => {
                   const startIdx = blockIndex * 4;
@@ -650,6 +726,15 @@ export default function Marketplace() {
                   );
                 })}
               </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => scrollSection(featuredSellersRef, "right")}
+                className="hidden lg:flex absolute right-0 top-1/2 -translate-y-1/2 z-20 w-10 h-10 items-center justify-center rounded-full bg-white/90 shadow hover:bg-white transition-colors"
+                aria-label="Scroll right"
+              >
+                →
+              </button>
             </div>
           </section>
         )}
