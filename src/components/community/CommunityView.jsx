@@ -45,7 +45,7 @@ export default function CommunityView({
   return (
     <>
       {/* Header Section */}
-      <div className={`bg-white ${compactHeader ? "rounded-xl bg-gray-100 shadow-sm px-3 py-2 mb-2" : "border-b border-gray-200 py-2"}`}>
+      <div className={`${compactHeader ? "rounded-xl bg-gray-100 shadow-xl px-3 py-2 mb-3" : "bg-white border-b border-gray-200 py-2"}`}>
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           {!hideBackButton && backButton}
           {/* Title Row */}
