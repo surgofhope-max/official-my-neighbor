@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { MapPin, Package, Store, Home, ShoppingCart, Sparkles, Truck, Leaf, Video, Key, AlertCircle, Wrench, Heart, Gem } from "lucide-react";
 import LiveShowCard from "../marketplace/LiveShowCard";
 import UnifiedSearchBar from "../search/UnifiedSearchBar";
+import CommunityCreationCTA from "./CommunityCreationCTA";
 
 const iconMap = {
   Package, Store, Home, ShoppingCart, Sparkles, Truck, Leaf, Video, Key, Wrench, Heart, Gem
@@ -199,6 +200,9 @@ export default function CommunityView({
             ))}
           </div>
         )}
+
+        {/* Community Creation CTA */}
+        <CommunityCreationCTA />
       </div>
     </>
   );
