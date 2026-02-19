@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase/supabaseClient";
+import { useQuery } from "@tanstack/react-query";
+import { SHOWS_PUBLIC_FIELDS } from "@/api/shows";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -81,6 +83,53 @@ function mapSellerCardToLegacy(card) {
     contact_phone: null,
   };
 }
+
+// Community quotes + fallback (same as CommunityPage - for inline CommunityView)
+const communityQuotes = {
+  all: "Where every find has a story and every shop feels like home.",
+  stores: "Where every wrench has a story and every deal sparks something new.",
+  yard_sales: "One neighbor's clutter is another neighbor's treasure. Shop it live, grab it local, laugh about it later.",
+  swap_meets: "Hunt live, score local, brag instantly.",
+  vintage: "Local legends never go out of style — shop live, find stories that last.",
+  az_offroad: "Built for dirt, dust, and deals that roll right into your driveway.",
+  farmers_market: "Grow connections, plant smiles, and pick up your next project down the street.",
+  plant_animal: "For the ones who wag, chirp, and steal our hearts — and our couch space.",
+  infomercial: "Live demos, real results, pickup today — because waiting for shipping is so last decade.",
+  open_house: "Walk through virtually, decide locally, move in with confidence.",
+  fitness: "Push limits, find your crew, and pick up gear that keeps you going strong.",
+  tools: "Where every wrench has a story and every deal sparks something new.",
+  health: "For the ones who wag, chirp, and steal our hearts — and our couch space.",
+  home_garden: "Grow connections, plant smiles, and pick up your next project down the street.",
+  collectibles: "Hunt live, score local, brag instantly.",
+  charity: "Give back, shop local, change lives — one purchase at a time.",
+  electronics: "Tech that works, deals that click, pickup that's instant.",
+  apparel: "Style meets street — try it virtually, grab it locally, wear it proudly.",
+  pawn_shops: "Treasure hunting made easy — deals on everything, pickup around the corner.",
+};
+
+const getCommunityQuote = (name) => communityQuotes[name?.toLowerCase()] || communityQuotes.all;
+
+const fallbackCommunities = {
+  all: { name: "all", label: "All", icon_name: "Package", color_gradient: "from-purple-500 to-blue-500" },
+  stores: { name: "stores", label: "Stores", icon_name: "Store", color_gradient: "from-blue-500 to-cyan-500" },
+  yard_sales: { name: "yard_sales", label: "Yard Sales", icon_name: "Home", color_gradient: "from-green-500 to-emerald-500" },
+  swap_meets: { name: "swap_meets", label: "Swap Meets", icon_name: "ShoppingCart", color_gradient: "from-orange-500 to-red-500" },
+  vintage: { name: "vintage", label: "Vintage", icon_name: "Sparkles", color_gradient: "from-amber-500 to-yellow-500" },
+  az_offroad: { name: "az_offroad", label: "AZ Off-Road", icon_name: "Truck", color_gradient: "from-red-500 to-orange-500" },
+  farmers_market: { name: "farmers_market", label: "Farmer's Market", icon_name: "Leaf", color_gradient: "from-lime-500 to-green-500" },
+  plant_animal: { name: "plant_animal", label: "Plant & Animal", icon_name: "Leaf", color_gradient: "from-teal-500 to-cyan-500" },
+  infomercial: { name: "infomercial", label: "Infomercial", icon_name: "Video", color_gradient: "from-indigo-500 to-purple-500" },
+  open_house: { name: "open_house", label: "Open House", icon_name: "Key", color_gradient: "from-pink-500 to-rose-500" },
+  fitness: { name: "fitness", label: "Fitness", icon_name: "Heart", color_gradient: "from-red-500 to-pink-500" },
+  tools: { name: "tools", label: "Tools", icon_name: "Wrench", color_gradient: "from-gray-500 to-slate-500" },
+  health: { name: "health", label: "Health & Wellness", icon_name: "Heart", color_gradient: "from-rose-500 to-pink-500" },
+  home_garden: { name: "home_garden", label: "Home & Garden", icon_name: "Home", color_gradient: "from-green-500 to-emerald-500" },
+  collectibles: { name: "collectibles", label: "Collectibles", icon_name: "Gem", color_gradient: "from-purple-500 to-indigo-500" },
+  charity: { name: "charity", label: "Charity", icon_name: "Heart", color_gradient: "from-red-500 to-rose-500" },
+  electronics: { name: "electronics", label: "Electronics", icon_name: "Package", color_gradient: "from-blue-500 to-indigo-500" },
+  apparel: { name: "apparel", label: "Apparel", icon_name: "ShoppingCart", color_gradient: "from-fuchsia-500 to-purple-500" },
+  pawn_shops: { name: "pawn_shops", label: "Pawn Shops", icon_name: "Store", color_gradient: "from-yellow-500 to-orange-500" },
+};
 
 export default function Marketplace() {
   const navigate = useNavigate();
@@ -295,6 +344,84 @@ export default function Marketplace() {
     acc[seller.id] = seller;
     return acc;
   }, {});
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Inline CommunityView queries (same as CommunityPage - enabled when non-"all")
+  // ═══════════════════════════════════════════════════════════════════════════
+  const isCommunityView = selectedCommunity && selectedCommunity !== "all";
+
+  const { data: dbCommunity } = useQuery({
+    queryKey: ['community-by-slug', selectedCommunity],
+    queryFn: async () => {
+      if (!selectedCommunity) return null;
+      const { data, error } = await supabase
+        .from("communities")
+        .select("id,name,label,bio,icon_name,bg_image_url,color_gradient,zip_code")
+        .ilike("name", selectedCommunity)
+        .eq("is_active", true)
+        .maybeSingle();
+      if (error) return null;
+      return data || null;
+    },
+    enabled: isCommunityView
+  });
+
+  const matchesCommunity = (show, communityId, communityNameStr) => {
+    if (show.community_id && communityId) return show.community_id === communityId;
+    if (!show.community_id && communityNameStr) return show.community?.toLowerCase() === communityNameStr?.toLowerCase();
+    return false;
+  };
+
+  const { data: communityLiveShows = [], isLoading: communityLiveShowsLoading } = useQuery({
+    queryKey: ['community-live-shows', selectedCommunity, dbCommunity?.id],
+    queryFn: async () => {
+      if (!selectedCommunity) return [];
+      const { data, error } = await supabase
+        .from("shows")
+        .select(SHOWS_PUBLIC_FIELDS)
+        .eq("status", "live")
+        .order("viewer_count", { ascending: false });
+      if (error) return [];
+      return (data || []).filter(show => matchesCommunity(show, dbCommunity?.id, selectedCommunity));
+    },
+    enabled: isCommunityView,
+    refetchInterval: 5000
+  });
+
+  const { data: communityUpcomingShows = [], isLoading: communityUpcomingShowsLoading } = useQuery({
+    queryKey: ['community-upcoming-shows', selectedCommunity, dbCommunity?.id],
+    queryFn: async () => {
+      if (!selectedCommunity) return [];
+      const { data, error } = await supabase
+        .from("shows")
+        .select(SHOWS_PUBLIC_FIELDS)
+        .eq("status", "scheduled")
+        .order("scheduled_start_time", { ascending: true });
+      if (error) return [];
+      return (data || []).filter(show => matchesCommunity(show, dbCommunity?.id, selectedCommunity));
+    },
+    enabled: isCommunityView
+  });
+
+  const { data: communityAllSellers = [] } = useQuery({
+    queryKey: ['all-sellers-map-community'],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("sellers")
+        .select("id, user_id, business_name, profile_image_url, pickup_city, pickup_state, status");
+      if (error) return [];
+      return data ?? [];
+    },
+    enabled: isCommunityView
+  });
+
+  const communitySellersMap = communityAllSellers.reduce((acc, s) => {
+    acc[s.id] = s;
+    return acc;
+  }, {});
+
+  const community = dbCommunity || (selectedCommunity ? fallbackCommunities[selectedCommunity?.toLowerCase()] : null);
+  const communityQuote = getCommunityQuote(selectedCommunity);
 
   // ═══════════════════════════════════════════════════════════════════════════
   // STEP C6-E: Communities now loaded from Supabase via loadCommunities()
@@ -565,16 +692,16 @@ export default function Marketplace() {
         ) : (
           <CommunityView
             communityName={selectedCommunity}
-            community={null}
-            dbCommunity={null}
-            liveShows={[]}
-            upcomingShows={[]}
-            liveShowsLoading={false}
-            upcomingShowsLoading={false}
-            sellersMap={{}}
+            community={community}
+            dbCommunity={dbCommunity}
+            liveShows={communityLiveShows}
+            upcomingShows={communityUpcomingShows}
+            liveShowsLoading={communityLiveShowsLoading}
+            upcomingShowsLoading={communityUpcomingShowsLoading}
+            sellersMap={communitySellersMap}
             navigate={navigate}
             createPageUrl={createPageUrl}
-            communityQuote=""
+            communityQuote={communityQuote}
             hideBackButton={true}
           />
         )}
