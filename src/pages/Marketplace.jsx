@@ -703,6 +703,7 @@ export default function Marketplace() {
             createPageUrl={createPageUrl}
             communityQuote={communityQuote}
             hideBackButton={true}
+            compactHeader={true}
           />
         )}
       </div>

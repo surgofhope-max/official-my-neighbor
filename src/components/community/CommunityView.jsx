@@ -15,6 +15,7 @@ const iconMap = {
  * No data fetching - all data passed as props.
  * @param {React.ReactNode} [backButton] - Optional back button to render in header (stays in page, not part of extraction)
  * @param {boolean} [hideBackButton] - When true, do not render back button slot (for inline usage)
+ * @param {boolean} [compactHeader] - When true, use compact card-style header (for Marketplace inline)
  */
 export default function CommunityView({
   communityName,
@@ -30,6 +31,7 @@ export default function CommunityView({
   communityQuote,
   backButton,
   hideBackButton,
+  compactHeader = false,
 }) {
   const CommunityIcon = iconMap[community?.icon_name] || Package;
   const totalShows = (liveShows?.length || 0) + (upcomingShows?.length || 0);
@@ -37,7 +39,7 @@ export default function CommunityView({
   return (
     <>
       {/* Header Section */}
-      <div className="bg-white border-b border-gray-200 py-2">
+      <div className={`bg-white ${compactHeader ? "rounded-2xl shadow-sm px-4 py-4 mb-4" : "border-b border-gray-200 py-2"}`}>
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           {!hideBackButton && backButton}
           {/* Title Row */}
@@ -56,6 +58,8 @@ export default function CommunityView({
             </p>
           </div>
 
+      {!compactHeader && (
+        <>
       {/* Search Bar + Near Me */}
       <div className="max-w-2xl mx-auto">
         <div className="flex gap-2">
@@ -72,6 +76,8 @@ export default function CommunityView({
           </Button>
         </div>
       </div>
+        </>
+      )}
         </div>
       </div>
 
