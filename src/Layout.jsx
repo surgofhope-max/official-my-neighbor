@@ -91,7 +91,8 @@ import {
   User,
   Store,
   MessageCircle,
-  Mail
+  Mail,
+  Info
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -1249,7 +1250,12 @@ export default function Layout({ children, currentPageName }) {
   // Non-logged-in visitor navigation - ONLY these 4 items, NO Profile/Orders
   const visitorNav = [
     { title: "Login", url: "#login", icon: User, isLogin: true },
-    { title: "Live", url: createPageUrl("Marketplace"), icon: Radio, isLive: true },
+    {
+      title: "About",
+      url: createPageUrl("About"),
+      icon: Info,
+      isAbout: true
+    },
     { title: "Community", url: createPageUrl("Communities"), icon: Users },
     { title: "Marketplace", url: createPageUrl("Marketplace"), icon: ShoppingBag, isMarketplace: true },
   ];
