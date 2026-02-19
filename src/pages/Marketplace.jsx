@@ -529,7 +529,7 @@ export default function Marketplace() {
               <button
                 type="button"
                 onClick={() => scrollSection(liveFromFollowedRef, "left")}
-                className="hidden lg:flex absolute left-0 top-1/2 -translate-y-1/2 z-20 w-10 h-10 items-center justify-center rounded-full bg-white/90 shadow hover:bg-white transition-colors"
+                className="hidden lg:flex absolute left-0 top-1/2 -translate-y-1/2 z-20 w-10 h-10 items-center justify-center rounded-full bg-gradient-to-r from-orange-500 to-yellow-400 hover:from-orange-600 hover:to-yellow-500 text-white shadow-lg transition-all hover:scale-105"
                 aria-label="Scroll left"
               >
                 ←
@@ -562,7 +562,7 @@ export default function Marketplace() {
               <button
                 type="button"
                 onClick={() => scrollSection(liveFromFollowedRef, "right")}
-                className="hidden lg:flex absolute right-0 top-1/2 -translate-y-1/2 z-20 w-10 h-10 items-center justify-center rounded-full bg-white/90 shadow hover:bg-white transition-colors"
+                className="hidden lg:flex absolute right-0 top-1/2 -translate-y-1/2 z-20 w-10 h-10 items-center justify-center rounded-full bg-gradient-to-r from-orange-500 to-yellow-400 hover:from-orange-600 hover:to-yellow-500 text-white shadow-lg transition-all hover:scale-105"
                 aria-label="Scroll right"
               >
                 →
@@ -586,7 +586,7 @@ export default function Marketplace() {
               <button
                 type="button"
                 onClick={() => scrollSection(liveShowsRef, "left")}
-                className="hidden lg:flex absolute left-0 top-1/2 -translate-y-1/2 z-20 w-10 h-10 items-center justify-center rounded-full bg-white/90 shadow hover:bg-white transition-colors"
+                className="hidden lg:flex absolute left-0 top-1/2 -translate-y-1/2 z-20 w-10 h-10 items-center justify-center rounded-full bg-gradient-to-r from-orange-500 to-yellow-400 hover:from-orange-600 hover:to-yellow-500 text-white shadow-lg transition-all hover:scale-105"
                 aria-label="Scroll left"
               >
                 ←
@@ -619,7 +619,7 @@ export default function Marketplace() {
               <button
                 type="button"
                 onClick={() => scrollSection(liveShowsRef, "right")}
-                className="hidden lg:flex absolute right-0 top-1/2 -translate-y-1/2 z-20 w-10 h-10 items-center justify-center rounded-full bg-white/90 shadow hover:bg-white transition-colors"
+                className="hidden lg:flex absolute right-0 top-1/2 -translate-y-1/2 z-20 w-10 h-10 items-center justify-center rounded-full bg-gradient-to-r from-orange-500 to-yellow-400 hover:from-orange-600 hover:to-yellow-500 text-white shadow-lg transition-all hover:scale-105"
                 aria-label="Scroll right"
               >
                 →
@@ -643,7 +643,7 @@ export default function Marketplace() {
               <button
                 type="button"
                 onClick={() => scrollSection(upcomingShowsRef, "left")}
-                className="hidden lg:flex absolute left-0 top-1/2 -translate-y-1/2 z-20 w-10 h-10 items-center justify-center rounded-full bg-white/90 shadow hover:bg-white transition-colors"
+                className="hidden lg:flex absolute left-0 top-1/2 -translate-y-1/2 z-20 w-10 h-10 items-center justify-center rounded-full bg-gradient-to-r from-orange-500 to-yellow-400 hover:from-orange-600 hover:to-yellow-500 text-white shadow-lg transition-all hover:scale-105"
                 aria-label="Scroll left"
               >
                 ←
@@ -677,7 +677,7 @@ export default function Marketplace() {
               <button
                 type="button"
                 onClick={() => scrollSection(upcomingShowsRef, "right")}
-                className="hidden lg:flex absolute right-0 top-1/2 -translate-y-1/2 z-20 w-10 h-10 items-center justify-center rounded-full bg-white/90 shadow hover:bg-white transition-colors"
+                className="hidden lg:flex absolute right-0 top-1/2 -translate-y-1/2 z-20 w-10 h-10 items-center justify-center rounded-full bg-gradient-to-r from-orange-500 to-yellow-400 hover:from-orange-600 hover:to-yellow-500 text-white shadow-lg transition-all hover:scale-105"
                 aria-label="Scroll right"
               >
                 →
@@ -697,7 +697,7 @@ export default function Marketplace() {
               <button
                 type="button"
                 onClick={() => scrollSection(featuredSellersRef, "left")}
-                className="hidden lg:flex absolute left-0 top-1/2 -translate-y-1/2 z-20 w-10 h-10 items-center justify-center rounded-full bg-white/90 shadow hover:bg-white transition-colors"
+                className="hidden lg:flex absolute left-0 top-1/2 -translate-y-1/2 z-20 w-10 h-10 items-center justify-center rounded-full bg-gradient-to-r from-orange-500 to-yellow-400 hover:from-orange-600 hover:to-yellow-500 text-white shadow-lg transition-all hover:scale-105"
                 aria-label="Scroll left"
               >
                 ←
@@ -730,7 +730,7 @@ export default function Marketplace() {
               <button
                 type="button"
                 onClick={() => scrollSection(featuredSellersRef, "right")}
-                className="hidden lg:flex absolute right-0 top-1/2 -translate-y-1/2 z-20 w-10 h-10 items-center justify-center rounded-full bg-white/90 shadow hover:bg-white transition-colors"
+                className="hidden lg:flex absolute right-0 top-1/2 -translate-y-1/2 z-20 w-10 h-10 items-center justify-center rounded-full bg-gradient-to-r from-orange-500 to-yellow-400 hover:from-orange-600 hover:to-yellow-500 text-white shadow-lg transition-all hover:scale-105"
                 aria-label="Scroll right"
               >
                 →
