@@ -167,7 +167,9 @@ export default function CommunityView({
                   View All Communities
                 </Button>
                 <Button
-                  onClick={() => navigate(createPageUrl("Marketplace"))}
+                  onClick={() => {
+                    window.dispatchEvent(new Event("resetMarketplace"));
+                  }}
                   className="bg-gradient-to-r from-purple-600 to-blue-500 text-xs sm:text-sm py-2"
                 >
                   Back to Marketplace
