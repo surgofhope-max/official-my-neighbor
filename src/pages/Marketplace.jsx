@@ -701,7 +701,7 @@ export default function Marketplace() {
           </section>
         )}
           </>
-        ) : isCommunityView && communityLoading ? null : (
+        ) : isCommunityView && (communityLoading || communityLiveShowsLoading || communityUpcomingShowsLoading) ? null : (
           <CommunityView
             communityName={selectedCommunity}
             community={community}
