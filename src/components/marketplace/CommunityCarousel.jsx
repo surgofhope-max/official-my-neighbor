@@ -38,8 +38,8 @@ const iconMap = {
 const ALL_COMMUNITIES_OPTION = {
   id: "all",
   name: "all",
-  label: "All",
-  icon_name: "Package",
+  label: "Marketplace",
+  icon_name: "ShoppingBag",
   bg_image_url: "https://images.unsplash.com/photo-1607082348824-0a96f2a4b9da?w=400&h=300&fit=crop",
   color_gradient: "from-purple-500 to-blue-500"
 };
