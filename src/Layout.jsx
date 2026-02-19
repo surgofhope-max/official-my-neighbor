@@ -1226,14 +1226,14 @@ export default function Layout({ children, currentPageName }) {
   const isPendingSeller = !isSuperAdmin(user) && seller && seller.status === "pending" && !isVerifiedApprovedSeller;
 
   const sellerNav = [
-    { title: "Marketplace", url: createPageUrl("Marketplace"), icon: ShoppingBag },
+    { title: "Marketplace", url: createPageUrl("Marketplace"), icon: ShoppingBag, isMarketplace: true },
     { title: "Communities", url: createPageUrl("Communities"), icon: Users },
     { title: "Dashboard", url: createPageUrl("SellerDashboard"), icon: LayoutDashboard },
     { title: "Orders", url: createPageUrl("SellerOrders"), icon: Receipt },
   ];
 
   const buyerNav = [
-    { title: "Marketplace", url: createPageUrl("Marketplace"), icon: ShoppingBag },
+    { title: "Marketplace", url: createPageUrl("Marketplace"), icon: ShoppingBag, isMarketplace: true },
     { title: "Communities", url: createPageUrl("Communities"), icon: Users },
     { title: "My Orders", url: createPageUrl("BuyerOrders"), icon: Receipt },
     { title: "Profile", url: createPageUrl("BuyerProfile"), icon: User },
@@ -1241,7 +1241,7 @@ export default function Layout({ children, currentPageName }) {
 
   // Admin navigation - platform management only (V1)
   const adminNav = [
-    { title: "Marketplace", url: createPageUrl("Marketplace"), icon: ShoppingBag },
+    { title: "Marketplace", url: createPageUrl("Marketplace"), icon: ShoppingBag, isMarketplace: true },
     { title: "Dashboard", url: createPageUrl("AdminDashboard"), icon: LayoutDashboard },
     { title: "Sellers", url: createPageUrl("AdminSellers"), icon: Store },
   ];
@@ -1259,7 +1259,7 @@ export default function Layout({ children, currentPageName }) {
   // Shows minimal navigation - no seller dashboard, no orders, just browsing
   // ═══════════════════════════════════════════════════════════════════════════
   const suspendedNav = [
-    { title: "Marketplace", url: createPageUrl("Marketplace"), icon: ShoppingBag },
+    { title: "Marketplace", url: createPageUrl("Marketplace"), icon: ShoppingBag, isMarketplace: true },
     { title: "Communities", url: createPageUrl("Communities"), icon: Users },
     { title: "Profile", url: createPageUrl("BuyerProfile"), icon: User },
   ];
