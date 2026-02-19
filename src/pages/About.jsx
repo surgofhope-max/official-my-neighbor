@@ -2,10 +2,10 @@ import React from "react";
 
 export default function About() {
   return (
-    <div className="relative min-h-screen pb-20">
+    <div className="relative min-h-screen pb-20 overflow-hidden">
       {/* Background Image */}
       <div
-        className="absolute inset-0 bg-cover bg-center"
+        className="absolute inset-0 bg-cover bg-center border-4 border-red-500"
         style={{
           backgroundImage: "url('https://dpdrkbinnebyksuezgq.supabase.co/storage/v1/object/public/seller-images/06acba31-f911-4dac-9aa0-94a2627484a5.jpg')"
         }}
