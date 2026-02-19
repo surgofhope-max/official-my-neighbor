@@ -39,8 +39,8 @@ const ALL_COMMUNITIES_OPTION = {
   id: "all",
   name: "all",
   label: "Marketplace",
-  icon_name: "ShoppingBag",
-  bg_image_url: "https://images.unsplash.com/photo-1607082348824-0a96f2a4b9da?w=400&h=300&fit=crop",
+  icon_name: null,
+  bg_image_url: "https://images.unsplash.com/photo-1488459716781-31db52582fe9?w=400&h=300&fit=crop",
   color_gradient: "from-purple-500 to-blue-500"
 };
 
@@ -166,7 +166,7 @@ export default function CommunityCarousel({ selectedCommunity, onSelectCommunity
 
               {/* Content */}
               <div className="relative h-full flex flex-col items-center justify-between p-2">
-                {(!hasCustomPhoto || community.icon_name) && (
+                {community.icon_name && Icon && (
                   <div className={`
                     w-7 h-7 sm:w-9 sm:h-9 rounded-lg bg-white/20 backdrop-blur-sm
                     flex items-center justify-center transition-all
