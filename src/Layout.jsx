@@ -1440,14 +1440,6 @@ export default function Layout({ children, currentPageName }) {
                       )}
                     </Button>
                   )}
-                  {!user && !isLoadingAuth && (
-                    <Button
-                      onClick={() => navigate("/Login")}
-                      className="bg-gradient-to-r from-purple-600 to-blue-500 text-white font-semibold"
-                    >
-                      Login
-                    </Button>
-                  )}
                   {user ? (
                     <div className="flex items-center gap-2">
                       <button
@@ -1480,10 +1472,10 @@ export default function Layout({ children, currentPageName }) {
                     </div>
                   ) : (
                     <Button
-                      onClick={() => navigate("/Login")}
+                      onClick={() => navigate(createPageUrl("Signup"))}
                       className="bg-gradient-to-r from-purple-600 to-blue-500 text-white font-semibold"
                     >
-                      Login
+                      Create Account
                     </Button>
                   )}
                 </div>
