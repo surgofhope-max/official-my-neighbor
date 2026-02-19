@@ -722,6 +722,23 @@ export default function Marketplace() {
         )}
       </div>
 
+      {/* Marketplace Footer */}
+      <div className="text-center py-10 text-xs text-gray-500 space-y-2">
+        <div>
+          © 2026 MyNeighbor.Live — All rights reserved
+        </div>
+
+        <div className="flex justify-center gap-4 text-gray-400">
+          <span className="cursor-pointer hover:text-gray-600">Terms</span>
+          <span className="cursor-pointer hover:text-gray-600">Privacy</span>
+          <span className="cursor-pointer hover:text-gray-600">Contact</span>
+        </div>
+
+        <div className="text-[10px] text-gray-400">
+          v0.420.0
+        </div>
+      </div>
+
       {/* Hide Scrollbar CSS */}
       <style>{`
         .scrollbar-hide::-webkit-scrollbar {
