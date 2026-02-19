@@ -1564,7 +1564,16 @@ export default function Layout({ children, currentPageName }) {
                       </span>
                     </button>
                   ) : (
-                    <Link key={item.title + index} to={item.url} className="flex-1">
+                    <Link
+                      key={item.title + index}
+                      to={item.url}
+                      className="flex-1"
+                      onClick={() => {
+                        if (item.isMarketplace) {
+                          window.dispatchEvent(new Event("resetMarketplace"));
+                        }
+                      }}
+                    >
                       <button
                         className={`w-full flex flex-col items-center justify-center gap-1 py-2 px-1 transition-all relative ${
                           isActive

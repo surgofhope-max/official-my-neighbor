@@ -145,6 +145,15 @@ export default function Marketplace() {
   const [followedSellers, setFollowedSellers] = useState([]);
   const [communities, setCommunities] = useState([]);
 
+  // Listen for bottom nav Marketplace click → reset to default view
+  useEffect(() => {
+    const resetHandler = () => {
+      setSelectedCommunity("all");
+    };
+    window.addEventListener("resetMarketplace", resetHandler);
+    return () => window.removeEventListener("resetMarketplace", resetHandler);
+  }, []);
+
   // Load user and communities on component mount
   useEffect(() => {
     loadUser();
