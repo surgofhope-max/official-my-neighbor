@@ -713,6 +713,7 @@ export default function Marketplace() {
             communityQuote={communityQuote}
             hideBackButton={true}
             compactHeader={true}
+            showMarketplaceBackButton={true}
           />
         )}
       </div>

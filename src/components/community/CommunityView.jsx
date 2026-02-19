@@ -16,6 +16,7 @@ const iconMap = {
  * @param {React.ReactNode} [backButton] - Optional back button to render in header (stays in page, not part of extraction)
  * @param {boolean} [hideBackButton] - When true, do not render back button slot (for inline usage)
  * @param {boolean} [compactHeader] - When true, use compact card-style header (for Marketplace inline)
+ * @param {boolean} [showMarketplaceBackButton] - When true, show "Back to Marketplace" in empty state (inline only)
  */
 export default function CommunityView({
   communityName,
@@ -32,6 +33,7 @@ export default function CommunityView({
   backButton,
   hideBackButton,
   compactHeader = false,
+  showMarketplaceBackButton = false,
 }) {
   const CommunityIcon = iconMap[community?.icon_name] || Package;
   const totalShows = (liveShows?.length || 0) + (upcomingShows?.length || 0);
@@ -166,6 +168,7 @@ export default function CommunityView({
                 >
                   View All Communities
                 </Button>
+                {showMarketplaceBackButton && (
                 <Button
                   onClick={() => {
                     window.dispatchEvent(new Event("resetMarketplace"));
@@ -174,6 +177,7 @@ export default function CommunityView({
                 >
                   Back to Marketplace
                 </Button>
+                )}
               </div>
             </CardContent>
           </Card>
