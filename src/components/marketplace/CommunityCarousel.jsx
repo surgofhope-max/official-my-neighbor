@@ -86,20 +86,16 @@ export default function CommunityCarousel({ selectedCommunity, onSelectCommunity
   };
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // STEP C6-E.2 PART A: Navigate to CommunityPage instead of filtering in place
-  // "All" stays on Marketplace, specific communities navigate to CommunityPage
+  // Community click: onSelectCommunity takes precedence; fallback to navigation
+  // When onSelectCommunity exists (e.g. Marketplace inline view), never navigate
   // ═══════════════════════════════════════════════════════════════════════════
   const handleCommunityClick = (communityName) => {
-    if (communityName === "all") {
-      // "All" means show everything on Marketplace - stay here
-      // Optionally notify parent to clear any filter
-      if (onSelectCommunity) {
-        onSelectCommunity("all");
-      }
-    } else {
-      // Navigate to the canonical CommunityPage
-      navigate(createPageUrl("CommunityPage") + `?community=${communityName}`);
+    if (onSelectCommunity) {
+      onSelectCommunity(communityName);
+      return;
     }
+    if (communityName === "all") return;
+    navigate(createPageUrl("CommunityPage") + `?community=${communityName}`);
   };
 
   return (

@@ -9,6 +9,7 @@ import { createPageUrl } from "@/utils";
 import LiveShowCard from "../components/marketplace/LiveShowCard";
 import SellerCard from "../components/marketplace/SellerCard";
 import CommunityCarousel from "../components/marketplace/CommunityCarousel";
+import CommunityView from "../components/community/CommunityView";
 import UnifiedSearchBar from "../components/search/UnifiedSearchBar";
 import { getLiveShowsWithStats, getScheduledShows } from "@/api/shows";
 
@@ -360,8 +361,10 @@ export default function Marketplace() {
         </div>
       </div>
 
-      {/* TIGHTENED: Main Content - Reduced space-y-4 to space-y-2 (50% reduction between sections) */}
+      {/* Main Content - Marketplace sections or inline CommunityView */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-1 pb-4 space-y-1">
+        {selectedCommunity === "all" ? (
+          <>
         {/* CLEANED UP: Live from Followed Sellers - Single line, no badge, tighter spacing */}
         {user && liveShowsFromFollowedSellers.length > 0 && (
           <section>
@@ -557,6 +560,23 @@ export default function Marketplace() {
               </CardContent>
             </Card>
           </section>
+        )}
+          </>
+        ) : (
+          <CommunityView
+            communityName={selectedCommunity}
+            community={null}
+            dbCommunity={null}
+            liveShows={[]}
+            upcomingShows={[]}
+            liveShowsLoading={false}
+            upcomingShowsLoading={false}
+            sellersMap={{}}
+            navigate={navigate}
+            createPageUrl={createPageUrl}
+            communityQuote=""
+            hideBackButton={true}
+          />
         )}
       </div>
 

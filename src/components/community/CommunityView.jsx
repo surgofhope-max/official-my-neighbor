@@ -14,6 +14,7 @@ const iconMap = {
  * Presentational component for community content (title, search, live/upcoming shows).
  * No data fetching - all data passed as props.
  * @param {React.ReactNode} [backButton] - Optional back button to render in header (stays in page, not part of extraction)
+ * @param {boolean} [hideBackButton] - When true, do not render back button slot (for inline usage)
  */
 export default function CommunityView({
   communityName,
@@ -28,6 +29,7 @@ export default function CommunityView({
   createPageUrl,
   communityQuote,
   backButton,
+  hideBackButton,
 }) {
   const CommunityIcon = iconMap[community?.icon_name] || Package;
   const totalShows = (liveShows?.length || 0) + (upcomingShows?.length || 0);
@@ -37,13 +39,13 @@ export default function CommunityView({
       {/* Header Section */}
       <div className="bg-white border-b border-gray-200 py-2">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          {backButton}
+          {!hideBackButton && backButton}
           {/* Title Row */}
           <div className="text-center mb-2">
             <div className="flex items-center justify-center gap-2">
               <CommunityIcon className="w-5 h-5 text-gray-900" />
               <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">
-                {community?.label || community?.name}
+                {community?.label || community?.name || communityName}
               </h1>
               <Badge className="bg-gray-200 text-gray-900 border-0 text-xs px-2 py-0.5">
                 {totalShows}
