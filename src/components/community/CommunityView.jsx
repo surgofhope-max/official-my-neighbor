@@ -17,11 +17,13 @@ const iconMap = {
  * @param {boolean} [hideBackButton] - When true, do not render back button slot (for inline usage)
  * @param {boolean} [compactHeader] - When true, use compact card-style header (for Marketplace inline)
  * @param {boolean} [showMarketplaceBackButton] - When true, show "Back to Marketplace" in empty state (inline only)
+ * @param {boolean} [communityLoading] - When true, community query is loading (hide temporary banner)
  */
 export default function CommunityView({
   communityName,
   community,
   dbCommunity,
+  communityLoading = false,
   liveShows,
   upcomingShows,
   liveShowsLoading,
@@ -86,7 +88,7 @@ export default function CommunityView({
       {/* Main Content - Minimal Top Padding */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-2 pb-8 space-y-4">
         {/* Debug Info Badge - Minimal */}
-        {!dbCommunity && (
+        {!communityLoading && !dbCommunity && (
           <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-2">
             <div className="flex items-start gap-2">
               <AlertCircle className="w-3.5 h-3.5 text-yellow-600 mt-0.5 flex-shrink-0" />

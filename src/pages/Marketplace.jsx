@@ -359,7 +359,10 @@ export default function Marketplace() {
   // ═══════════════════════════════════════════════════════════════════════════
   const isCommunityView = selectedCommunity && selectedCommunity !== "all";
 
-  const { data: dbCommunity } = useQuery({
+  const {
+    data: dbCommunity,
+    isLoading: communityLoading
+  } = useQuery({
     queryKey: ['community-by-slug', selectedCommunity],
     queryFn: async () => {
       if (!selectedCommunity) return null;
@@ -703,6 +706,7 @@ export default function Marketplace() {
             communityName={selectedCommunity}
             community={community}
             dbCommunity={dbCommunity}
+            communityLoading={communityLoading}
             liveShows={communityLiveShows}
             upcomingShows={communityUpcomingShows}
             liveShowsLoading={communityLiveShowsLoading}
