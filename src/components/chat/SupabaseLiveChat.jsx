@@ -555,42 +555,47 @@ export default function SupabaseLiveChat({
             <p className="text-xs text-white font-medium">You are banned from chatting</p>
           </div>
         ) : (
-          <form onSubmit={handleSend} className="flex gap-2">
-            <div className="flex-1 relative">
+          <form onSubmit={handleSend} className="w-full">
+            <div className="relative w-full">
               <Input
                 value={newMessage}
                 onChange={(e) => setNewMessage(e.target.value)}
                 onKeyPress={handleKeyPress}
-                placeholder={isChatAvailable ? "Type a message..." : "Chat ended"}
+                placeholder={isChatAvailable ? "Let's chat Arizona" : "Chat ended"}
                 disabled={isSending || !isChatAvailable}
                 maxLength={500}
-                className={`
-                  ${isOverlay
-                    ? "bg-black/60 backdrop-blur-md border-white/20 text-white placeholder:text-white/50"
-                    : "bg-white/10 border-gray-600 text-white"
-                  }
-                  pr-12
-                `}
+                className="
+                  w-full
+                  rounded-full
+                  bg-black/40
+                  backdrop-blur-md
+                  border border-white/30
+                  text-white
+                  placeholder:text-white/70
+                  px-5
+                  py-3
+                  pr-14
+                  focus:outline-none
+                  focus:ring-0
+                "
               />
-              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-white/40">
-                {newMessage.length}/500
-              </span>
+              <button
+                type="submit"
+                disabled={isSending || !isChatAvailable}
+                className={`absolute right-2 top-1/2 -translate-y-1/2
+                  w-9 h-9
+                  rounded-full
+                  flex items-center justify-center
+                  transition-all duration-200
+                  ${newMessage.trim().length > 0
+                    ? "bg-white text-black opacity-100"
+                    : "opacity-0 pointer-events-none"
+                  }`}
+              >
+                <Send className="w-4 h-4" />
+              </button>
             </div>
-          <Button
-            type="button"
-            onClick={handleSend}
-            disabled={!newMessage.trim() || isSending || !isChatAvailable}
-            className={`
-              ${isOverlay
-                ? "bg-purple-600 hover:bg-purple-700"
-                : "bg-purple-600 hover:bg-purple-700"
-              }
-              text-white
-            `}
-          >
-            <Send className="w-4 h-4" />
-          </Button>
-        </form>
+          </form>
         )
       ) : (
         <div className="text-center py-2">
