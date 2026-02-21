@@ -539,6 +539,10 @@ export default function LiveShow() {
       setActiveCheckoutIntentId(intent.id);
       setSelectedProduct(product);
       setExpandedProduct(null);
+      if (ENABLE_BUYER_PRODUCT_OVERLAY) {
+        setShowProductOverlay(false);
+        setOverlaySelectedProduct(null);
+      }
       setShowCheckout(true);
     } catch (err) {
       const message = err?.message || "Could not start checkout. Please try again.";
