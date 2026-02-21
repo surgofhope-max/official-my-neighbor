@@ -923,7 +923,7 @@ export default function LiveShow() {
 
         {/* Shop Button - Buyer Product Overlay (feature flagged) */}
         {ENABLE_BUYER_PRODUCT_OVERLAY && (
-          <div className="fixed right-4 bottom-[45%] z-[250] flex flex-col items-center">
+          <div className="fixed right-4 bottom-[55vh] z-[250] flex flex-col items-center">
             <span className="text-[10px] font-bold tracking-widest text-white mb-1 drop-shadow-lg">
               SHOP
             </span>
