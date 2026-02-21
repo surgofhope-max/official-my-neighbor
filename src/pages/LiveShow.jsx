@@ -1029,7 +1029,7 @@ export default function LiveShow() {
         {expandedProduct && (
         <div 
           className="fixed left-4 right-4 z-[100] animate-slide-up flex justify-center"
-          style={{ bottom: '150px' }}
+          style={{ bottom: '110px' }}
         >
           <div 
             className="backdrop-blur-md rounded-2xl shadow-xl w-full max-w-sm border border-white/10 overflow-hidden bg-black/30"
