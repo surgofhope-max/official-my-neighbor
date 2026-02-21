@@ -923,12 +923,30 @@ export default function LiveShow() {
 
         {/* Shop Button - Buyer Product Overlay (feature flagged) */}
         {ENABLE_BUYER_PRODUCT_OVERLAY && (
-          <button
-            onClick={() => setShowProductOverlay(true)}
-            className="fixed right-4 bottom-32 z-[250] bg-purple-600 text-white rounded-full px-4 py-2 shadow-lg"
-          >
-            Shop
-          </button>
+          <div className="fixed right-4 bottom-[90px] z-[250] flex flex-col items-center">
+            <span className="text-xs font-semibold text-white mb-1 drop-shadow">
+              Shop
+            </span>
+            <button
+              onClick={() => setShowProductOverlay(true)}
+              className="w-14 h-14 rounded-full bg-gradient-to-br from-purple-600 to-indigo-600 
+                         shadow-2xl flex items-center justify-center 
+                         backdrop-blur-md border border-white/20 
+                         active:scale-95 transition-transform"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                className="w-6 h-6 text-white"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={2}
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3 9h18l-1 10H4L3 9z" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 9V5a3 3 0 016 0v4" />
+              </svg>
+            </button>
+          </div>
         )}
 
         {/* Header */}
