@@ -704,7 +704,7 @@ export default function LiveShow() {
         <GiviTracker type="show" id={showId} />
         
         {/* Header */}
-        <div className="fixed top-0 left-0 right-0 z-50 bg-gradient-to-b from-black/80 via-black/40 to-transparent p-3">
+        <div className="fixed top-0 left-0 right-0 z-50 bg-gradient-to-b from-black/80 via-black/40 to-transparent pt-[calc(env(safe-area-inset-top)+12px)] pb-3 px-3">
           <div className="flex items-center justify-between max-w-7xl mx-auto">
             <Button
               variant="ghost"
@@ -955,7 +955,7 @@ export default function LiveShow() {
         )}
 
         {/* Header */}
-        <div className="fixed top-0 left-0 right-0 z-50 bg-gradient-to-b from-black/80 via-black/40 to-transparent p-3">
+        <div className="fixed top-0 left-0 right-0 z-50 bg-gradient-to-b from-black/80 via-black/40 to-transparent pt-[calc(env(safe-area-inset-top)+12px)] pb-3 px-3">
           <div className="flex items-center justify-between max-w-7xl mx-auto">
             <Button
               variant="ghost"
@@ -1030,7 +1030,7 @@ export default function LiveShow() {
         {expandedProduct && (
         <div 
           className="fixed left-4 right-4 z-[100] animate-slide-up flex justify-center"
-          style={{ bottom: '0px' }}
+          style={{ bottom: "max(env(safe-area-inset-bottom), 12px)" }}
         >
           <div 
             className="backdrop-blur-md rounded-2xl shadow-xl w-full max-w-sm border border-white/10 overflow-hidden bg-black/30"

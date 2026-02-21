@@ -481,7 +481,7 @@ export default function SupabaseLiveChat({
         ${isOverlay ? "fixed left-4 right-4 z-40 max-w-md" : "w-full h-full"}
         flex flex-col
       `}
-      style={isOverlay ? { bottom: expandedProduct ? "calc(165px + env(safe-area-inset-bottom))" : "env(safe-area-inset-bottom)" } : undefined}
+      style={isOverlay ? { bottom: expandedProduct ? "calc(165px + max(env(safe-area-inset-bottom), 12px))" : "max(env(safe-area-inset-bottom), 12px)" } : undefined}
     >
       {/* Messages Container */}
       <div
