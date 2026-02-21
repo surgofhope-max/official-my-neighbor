@@ -84,8 +84,11 @@ export default function LiveShow() {
   const [showWinnerBanner, setShowWinnerBanner] = useState(false);
   const [showPurchaseBanner, setShowPurchaseBanner] = useState(false);
   const [__auditSalesCount, set__auditSalesCount] = useState(null);
+  const [showProductOverlay, setShowProductOverlay] = useState(false);
   const carouselRef = useRef(null);
-  const lastSalesCountRef = useRef(null); // null = not initialized yet
+  const lastSalesCountRef = useRef(null);
+
+  const ENABLE_BUYER_PRODUCT_OVERLAY = false; // null = not initialized yet
   
   // ═══════════════════════════════════════════════════════════════════════════
   // SDK VIEWER COUNT REF: Stores latest viewer_count from Daily SDK
@@ -913,6 +916,16 @@ export default function LiveShow() {
           </div>
         )}
 
+        {/* Shop Button - Buyer Product Overlay (feature flagged) */}
+        {ENABLE_BUYER_PRODUCT_OVERLAY && (
+          <button
+            onClick={() => setShowProductOverlay(true)}
+            className="fixed right-4 bottom-32 z-[250] bg-purple-600 text-white rounded-full px-4 py-2 shadow-lg"
+          >
+            Shop
+          </button>
+        )}
+
         {/* Header */}
         <div className="fixed top-0 left-0 right-0 z-50 bg-gradient-to-b from-black/80 via-black/40 to-transparent p-3">
           <div className="flex items-center justify-between max-w-7xl mx-auto">
@@ -1492,6 +1505,30 @@ export default function LiveShow() {
             <XIcon className="w-4 h-4" />
           </Button>
         </div>
+      )}
+
+      {/* Buyer Product Overlay Shell (feature flagged) */}
+      {ENABLE_BUYER_PRODUCT_OVERLAY && showProductOverlay && (
+        <>
+          {/* Backdrop */}
+          <div
+            className="fixed inset-0 z-[109]"
+            onClick={() => setShowProductOverlay(false)}
+          />
+
+          {/* Overlay Container */}
+          <div
+            className="fixed left-0 right-0 bottom-0 z-[110] bg-gray-900 rounded-t-2xl shadow-xl"
+            style={{ height: "50vh" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="h-full overflow-y-auto p-4 text-white">
+              <p className="text-center text-sm opacity-60">
+                Product Overlay Placeholder
+              </p>
+            </div>
+          </div>
+        </>
       )}
 
       {/* Checkout Overlay - GATED: Only render when canBuy (stream_status === "live") */}
