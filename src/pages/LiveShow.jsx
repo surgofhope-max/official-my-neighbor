@@ -1523,9 +1523,65 @@ export default function LiveShow() {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="h-full overflow-y-auto p-4 text-white">
-              <p className="text-center text-sm opacity-60">
-                Product Overlay Placeholder
-              </p>
+              <div className="grid grid-cols-4 gap-2">
+                {allShowProducts.map((product) => {
+                  const isFeatured = product.id === featuredProduct?.id;
+                  const isPriceChanging = isFeatured && priceJustChanged;
+                  return (
+                    <div
+                      key={product.id}
+                      onClick={() => setExpandedProduct(product)}
+                      className={`cursor-pointer transition-all duration-200 hover:scale-105 flex flex-col items-center ${
+                        isFeatured ? 'animate-glow-yellow' : ''
+                      }`}
+                      style={{
+                        ...(isFeatured && {
+                          filter: 'drop-shadow(0 0 12px rgba(250, 204, 21, 0.8)) drop-shadow(0 0 20px rgba(250, 204, 21, 0.5))'
+                        })
+                      }}
+                    >
+                      <div className="relative w-[70px] h-[70px] rounded-2xl overflow-hidden shadow-2xl bg-white/95 backdrop-blur-sm">
+                        {product.image_urls?.[0] ? (
+                          <img
+                            src={product.image_urls[0]}
+                            alt={product.title}
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center bg-gray-100">
+                            <ShoppingBag className="w-8 h-8 text-gray-400" />
+                          </div>
+                        )}
+
+                        {/* Box Number Bubble */}
+                        {product.box_number && (
+                          <div className="absolute -top-1 -left-1 w-6 h-6 rounded-full bg-purple-600 text-white flex items-center justify-center text-[10px] font-black shadow-lg">
+                            {product.box_number}
+                          </div>
+                        )}
+
+                        <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 to-transparent p-1.5">
+                          <p className="text-white text-xs font-bold text-center leading-none">
+                            ${product.price?.toFixed(2)}
+                          </p>
+                        </div>
+
+                        {isFeatured && (
+                          <div className="absolute top-1 right-1">
+                            <Badge className="bg-yellow-400 text-gray-900 text-[9px] px-1.5 py-0.5 h-auto leading-none">
+                              ⭐
+                            </Badge>
+                          </div>
+                        )}
+
+                        {isPriceChanging && (
+                          <div className="absolute inset-0 bg-gradient-to-r from-yellow-400/50 to-orange-500/50 animate-pulse"></div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           </div>
         </>
