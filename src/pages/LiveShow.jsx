@@ -1029,7 +1029,7 @@ export default function LiveShow() {
         {expandedProduct && (
         <div 
           className="fixed left-4 right-4 z-[100] animate-slide-up flex justify-center"
-          style={{ bottom: '110px' }}
+          style={{ bottom: '85px' }}
         >
           <div 
             className="backdrop-blur-md rounded-2xl shadow-xl w-full max-w-sm border border-white/10 overflow-hidden bg-black/30"
@@ -1179,10 +1179,8 @@ export default function LiveShow() {
 
         {/* Bottom Action Bar */}
         <div 
-          className="fixed left-0 right-0 z-[100] animate-fade-in"
-          style={{ 
-            bottom: '8px',
-          }}
+          className="fixed bottom-0 left-0 right-0 z-[100] animate-fade-in"
+          style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
         >
           <div className="flex items-center gap-2 px-2">
             <div className="flex-1">

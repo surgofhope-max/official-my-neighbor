@@ -601,14 +601,6 @@ export default function SupabaseLiveChat({
         <p className="text-red-400 text-xs mt-1 text-center">{sendError}</p>
       )}
 
-      {/* Live Indicator */}
-      {isChatAvailable && (
-        <div className="flex items-center justify-center gap-1 mt-2">
-          <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
-          <span className="text-white/50 text-xs">Live Chat</span>
-        </div>
-      )}
-
       {/* Viewer Ban Dialog */}
       <ViewerBanDialog
         open={!!banningViewer}
