@@ -78,6 +78,7 @@ export default function LiveShow() {
   const [previousPrice, setPreviousPrice] = useState(null);
   const [priceJustChanged, setPriceJustChanged] = useState(false);
   const [expandedProduct, setExpandedProduct] = useState(null);
+  const [overlaySelectedProduct, setOverlaySelectedProduct] = useState(null);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [showChatOverlay, setShowChatOverlay] = useState(true);
   const [showSellerProfile, setShowSellerProfile] = useState(false);
@@ -181,10 +182,9 @@ export default function LiveShow() {
   }, [user?.id]);
 
   useEffect(() => {
-    if (expandedProduct) {
-      setCurrentImageIndex(0);
-    }
-  }, [expandedProduct?.id]);
+    if (expandedProduct) setCurrentImageIndex(0);
+    if (overlaySelectedProduct) setCurrentImageIndex(0);
+  }, [expandedProduct?.id, overlaySelectedProduct?.id]);
 
   // IVS Player event handlers
   const handleIvsStateChange = (state) => {
@@ -464,18 +464,20 @@ export default function LiveShow() {
     }
   }, [featuredProduct?.price]);
 
-  // Auto-expand featured product when it changes
+  // Auto-expand featured product when it changes (pin sync) - only when overlay is CLOSED
   useEffect(() => {
-    if (featuredProduct?.id) {
-      // Check if we already expanded this specific product ID to avoid annoying re-opens if user closed it
-      // But since "Push to Live" implies forcing attention, we'll expand it.
-      // To prevent loop if user closes it and data refetches:
-      // We only expand if the expandedProduct is DIFFERENT (or null).
-      if (expandedProduct?.id !== featuredProduct.id) {
-         setExpandedProduct(featuredProduct);
+    if (!showProductOverlay) {
+      if (featuredProduct?.id) {
+        // Check if we already expanded this specific product ID to avoid annoying re-opens if user closed it
+        // But since "Push to Live" implies forcing attention, we'll expand it.
+        // To prevent loop if user closes it and data refetches:
+        // We only expand if the expandedProduct is DIFFERENT (or null).
+        if (expandedProduct?.id !== featuredProduct.id) {
+           setExpandedProduct(featuredProduct);
+        }
       }
     }
-  }, [featuredProduct?.id]);
+  }, [showProductOverlay, featuredProduct?.id]);
 
   // Keep expanded product detail in sync with refreshed allShowProducts (price/title/description)
   useEffect(() => {
@@ -579,10 +581,11 @@ export default function LiveShow() {
     );
   };
 
-  const handleNextImage = () => {
-    if (!expandedProduct?.image_urls) return;
+  const handleNextImage = (productOverride) => {
+    const p = productOverride ?? expandedProduct;
+    if (!p?.image_urls) return;
     setCurrentImageIndex((prev) => 
-      prev === expandedProduct.image_urls.length - 1 ? 0 : prev + 1
+      prev === p.image_urls.length - 1 ? 0 : prev + 1
     );
   };
 
@@ -1513,7 +1516,10 @@ export default function LiveShow() {
           {/* Backdrop */}
           <div
             className="fixed inset-0 z-[109]"
-            onClick={() => setShowProductOverlay(false)}
+            onClick={() => {
+              setShowProductOverlay(false);
+              setOverlaySelectedProduct(null);
+            }}
           />
 
           {/* Overlay Container */}
@@ -1523,7 +1529,7 @@ export default function LiveShow() {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="h-full overflow-y-auto p-4 text-white">
-              {!expandedProduct ? (
+              {!overlaySelectedProduct ? (
                 <div className="grid grid-cols-4 gap-2">
                   {allShowProducts.map((product) => {
                     const isFeatured = product.id === featuredProduct?.id;
@@ -1531,7 +1537,7 @@ export default function LiveShow() {
                     return (
                       <div
                         key={product.id}
-                        onClick={() => setExpandedProduct(product)}
+                        onClick={() => setOverlaySelectedProduct(product)}
                         className={`cursor-pointer transition-all duration-200 hover:scale-105 flex flex-col items-center ${
                           isFeatured ? 'animate-glow-yellow' : ''
                         }`}
@@ -1587,7 +1593,7 @@ export default function LiveShow() {
                 <div className="relative h-full flex flex-col">
                   {/* Back Button */}
                   <button
-                    onClick={() => setExpandedProduct(null)}
+                    onClick={() => setOverlaySelectedProduct(null)}
                     className="mb-3 text-sm text-purple-400"
                   >
                     ← Back
@@ -1603,7 +1609,7 @@ export default function LiveShow() {
                       <Button
                         variant="ghost"
                         size="icon"
-                        onClick={() => setExpandedProduct(null)}
+                        onClick={() => setOverlaySelectedProduct(null)}
                         className="text-white hover:bg-black/30 h-8 w-8 rounded-full bg-black/10 backdrop-blur-sm"
                       >
                         <XIcon className="w-5 h-5" />
@@ -1613,16 +1619,16 @@ export default function LiveShow() {
                     <div className="flex h-full">
                       {/* Left - Full Height Image (40%) */}
                       <div className="w-[40%] relative bg-black/20 border-r border-white/10">
-                        {productImages.length > 0 ? (
+                        {(overlaySelectedProduct?.image_urls || []).length > 0 ? (
                           <>
                             <img
-                              src={productImages[currentImageIndex]}
-                              alt={expandedProduct.title}
+                              src={(overlaySelectedProduct?.image_urls || [])[currentImageIndex]}
+                              alt={overlaySelectedProduct.title}
                               className="absolute inset-0 w-full h-full object-cover"
                             />
-                            {hasMultipleImages && (
+                            {(overlaySelectedProduct?.image_urls || []).length > 1 && (
                               <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex gap-1 z-10">
-                                {productImages.map((_, index) => (
+                                {(overlaySelectedProduct?.image_urls || []).map((_, index) => (
                                   <button
                                     key={index}
                                     onClick={(e) => {
@@ -1636,9 +1642,9 @@ export default function LiveShow() {
                                 ))}
                               </div>
                             )}
-                            {hasMultipleImages && (
+                            {(overlaySelectedProduct?.image_urls || []).length > 1 && (
                               <button
-                                 onClick={(e) => { e.stopPropagation(); handleNextImage(); }}
+                                 onClick={(e) => { e.stopPropagation(); handleNextImage(overlaySelectedProduct); }}
                                  className="absolute inset-0 w-full h-full z-0"
                                  aria-label="Next Image"
                               />
@@ -1649,10 +1655,10 @@ export default function LiveShow() {
                             <ShoppingBag className="w-10 h-10 text-white/30" />
                           </div>
                         )}
-                        {expandedProduct?.box_number != null && (
+                        {overlaySelectedProduct?.box_number != null && (
                           <div className="absolute top-2 left-2 z-10 pointer-events-none">
                             <div className="w-8 h-8 rounded-full bg-yellow-400 text-black font-bold text-sm flex items-center justify-center shadow-md">
-                              {expandedProduct.box_number}
+                              {overlaySelectedProduct.box_number}
                             </div>
                           </div>
                         )}
@@ -1666,27 +1672,27 @@ export default function LiveShow() {
                           <div className="flex items-baseline justify-between mb-1">
                             <div className="flex flex-col">
                                <p className="text-3xl font-black text-white leading-none drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]">
-                                ${expandedProduct.price?.toFixed(0)}
+                                ${overlaySelectedProduct.price?.toFixed(0)}
                                 <span className="text-lg align-top opacity-80">
-                                  {(expandedProduct.price % 1).toFixed(2).substring(1)}
+                                  {(overlaySelectedProduct.price % 1).toFixed(2).substring(1)}
                                 </span>
                               </p>
                               <p className="text-[10px] font-bold text-green-400 uppercase tracking-wider mt-0.5">
-                                {expandedProduct.quantity} Available
+                                {overlaySelectedProduct.quantity} Available
                               </p>
                             </div>
                           </div>
 
                           {/* Title - STRICT 1 Line */}
                           <h4 className="font-bold text-white text-lg leading-tight truncate mb-1 drop-shadow-md pr-6">
-                            {expandedProduct.title}
+                            {overlaySelectedProduct.title}
                           </h4>
 
                           {/* Description - STRICT 2 Lines */}
                           <p className="text-xs text-white/80 leading-snug line-clamp-2 drop-shadow-md">
-                            {expandedProduct.description || "No description provided."}
+                            {overlaySelectedProduct.description || "No description provided."}
                           </p>
-                          {expandedProduct.description?.length > 60 && (
+                          {overlaySelectedProduct.description?.length > 60 && (
                              <span className="text-[10px] text-blue-300 mt-0.5">more info &rarr;</span>
                           )}
                         </div>
@@ -1696,22 +1702,22 @@ export default function LiveShow() {
                           <button
                             className={`w-full h-12 relative group flex items-center justify-center gap-3 transition-all rounded-xl overflow-hidden
                               ${!canBuy ? 'bg-gray-800/80 cursor-not-allowed' :
-                                expandedProduct.status === 'locked' ? 'bg-gray-800/80 cursor-not-allowed' :
-                                expandedProduct.status === 'sold_out' ? 'bg-gray-800/80 cursor-not-allowed' :
+                                overlaySelectedProduct.status === 'locked' ? 'bg-gray-800/80 cursor-not-allowed' :
+                                overlaySelectedProduct.status === 'sold_out' ? 'bg-gray-800/80 cursor-not-allowed' :
                                 'hover:scale-[1.02] active:scale-95'
                               }`}
-                            onClick={() => handleBuyNow(expandedProduct)}
-                            disabled={!canBuy || expandedProduct.status === "locked" || expandedProduct.status === "sold_out" || isCreatingCheckoutIntent}
+                            onClick={() => handleBuyNow(overlaySelectedProduct)}
+                            disabled={!canBuy || overlaySelectedProduct.status === "locked" || overlaySelectedProduct.status === "sold_out" || isCreatingCheckoutIntent}
                           >
-                            {canBuy && expandedProduct.status !== 'locked' && expandedProduct.status !== 'sold_out' && (
+                            {canBuy && overlaySelectedProduct.status !== 'locked' && overlaySelectedProduct.status !== 'sold_out' && (
                                <div className="absolute inset-0 bg-gradient-to-r from-[#00FF2A]/10 to-[#4D9FFF]/10 animate-pulse-slow"></div>
                             )}
 
                             {!canBuy ? (
                                <span className="text-gray-400 font-bold text-sm">Waiting for host to go live...</span>
-                            ) : expandedProduct.status === "locked" ? (
+                            ) : overlaySelectedProduct.status === "locked" ? (
                                <span className="text-gray-400 font-bold flex items-center gap-2"><Lock className="w-4 h-4"/> LOCKED</span>
-                            ) : expandedProduct.status === "sold_out" ? (
+                            ) : overlaySelectedProduct.status === "sold_out" ? (
                                <span className="text-gray-400 font-bold">SOLD OUT</span>
                             ) : (
                               <>
