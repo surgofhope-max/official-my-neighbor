@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { MapPin, X as CloseIcon } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
-export default function PickupInstructionsBubble({ pickupInstructions }) {
+export default function PickupInstructionsBubble({ pickupInstructions, isIOS }) {
   const [isExpanded, setIsExpanded] = useState(false);
 
   useEffect(() => {
@@ -39,8 +39,9 @@ export default function PickupInstructionsBubble({ pickupInstructions }) {
               e.preventDefault();
               handleBubbleClick();
             }}
-            className="pointer-events-auto fixed left-4 top-20 w-7 h-7 bg-gradient-to-br from-green-500 to-emerald-600 rounded-full flex items-center justify-center active:scale-95 transition-transform cursor-pointer"
-            style={{ 
+            className="pointer-events-auto fixed left-4 w-7 h-7 bg-gradient-to-br from-green-500 to-emerald-600 rounded-full flex items-center justify-center active:scale-95 transition-transform cursor-pointer"
+            style={{
+              top: isIOS ? "calc(env(safe-area-inset-top) + 48px)" : "4rem",
               WebkitTapHighlightColor: 'transparent',
               boxShadow: '0 0 20px 4px rgba(34, 197, 94, 0.8), 0 0 40px 8px rgba(34, 197, 94, 0.4), 0 0 60px 12px rgba(34, 197, 94, 0.2)'
             }}
@@ -57,7 +58,10 @@ export default function PickupInstructionsBubble({ pickupInstructions }) {
             animate={{ x: 0, opacity: 1 }}
             exit={{ x: -300, opacity: 0 }}
             transition={{ duration: 0.3, ease: "easeOut" }}
-            className="pointer-events-auto fixed left-4 top-20 w-80 max-w-[calc(100vw-2rem)]"
+            className="pointer-events-auto fixed left-4 w-80 max-w-[calc(100vw-2rem)]"
+            style={{
+              top: isIOS ? "calc(env(safe-area-inset-top) + 48px)" : "4rem"
+            }}
           >
             <div className="bg-white rounded-xl shadow-2xl border-2 border-green-500 overflow-hidden">
               {/* Header */}

@@ -873,7 +873,7 @@ export default function LiveShow() {
       )}
 
       {/* Pickup Instructions Bubble */}
-      <PickupInstructionsBubble pickupInstructions={show.pickup_instructions} />
+      <PickupInstructionsBubble pickupInstructions={show.pickup_instructions} isIOS={isIOS} />
 
       {/* MOBILE VIEW - Original Layout */}
       {/* CONTAINER GATED BY DEVICE CLASS: Only mount on mobile devices.
