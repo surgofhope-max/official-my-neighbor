@@ -1460,7 +1460,7 @@ export default function LiveShow() {
         <>
           {/* Backdrop */}
           <div
-            className="fixed inset-0 z-[109]"
+            className="fixed inset-0 z-[109] bg-black/50"
             onClick={() => {
               setShowProductOverlay(false);
               setOverlaySelectedProduct(null);
@@ -1469,11 +1469,11 @@ export default function LiveShow() {
 
           {/* Overlay Container */}
           <div
-            className="fixed left-0 right-0 bottom-0 z-[110] bg-gray-900 rounded-t-2xl shadow-xl"
+            className="fixed left-0 right-0 bottom-0 z-[110] bg-white rounded-t-2xl shadow-xl"
             style={{ height: "50vh" }}
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="h-full overflow-y-auto p-4 text-white">
+            <div className="h-full overflow-y-auto p-4 text-gray-900">
               {!overlaySelectedProduct ? (
                 <div className="grid grid-cols-4 gap-2">
                   {allShowProducts.map((product) => {
@@ -1546,7 +1546,7 @@ export default function LiveShow() {
 
                   {/* Detail Card - same JSX as original expandedProduct block */}
                   <div
-                    className="relative backdrop-blur-md rounded-2xl shadow-xl w-full max-w-sm border border-white/10 overflow-hidden bg-black/30"
+                    className="relative backdrop-blur-md rounded-2xl shadow-xl w-full max-w-sm border border-gray-200 overflow-hidden bg-gray-100"
                     style={{ height: '220px' }}
                   >
                     {/* Close Button - Absolute positioning */}
@@ -1555,7 +1555,7 @@ export default function LiveShow() {
                         variant="ghost"
                         size="icon"
                         onClick={() => setOverlaySelectedProduct(null)}
-                        className="text-white hover:bg-black/30 h-8 w-8 rounded-full bg-black/10 backdrop-blur-sm"
+                        className="text-gray-900 hover:bg-gray-200 h-8 w-8 rounded-full bg-gray-100 backdrop-blur-sm"
                       >
                         <XIcon className="w-5 h-5" />
                       </Button>
@@ -1563,7 +1563,7 @@ export default function LiveShow() {
 
                     <div className="flex h-full">
                       {/* Left - Full Height Image (40%) */}
-                      <div className="w-[40%] relative bg-black/20 border-r border-white/10">
+                      <div className="w-[40%] relative bg-gray-200 border-r border-gray-200">
                         {(overlaySelectedProduct?.image_urls || []).length > 0 ? (
                           <>
                             <img
@@ -1597,7 +1597,7 @@ export default function LiveShow() {
                           </>
                         ) : (
                           <div className="absolute inset-0 flex items-center justify-center">
-                            <ShoppingBag className="w-10 h-10 text-white/30" />
+                            <ShoppingBag className="w-10 h-10 text-gray-400" />
                           </div>
                         )}
                         {overlaySelectedProduct?.box_number != null && (
@@ -1616,7 +1616,7 @@ export default function LiveShow() {
                           {/* Price - Prominent */}
                           <div className="flex items-baseline justify-between mb-1">
                             <div className="flex flex-col">
-                               <p className="text-3xl font-black text-white leading-none drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]">
+                               <p className="text-3xl font-black text-gray-900 leading-none">
                                 ${overlaySelectedProduct.price?.toFixed(0)}
                                 <span className="text-lg align-top opacity-80">
                                   {(overlaySelectedProduct.price % 1).toFixed(2).substring(1)}
@@ -1629,12 +1629,12 @@ export default function LiveShow() {
                           </div>
 
                           {/* Title - STRICT 1 Line */}
-                          <h4 className="font-bold text-white text-lg leading-tight truncate mb-1 drop-shadow-md pr-6">
+                          <h4 className="font-bold text-gray-900 text-lg leading-tight truncate mb-1 pr-6">
                             {overlaySelectedProduct.title}
                           </h4>
 
                           {/* Description - STRICT 2 Lines */}
-                          <p className="text-xs text-white/80 leading-snug line-clamp-2 drop-shadow-md">
+                          <p className="text-xs text-gray-500 leading-snug line-clamp-2">
                             {overlaySelectedProduct.description || "No description provided."}
                           </p>
                           {overlaySelectedProduct.description?.length > 60 && (
