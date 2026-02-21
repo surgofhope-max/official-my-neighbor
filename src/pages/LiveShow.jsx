@@ -464,20 +464,18 @@ export default function LiveShow() {
     }
   }, [featuredProduct?.price]);
 
-  // Auto-expand featured product when it changes (pin sync) - only when overlay is CLOSED
+  // Auto-expand featured product when it changes (pin sync) - global show detail always follows seller pin
   useEffect(() => {
-    if (!showProductOverlay) {
-      if (featuredProduct?.id) {
-        // Check if we already expanded this specific product ID to avoid annoying re-opens if user closed it
-        // But since "Push to Live" implies forcing attention, we'll expand it.
-        // To prevent loop if user closes it and data refetches:
-        // We only expand if the expandedProduct is DIFFERENT (or null).
-        if (expandedProduct?.id !== featuredProduct.id) {
-           setExpandedProduct(featuredProduct);
-        }
+    if (featuredProduct?.id) {
+      // Check if we already expanded this specific product ID to avoid annoying re-opens if user closed it
+      // But since "Push to Live" implies forcing attention, we'll expand it.
+      // To prevent loop if user closes it and data refetches:
+      // We only expand if the expandedProduct is DIFFERENT (or null).
+      if (expandedProduct?.id !== featuredProduct.id) {
+         setExpandedProduct(featuredProduct);
       }
     }
-  }, [showProductOverlay, featuredProduct?.id]);
+  }, [featuredProduct?.id]);
 
   // Keep expanded product detail in sync with refreshed allShowProducts (price/title/description)
   useEffect(() => {
