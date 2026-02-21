@@ -1034,7 +1034,7 @@ export default function LiveShow() {
         >
           <div 
             className="backdrop-blur-md rounded-2xl shadow-xl w-full max-w-sm border border-white/10 overflow-hidden bg-black/30"
-            style={{ height: '220px' }} // FIXED HEIGHT ENFORCED
+            style={{ height: '165px' }} // FIXED HEIGHT ENFORCED
           >
             {/* Close Button - Absolute positioning */}
             <div className="absolute top-2 right-2 z-30">
