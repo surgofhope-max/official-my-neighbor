@@ -477,15 +477,15 @@ export default function SupabaseLiveChat({
   return (
     <div
       className={`
-        ${isOverlay ? "fixed bottom-2 left-4 right-4 z-40 max-w-md" : "w-full h-full"}
+        ${isOverlay ? "fixed bottom-0 left-4 right-4 z-40 max-w-md" : "w-full h-full"}
         flex flex-col
       `}
     >
       {/* Messages Container */}
       <div
         className={`
-          ${isOverlay ? "max-h-[50vh] pb-20" : "flex-1"}
-          overflow-y-auto mb-2
+          ${isOverlay ? "max-h-[50vh] pb-12" : "flex-1"}
+          overflow-y-auto mb-1
           opacity-100
           transition-opacity duration-500
         `}

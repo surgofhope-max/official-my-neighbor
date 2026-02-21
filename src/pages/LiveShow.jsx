@@ -1029,7 +1029,7 @@ export default function LiveShow() {
         {expandedProduct && (
         <div 
           className="fixed left-4 right-4 z-[100] animate-slide-up flex justify-center"
-          style={{ bottom: '85px' }}
+          style={{ bottom: '64px' }}
         >
           <div 
             className="backdrop-blur-md rounded-2xl shadow-xl w-full max-w-sm border border-white/10 overflow-hidden bg-black/30"
@@ -1177,25 +1177,24 @@ export default function LiveShow() {
         </div>
         )}
 
-        {/* Bottom Action Bar */}
-        <div 
-          className="fixed bottom-0 left-0 right-0 z-[100] animate-fade-in"
-          style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
-        >
-          <div className="flex items-center gap-2 px-2">
-            <div className="flex-1">
-              {!useSupabaseChat && (
+        {/* Bottom Action Bar - only when legacy chat (Supabase chat uses its own input) */}
+        {!useSupabaseChat && (
+          <div 
+            className="fixed bottom-0 left-0 right-0 z-[100] animate-fade-in"
+            style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
+          >
+            <div className="flex items-center gap-2 px-2">
+              <div className="flex-1">
                 <LiveChatOverlay
                   showId={showId}
                   sellerId={show?.seller_id}
                   isSeller={false}
                   inputOnly={true}
                 />
-              )}
+              </div>
             </div>
-
           </div>
-        </div>
+        )}
       </div>
       )}
 
