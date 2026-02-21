@@ -704,7 +704,7 @@ export default function LiveShow() {
         <GiviTracker type="show" id={showId} />
         
         {/* Header */}
-        <div className="fixed top-0 left-0 right-0 z-50 bg-gradient-to-b from-black/80 via-black/40 to-transparent pt-[calc(env(safe-area-inset-top)+12px)] pb-3 px-3">
+        <div className="fixed top-0 left-0 right-0 z-50 bg-gradient-to-b from-black/80 via-black/40 to-transparent pt-[env(safe-area-inset-top)] py-2 px-3">
           <div className="flex items-center justify-between max-w-7xl mx-auto">
             <Button
               variant="ghost"
@@ -955,7 +955,7 @@ export default function LiveShow() {
         )}
 
         {/* Header */}
-        <div className="fixed top-0 left-0 right-0 z-50 bg-gradient-to-b from-black/80 via-black/40 to-transparent pt-[calc(env(safe-area-inset-top)+12px)] pb-3 px-3">
+        <div className="fixed top-0 left-0 right-0 z-50 bg-gradient-to-b from-black/80 via-black/40 to-transparent pt-[env(safe-area-inset-top)] py-2 px-3">
           <div className="flex items-center justify-between max-w-7xl mx-auto">
             <Button
               variant="ghost"
