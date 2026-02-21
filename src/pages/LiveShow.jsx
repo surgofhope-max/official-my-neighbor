@@ -1009,6 +1009,7 @@ export default function LiveShow() {
               isSeller={isShowOwner}
               user={user}
               isOverlay={true}
+              expandedProduct={expandedProduct}
               onClose={() => setShowChatOverlay(false)}
               onMessageSeller={() => {
                 // Navigate to messages page with seller context
@@ -1029,7 +1030,7 @@ export default function LiveShow() {
         {expandedProduct && (
         <div 
           className="fixed left-4 right-4 z-[100] animate-slide-up flex justify-center"
-          style={{ bottom: '64px' }}
+          style={{ bottom: '0px' }}
         >
           <div 
             className="backdrop-blur-md rounded-2xl shadow-xl w-full max-w-sm border border-white/10 overflow-hidden bg-black/30"

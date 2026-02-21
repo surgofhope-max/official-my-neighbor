@@ -54,6 +54,7 @@ export default function SupabaseLiveChat({
   user,
   onClose,
   isOverlay = true,
+  expandedProduct,
   onMessageSeller,
 }) {
   console.log("[CHAT PROPS DEBUG][SupabaseLiveChat]", {
@@ -477,9 +478,10 @@ export default function SupabaseLiveChat({
   return (
     <div
       className={`
-        ${isOverlay ? "fixed bottom-0 left-4 right-4 z-40 max-w-md" : "w-full h-full"}
+        ${isOverlay ? "fixed left-4 right-4 z-40 max-w-md" : "w-full h-full"}
         flex flex-col
       `}
+      style={isOverlay ? { bottom: expandedProduct ? "220px" : "0px" } : undefined}
     >
       {/* Messages Container */}
       <div
