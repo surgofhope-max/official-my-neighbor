@@ -125,6 +125,7 @@ export default function LiveShow() {
   // ═══════════════════════════════════════════════════════════════════════════
   const { isMobileDevice, isDesktopDevice } = useDeviceClass();
   const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+  const isAndroid = typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent);
   useMobilePortraitLock(isMobileDevice);
 
   // Determine which player to use based on streaming_provider field:
@@ -932,7 +933,12 @@ export default function LiveShow() {
 
         {/* Shop Button - Buyer Product Overlay (feature flagged) */}
         {ENABLE_BUYER_PRODUCT_OVERLAY && (
-          <div className="fixed right-4 bottom-[30vh] z-[100] flex flex-col items-center">
+          <div
+            className="fixed right-4 z-[100] flex flex-col items-center"
+            style={{
+              bottom: isAndroid ? "32vh" : "30vh"
+            }}
+          >
             <span className="text-[10px] font-bold tracking-widest text-white mb-1">
               PRODUCTS
             </span>
