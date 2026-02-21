@@ -36,6 +36,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Fingerprint,
+  Package,
 } from "lucide-react";
 import CheckoutOverlay from "../components/checkout/CheckoutOverlay";
 import WebRTCViewer from "../components/streaming/WebRTCViewer";
@@ -931,32 +932,18 @@ export default function LiveShow() {
 
         {/* Shop Button - Buyer Product Overlay (feature flagged) */}
         {ENABLE_BUYER_PRODUCT_OVERLAY && (
-          <div className="fixed right-4 bottom-[55vh] z-[250] flex flex-col items-center">
-            <span className="text-[10px] font-bold tracking-widest text-white mb-1 drop-shadow-lg">
-              SHOP
+          <div className="fixed right-4 bottom-[49vh] z-[250] flex flex-col items-center">
+            <span className="text-[10px] font-bold tracking-widest text-gray-900 mb-1">
+              PRODUCTS
             </span>
             <button
               onClick={() => setShowProductOverlay(true)}
-              className="w-16 h-16 rounded-2xl relative overflow-hidden
-                         shadow-[0_8px_30px_rgba(124,58,237,0.5)]
-                         border border-white/20
-                         backdrop-blur-md
-                         bg-gradient-to-br from-purple-600 via-indigo-600 to-blue-600
+              className="w-12 h-12 rounded-xl relative overflow-hidden
+                         bg-white hover:bg-gray-100 border border-gray-200 shadow-lg
                          active:scale-95 transition-all duration-200"
             >
-              <div className="absolute inset-0 bg-white/10 backdrop-blur-sm"></div>
               <div className="relative z-10 flex items-center justify-center h-full">
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  className="w-7 h-7 text-white drop-shadow"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth={2}
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 9h18l-1 10H4L3 9z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 9V5a3 3 0 016 0v4" />
-                </svg>
+                <Package className="w-6 h-6 text-gray-900" />
               </div>
             </button>
           </div>
