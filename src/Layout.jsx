@@ -1359,7 +1359,7 @@ export default function Layout({ children, currentPageName }) {
         }
       `}</style>
 
-      <div className={`min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-purple-50 ${isFullScreenPage ? 'pb-0' : 'pb-20'}`}>
+      <div className={`min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-purple-50 pt-[env(safe-area-inset-top)] ${isFullScreenPage ? 'pb-0' : 'pb-20'}`}>
         {/* Admin Impersonation Banner - Always on top */}
         {isImpersonating && <ImpersonationBanner />}
 
@@ -1529,7 +1529,12 @@ export default function Layout({ children, currentPageName }) {
 
         {/* Bottom Navigation Bar - HIDE on fullscreen pages (LiveShow, HostConsole) */}
         {!isFullScreenPage && (
-          <nav className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t border-gray-200 shadow-lg z-50">
+          <nav
+            className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t border-gray-200 shadow-lg z-50"
+            style={{
+              paddingBottom: "max(env(safe-area-inset-bottom), 12px)"
+            }}
+          >
             <div className="max-w-7xl mx-auto px-2">
               <div className="flex justify-around items-center h-16">
                 {navigation.map((item, index) => {
