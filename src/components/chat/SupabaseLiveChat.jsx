@@ -82,8 +82,11 @@ export default function SupabaseLiveChat({
   // Moderation state
   const [banningViewer, setBanningViewer] = useState(null);
 
-  // Buyer profile names cache (keyed by sender_id)
-  const [buyerNames, setBuyerNames] = useState({});
+  // Unified sender labels cache (keyed by sender_id): Host | business_name | display_name | Buyer
+  const [senderLabels, setSenderLabels] = useState({});
+
+  // Host user_id (resolved from sellers.user_id for this show's sellerId)
+  const [hostUserId, setHostUserId] = useState(null);
 
   // Refs
   const messagesEndRef = useRef(null);
@@ -105,39 +108,83 @@ export default function SupabaseLiveChat({
   }, []);
 
   // ─────────────────────────────────────────────────────────────────────
-  // FETCH BUYER NAMES FOR VIEWER MESSAGES
+  // HOST USER RESOLUTION (sellers.user_id for this show's seller)
   // ─────────────────────────────────────────────────────────────────────
-  const fetchBuyerNames = useCallback(async (messageList) => {
-    // Get unique viewer sender_ids that we don't have names for yet
-    const viewerIds = messageList
-      .filter(m => m.sender_role === 'viewer' && !buyerNames[m.sender_id])
-      .map(m => m.sender_id);
-    
-    const uniqueIds = [...new Set(viewerIds)];
-    if (uniqueIds.length === 0) return;
+  useEffect(() => {
+    if (!sellerId) return;
 
-    try {
+    const fetchHostUser = async () => {
       const { data, error } = await supabase
-        .from('buyer_profiles')
-        .select('user_id, full_name')
-        .in('user_id', uniqueIds);
+        .from("sellers")
+        .select("user_id")
+        .eq("id", sellerId)
+        .single();
 
-      if (error || !data) return;
+      if (!error && data && mountedRef.current) {
+        setHostUserId(data.user_id);
+      }
+    };
 
-      // Build name map
-      const newNames = {};
-      data.forEach(profile => {
-        newNames[profile.user_id] = profile.full_name || 'Buyer';
+    fetchHostUser();
+  }, [sellerId]);
+
+  // ─────────────────────────────────────────────────────────────────────
+  // UNIFIED SENDER LABEL RESOLUTION (Host | business_name | display_name | Buyer)
+  // ─────────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    const resolveSenderLabels = async () => {
+      if (!messages || messages.length === 0) return;
+
+      const uniqueSenderIds = [
+        ...new Set(messages.map((m) => m.sender_id).filter(Boolean)),
+      ];
+
+      const missingIds = uniqueSenderIds.filter(
+        (id) =>
+          !senderLabels[id] ||
+          (hostUserId && id === hostUserId && senderLabels[id] !== "Host")
+      );
+
+      if (missingIds.length === 0) return;
+
+      // Fetch users
+      const { data: usersData } = await supabase
+        .from("users")
+        .select("id, display_name, full_name")
+        .in("id", missingIds);
+
+      // Fetch sellers
+      const { data: sellersData } = await supabase
+        .from("sellers")
+        .select("user_id, business_name")
+        .in("user_id", missingIds);
+
+      const sellerMap = {};
+      (sellersData || []).forEach((s) => {
+        sellerMap[s.user_id] = s.business_name;
       });
 
-      // Merge with existing cache
-      if (Object.keys(newNames).length > 0 && mountedRef.current) {
-        setBuyerNames(prev => ({ ...prev, ...newNames }));
+      const newLabels = {};
+
+      missingIds.forEach((id) => {
+        if (id === hostUserId) {
+          newLabels[id] = "Host";
+        } else if (sellerMap[id]) {
+          newLabels[id] = sellerMap[id];
+        } else {
+          const user = (usersData || []).find((u) => u.id === id);
+          newLabels[id] =
+            user?.display_name || user?.full_name || "Buyer";
+        }
+      });
+
+      if (Object.keys(newLabels).length > 0 && mountedRef.current) {
+        setSenderLabels((prev) => ({ ...prev, ...newLabels }));
       }
-    } catch (err) {
-      // Silently fail - names are non-critical
-    }
-  }, [buyerNames]);
+    };
+
+    resolveSenderLabels();
+  }, [messages, hostUserId]);
 
   // ─────────────────────────────────────────────────────────────────────
   // CHECK VIEWER BAN STATUS
@@ -226,11 +273,7 @@ export default function SupabaseLiveChat({
     });
 
     resetFadeTimer();
-    const acceptedViewers = accepted.filter((m) => m.sender_role === "viewer");
-    if (acceptedViewers.length > 0) {
-      await fetchBuyerNames(acceptedViewers);
-    }
-  }, [fetchBuyerNames]);
+  }, []);
 
   // ─────────────────────────────────────────────────────────────────────
   // POLL FOR MESSAGES
@@ -264,7 +307,7 @@ export default function SupabaseLiveChat({
 
     // Also check availability periodically (always runs)
     await checkAvailability();
-  }, [showId, checkAvailability, fetchBuyerNames, applyIncomingMessages]);
+  }, [showId, checkAvailability, applyIncomingMessages]);
 
   // Start/stop polling
   useEffect(() => {
@@ -421,7 +464,7 @@ export default function SupabaseLiveChat({
   const handleBanViewer = (msg) => {
     setBanningViewer({
       user_id: msg.sender_id,
-      user_name: buyerNames[msg.sender_id] || "Buyer"
+      user_name: senderLabels[msg.sender_id] || "Buyer"
     });
   };
 
@@ -508,7 +551,7 @@ export default function SupabaseLiveChat({
                   message={msg}
                   isCurrentUser={msg.sender_id === user?.id}
                   isOverlay={isOverlay}
-                  buyerName={buyerNames[msg.sender_id]}
+                  displayName={senderLabels[msg.sender_id] || "Buyer"}
                 />
 
                 {isSeller && msg.sender_role !== "seller" && (
@@ -623,9 +666,8 @@ export default function SupabaseLiveChat({
 /**
  * Individual Chat Message Component
  */
-function ChatMessage({ message, isCurrentUser, isOverlay, buyerName }) {
-  const isSeller = message.sender_role === "seller";
-  const displayName = isSeller ? "Host" : (buyerName || "Buyer");
+function ChatMessage({ message, isCurrentUser, isOverlay, displayName }) {
+  const isHost = displayName === "Host";
 
   return (
     <div
@@ -645,7 +687,7 @@ function ChatMessage({ message, isCurrentUser, isOverlay, buyerName }) {
       >
         {/* Sender Name & Badge */}
         <div className="flex items-center gap-1 mb-0.5">
-          {isSeller ? (
+          {isHost ? (
             <Badge className="bg-purple-500/30 text-purple-200 text-[10px] px-1 py-0">
               Host
             </Badge>
