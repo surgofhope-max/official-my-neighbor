@@ -1085,7 +1085,7 @@ export default function LiveShow() {
         )}
 
         {/* FIXED SIZE Product Detail Card - only when overlay flag is OFF */}
-        {!ENABLE_BUYER_PRODUCT_OVERLAY && expandedProduct && (
+        {expandedProduct && (
         <div 
           className="fixed left-4 right-4 z-[100] animate-slide-up flex justify-center"
           style={{ bottom: '150px' }}
