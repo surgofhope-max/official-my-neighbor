@@ -932,8 +932,8 @@ export default function LiveShow() {
 
         {/* Shop Button - Buyer Product Overlay (feature flagged) */}
         {ENABLE_BUYER_PRODUCT_OVERLAY && (
-          <div className="fixed right-4 bottom-[49vh] z-[250] flex flex-col items-center">
-            <span className="text-[10px] font-bold tracking-widest text-gray-900 mb-1">
+          <div className="fixed right-4 bottom-[30vh] z-[100] flex flex-col items-center">
+            <span className="text-[10px] font-bold tracking-widest text-white mb-1">
               PRODUCTS
             </span>
             <button
@@ -943,7 +943,11 @@ export default function LiveShow() {
                          active:scale-95 transition-all duration-200"
             >
               <div className="relative z-10 flex items-center justify-center h-full">
-                <Package className="w-6 h-6 text-gray-900" />
+                <img
+                  src="https://images.unsplash.com/photo-1606813907291-d86efa9b94db?w=200"
+                  alt="Product"
+                  className="w-8 h-8 object-cover rounded-md"
+                />
               </div>
             </button>
           </div>
