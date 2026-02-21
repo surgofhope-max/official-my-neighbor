@@ -923,28 +923,33 @@ export default function LiveShow() {
 
         {/* Shop Button - Buyer Product Overlay (feature flagged) */}
         {ENABLE_BUYER_PRODUCT_OVERLAY && (
-          <div className="fixed right-4 bottom-[90px] z-[250] flex flex-col items-center">
-            <span className="text-xs font-semibold text-white mb-1 drop-shadow">
-              Shop
+          <div className="fixed right-4 bottom-[45%] z-[250] flex flex-col items-center">
+            <span className="text-[10px] font-bold tracking-widest text-white mb-1 drop-shadow-lg">
+              SHOP
             </span>
             <button
               onClick={() => setShowProductOverlay(true)}
-              className="w-14 h-14 rounded-full bg-gradient-to-br from-purple-600 to-indigo-600 
-                         shadow-2xl flex items-center justify-center 
-                         backdrop-blur-md border border-white/20 
-                         active:scale-95 transition-transform"
+              className="w-16 h-16 rounded-2xl relative overflow-hidden
+                         shadow-[0_8px_30px_rgba(124,58,237,0.5)]
+                         border border-white/20
+                         backdrop-blur-md
+                         bg-gradient-to-br from-purple-600 via-indigo-600 to-blue-600
+                         active:scale-95 transition-all duration-200"
             >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                className="w-6 h-6 text-white"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth={2}
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" d="M3 9h18l-1 10H4L3 9z" />
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9 9V5a3 3 0 016 0v4" />
-              </svg>
+              <div className="absolute inset-0 bg-white/10 backdrop-blur-sm"></div>
+              <div className="relative z-10 flex items-center justify-center h-full">
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="w-7 h-7 text-white drop-shadow"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 9h18l-1 10H4L3 9z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 9V5a3 3 0 016 0v4" />
+                </svg>
+              </div>
             </button>
           </div>
         )}
