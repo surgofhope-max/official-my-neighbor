@@ -1083,8 +1083,8 @@ export default function LiveShow() {
           </div>
         )}
 
-        {/* FIXED SIZE Product Detail Card */}
-        {expandedProduct && (
+        {/* FIXED SIZE Product Detail Card - only when overlay flag is OFF */}
+        {!ENABLE_BUYER_PRODUCT_OVERLAY && expandedProduct && (
         <div 
           className="fixed left-4 right-4 z-[100] animate-slide-up flex justify-center"
           style={{ bottom: '150px' }}
@@ -1523,65 +1523,214 @@ export default function LiveShow() {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="h-full overflow-y-auto p-4 text-white">
-              <div className="grid grid-cols-4 gap-2">
-                {allShowProducts.map((product) => {
-                  const isFeatured = product.id === featuredProduct?.id;
-                  const isPriceChanging = isFeatured && priceJustChanged;
-                  return (
-                    <div
-                      key={product.id}
-                      onClick={() => setExpandedProduct(product)}
-                      className={`cursor-pointer transition-all duration-200 hover:scale-105 flex flex-col items-center ${
-                        isFeatured ? 'animate-glow-yellow' : ''
-                      }`}
-                      style={{
-                        ...(isFeatured && {
-                          filter: 'drop-shadow(0 0 12px rgba(250, 204, 21, 0.8)) drop-shadow(0 0 20px rgba(250, 204, 21, 0.5))'
-                        })
-                      }}
-                    >
-                      <div className="relative w-[70px] h-[70px] rounded-2xl overflow-hidden shadow-2xl bg-white/95 backdrop-blur-sm">
-                        {product.image_urls?.[0] ? (
-                          <img
-                            src={product.image_urls[0]}
-                            alt={product.title}
-                            className="w-full h-full object-cover"
-                          />
-                        ) : (
-                          <div className="w-full h-full flex items-center justify-center bg-gray-100">
-                            <ShoppingBag className="w-8 h-8 text-gray-400" />
-                          </div>
-                        )}
+              {!expandedProduct ? (
+                <div className="grid grid-cols-4 gap-2">
+                  {allShowProducts.map((product) => {
+                    const isFeatured = product.id === featuredProduct?.id;
+                    const isPriceChanging = isFeatured && priceJustChanged;
+                    return (
+                      <div
+                        key={product.id}
+                        onClick={() => setExpandedProduct(product)}
+                        className={`cursor-pointer transition-all duration-200 hover:scale-105 flex flex-col items-center ${
+                          isFeatured ? 'animate-glow-yellow' : ''
+                        }`}
+                        style={{
+                          ...(isFeatured && {
+                            filter: 'drop-shadow(0 0 12px rgba(250, 204, 21, 0.8)) drop-shadow(0 0 20px rgba(250, 204, 21, 0.5))'
+                          })
+                        }}
+                      >
+                        <div className="relative w-[70px] h-[70px] rounded-2xl overflow-hidden shadow-2xl bg-white/95 backdrop-blur-sm">
+                          {product.image_urls?.[0] ? (
+                            <img
+                              src={product.image_urls[0]}
+                              alt={product.title}
+                              className="w-full h-full object-cover"
+                            />
+                          ) : (
+                            <div className="w-full h-full flex items-center justify-center bg-gray-100">
+                              <ShoppingBag className="w-8 h-8 text-gray-400" />
+                            </div>
+                          )}
 
-                        {/* Box Number Bubble */}
-                        {product.box_number && (
-                          <div className="absolute -top-1 -left-1 w-6 h-6 rounded-full bg-purple-600 text-white flex items-center justify-center text-[10px] font-black shadow-lg">
-                            {product.box_number}
-                          </div>
-                        )}
+                          {/* Box Number Bubble */}
+                          {product.box_number && (
+                            <div className="absolute -top-1 -left-1 w-6 h-6 rounded-full bg-purple-600 text-white flex items-center justify-center text-[10px] font-black shadow-lg">
+                              {product.box_number}
+                            </div>
+                          )}
 
-                        <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 to-transparent p-1.5">
-                          <p className="text-white text-xs font-bold text-center leading-none">
-                            ${product.price?.toFixed(2)}
-                          </p>
+                          <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 to-transparent p-1.5">
+                            <p className="text-white text-xs font-bold text-center leading-none">
+                              ${product.price?.toFixed(2)}
+                            </p>
+                          </div>
+
+                          {isFeatured && (
+                            <div className="absolute top-1 right-1">
+                              <Badge className="bg-yellow-400 text-gray-900 text-[9px] px-1.5 py-0.5 h-auto leading-none">
+                                ⭐
+                              </Badge>
+                            </div>
+                          )}
+
+                          {isPriceChanging && (
+                            <div className="absolute inset-0 bg-gradient-to-r from-yellow-400/50 to-orange-500/50 animate-pulse"></div>
+                          )}
                         </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="relative h-full flex flex-col">
+                  {/* Back Button */}
+                  <button
+                    onClick={() => setExpandedProduct(null)}
+                    className="mb-3 text-sm text-purple-400"
+                  >
+                    ← Back
+                  </button>
 
-                        {isFeatured && (
-                          <div className="absolute top-1 right-1">
-                            <Badge className="bg-yellow-400 text-gray-900 text-[9px] px-1.5 py-0.5 h-auto leading-none">
-                              ⭐
-                            </Badge>
+                  {/* Detail Card - same JSX as original expandedProduct block */}
+                  <div
+                    className="relative backdrop-blur-md rounded-2xl shadow-xl w-full max-w-sm border border-white/10 overflow-hidden bg-black/30"
+                    style={{ height: '220px' }}
+                  >
+                    {/* Close Button - Absolute positioning */}
+                    <div className="absolute top-2 right-2 z-30">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => setExpandedProduct(null)}
+                        className="text-white hover:bg-black/30 h-8 w-8 rounded-full bg-black/10 backdrop-blur-sm"
+                      >
+                        <XIcon className="w-5 h-5" />
+                      </Button>
+                    </div>
+
+                    <div className="flex h-full">
+                      {/* Left - Full Height Image (40%) */}
+                      <div className="w-[40%] relative bg-black/20 border-r border-white/10">
+                        {productImages.length > 0 ? (
+                          <>
+                            <img
+                              src={productImages[currentImageIndex]}
+                              alt={expandedProduct.title}
+                              className="absolute inset-0 w-full h-full object-cover"
+                            />
+                            {hasMultipleImages && (
+                              <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex gap-1 z-10">
+                                {productImages.map((_, index) => (
+                                  <button
+                                    key={index}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setCurrentImageIndex(index);
+                                    }}
+                                    className={`h-1 rounded-full transition-all shadow-sm ${
+                                      index === currentImageIndex ? 'bg-white w-3' : 'bg-white/50 w-1'
+                                    }`}
+                                  />
+                                ))}
+                              </div>
+                            )}
+                            {hasMultipleImages && (
+                              <button
+                                 onClick={(e) => { e.stopPropagation(); handleNextImage(); }}
+                                 className="absolute inset-0 w-full h-full z-0"
+                                 aria-label="Next Image"
+                              />
+                            )}
+                          </>
+                        ) : (
+                          <div className="absolute inset-0 flex items-center justify-center">
+                            <ShoppingBag className="w-10 h-10 text-white/30" />
                           </div>
                         )}
-
-                        {isPriceChanging && (
-                          <div className="absolute inset-0 bg-gradient-to-r from-yellow-400/50 to-orange-500/50 animate-pulse"></div>
+                        {expandedProduct?.box_number != null && (
+                          <div className="absolute top-2 left-2 z-10 pointer-events-none">
+                            <div className="w-8 h-8 rounded-full bg-yellow-400 text-black font-bold text-sm flex items-center justify-center shadow-md">
+                              {expandedProduct.box_number}
+                            </div>
+                          </div>
                         )}
                       </div>
+
+                      {/* Right - Fixed Content (60%) */}
+                      <div className="w-[60%] p-3 flex flex-col relative">
+                        {/* Top Section: Price & Title */}
+                        <div className="flex-1 min-h-0 flex flex-col">
+                          {/* Price - Prominent */}
+                          <div className="flex items-baseline justify-between mb-1">
+                            <div className="flex flex-col">
+                               <p className="text-3xl font-black text-white leading-none drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]">
+                                ${expandedProduct.price?.toFixed(0)}
+                                <span className="text-lg align-top opacity-80">
+                                  {(expandedProduct.price % 1).toFixed(2).substring(1)}
+                                </span>
+                              </p>
+                              <p className="text-[10px] font-bold text-green-400 uppercase tracking-wider mt-0.5">
+                                {expandedProduct.quantity} Available
+                              </p>
+                            </div>
+                          </div>
+
+                          {/* Title - STRICT 1 Line */}
+                          <h4 className="font-bold text-white text-lg leading-tight truncate mb-1 drop-shadow-md pr-6">
+                            {expandedProduct.title}
+                          </h4>
+
+                          {/* Description - STRICT 2 Lines */}
+                          <p className="text-xs text-white/80 leading-snug line-clamp-2 drop-shadow-md">
+                            {expandedProduct.description || "No description provided."}
+                          </p>
+                          {expandedProduct.description?.length > 60 && (
+                             <span className="text-[10px] text-blue-300 mt-0.5">more info &rarr;</span>
+                          )}
+                        </div>
+
+                        {/* Bottom Section: Thumbprint Button */}
+                        <div className="mt-2 relative z-20">
+                          <button
+                            className={`w-full h-12 relative group flex items-center justify-center gap-3 transition-all rounded-xl overflow-hidden
+                              ${!canBuy ? 'bg-gray-800/80 cursor-not-allowed' :
+                                expandedProduct.status === 'locked' ? 'bg-gray-800/80 cursor-not-allowed' :
+                                expandedProduct.status === 'sold_out' ? 'bg-gray-800/80 cursor-not-allowed' :
+                                'hover:scale-[1.02] active:scale-95'
+                              }`}
+                            onClick={() => handleBuyNow(expandedProduct)}
+                            disabled={!canBuy || expandedProduct.status === "locked" || expandedProduct.status === "sold_out" || isCreatingCheckoutIntent}
+                          >
+                            {canBuy && expandedProduct.status !== 'locked' && expandedProduct.status !== 'sold_out' && (
+                               <div className="absolute inset-0 bg-gradient-to-r from-[#00FF2A]/10 to-[#4D9FFF]/10 animate-pulse-slow"></div>
+                            )}
+
+                            {!canBuy ? (
+                               <span className="text-gray-400 font-bold text-sm">Waiting for host to go live...</span>
+                            ) : expandedProduct.status === "locked" ? (
+                               <span className="text-gray-400 font-bold flex items-center gap-2"><Lock className="w-4 h-4"/> LOCKED</span>
+                            ) : expandedProduct.status === "sold_out" ? (
+                               <span className="text-gray-400 font-bold">SOLD OUT</span>
+                            ) : (
+                              <>
+                                <div className="relative">
+                                   <div className="absolute inset-0 bg-[#00FF2A] rounded-full blur-md opacity-40 animate-pulse"></div>
+                                   <Fingerprint className="w-8 h-8 text-[#00FF2A] relative z-10 drop-shadow-[0_0_8px_rgba(0,255,42,0.8)]" />
+                                </div>
+                                <span className="text-xl font-black text-white tracking-widest drop-shadow-lg italic">
+                                  BUY NOW
+                                </span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      </div>
                     </div>
-                  );
-                })}
-              </div>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </>
