@@ -1472,7 +1472,17 @@ export default function LiveShow() {
           >
             <div className="h-full overflow-y-auto p-4 text-gray-900">
               {!overlaySelectedProduct ? (
-                <div className="grid grid-cols-4 gap-2">
+                <>
+                  <div className="px-4 pt-4 pb-3">
+                    <h2 className="text-lg font-semibold text-gray-900">
+                      Checkout Products
+                    </h2>
+                    <p className="text-sm text-gray-500 mt-1">
+                      Check out our products for this show
+                    </p>
+                    <div className="mt-3 border-b border-gray-200" />
+                  </div>
+                  <div className="grid grid-cols-4 gap-2">
                   {allShowProducts.map((product) => {
                     const isFeatured = product.id === featuredProduct?.id;
                     const isPriceChanging = isFeatured && priceJustChanged;
@@ -1531,6 +1541,7 @@ export default function LiveShow() {
                     );
                   })}
                 </div>
+                </>
               ) : (
                 <div className="relative h-full flex flex-col">
                   {/* Back Button */}
