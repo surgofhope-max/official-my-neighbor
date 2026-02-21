@@ -88,7 +88,7 @@ export default function LiveShow() {
   const carouselRef = useRef(null);
   const lastSalesCountRef = useRef(null);
 
-  const ENABLE_BUYER_PRODUCT_OVERLAY = false; // null = not initialized yet
+  const ENABLE_BUYER_PRODUCT_OVERLAY = true; // null = not initialized yet
   
   // ═══════════════════════════════════════════════════════════════════════════
   // SDK VIEWER COUNT REF: Stores latest viewer_count from Daily SDK
