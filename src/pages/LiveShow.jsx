@@ -123,6 +123,7 @@ export default function LiveShow() {
   // This ensures SDKs don't remount on orientation change.
   // ═══════════════════════════════════════════════════════════════════════════
   const { isMobileDevice, isDesktopDevice } = useDeviceClass();
+  const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
   useMobilePortraitLock(isMobileDevice);
 
   // Determine which player to use based on streaming_provider field:
@@ -900,7 +901,14 @@ export default function LiveShow() {
 
         {/* Share + Follow Overlay - Buyer Only */}
         {!isShowOwner && seller && (
-          <div className="fixed top-16 right-3 z-40 flex flex-col gap-3">
+          <div
+            className="fixed right-3 z-40 flex flex-col gap-3"
+            style={{
+              top: isIOS
+                ? "calc(env(safe-area-inset-top) + 56px)"
+                : "4rem"
+            }}
+          >
             <FollowButton
               seller={seller}
               variant="ghost"
