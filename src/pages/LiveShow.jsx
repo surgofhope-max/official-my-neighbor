@@ -915,6 +915,7 @@ export default function LiveShow() {
               seller={seller}
               variant="ghost"
               size="icon"
+              iconOnly={true}
               className="rounded-full h-10 w-10 p-0 backdrop-blur-sm bg-black/40 hover:bg-white/20 transition-all duration-200 flex items-center justify-center [&_svg]:w-5 [&_svg]:h-5 data-[state=on]:bg-purple-600 data-[state=on]:text-white text-white"
             />
             <ShareButton
@@ -1365,6 +1366,7 @@ export default function LiveShow() {
                 seller={seller}
                 variant="ghost"
                 size="icon"
+                iconOnly={true}
                 className="rounded-full h-10 w-10 p-0 backdrop-blur-sm bg-black/40 hover:bg-white/20 transition-all duration-200 flex items-center justify-center [&_svg]:w-5 [&_svg]:h-5 data-[state=on]:bg-purple-600 data-[state=on]:text-white text-white"
               />
               <ShareButton

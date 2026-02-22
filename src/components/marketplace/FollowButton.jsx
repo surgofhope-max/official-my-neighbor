@@ -57,7 +57,7 @@ async function ensureBuyerProfile(user) {
   return created;
 }
 
-export default function FollowButton({ seller, initialFollowStatus, variant = "default", size = "default", className = "" }) {
+export default function FollowButton({ seller, initialFollowStatus, variant = "default", size = "default", className = "", iconOnly = false }) {
   const queryClient = useQueryClient();
   
   // Optimistic UI state
@@ -319,16 +319,16 @@ export default function FollowButton({ seller, initialFollowStatus, variant = "d
       className={`${className} ${isFollowing ? "border-purple-500 text-purple-600" : ""}`}
     >
       {isPending ? (
-        <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
+        <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
       ) : isFollowing ? (
         <>
-          <UserCheck className="w-4 h-4 mr-2" />
-          Following
+          <UserCheck className={`w-4 h-4 ${iconOnly ? "" : "mr-2"}`} />
+          {!iconOnly && "Following"}
         </>
       ) : (
         <>
-          <UserPlus className="w-4 h-4 mr-2" />
-          Follow
+          <UserPlus className={`w-4 h-4 ${iconOnly ? "" : "mr-2"}`} />
+          {!iconOnly && "Follow"}
         </>
       )}
     </Button>
