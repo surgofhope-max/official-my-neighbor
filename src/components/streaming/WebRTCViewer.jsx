@@ -532,9 +532,9 @@ export default function WebRTCViewer({ show, onViewerCountChange }) {
             </>
           ) : (
             <>
-              <h3 className="text-2xl font-bold text-white mb-2">
-                Local seller starting soon
-              </h3>
+                  <h3 className="text-2xl font-bold text-white mb-2">
+                    Show's about to start!
+                  </h3>
             </>
           )}
 
