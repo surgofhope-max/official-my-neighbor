@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from "react";
-import { supabaseApi as base44 } from "@/api/supabaseClient";
 import { supabase } from "@/lib/supabase/supabaseClient";
 import { useSupabaseAuth } from "@/lib/auth/SupabaseAuthProvider";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -28,7 +27,6 @@ import {
   ChevronUp,
   ArrowRight,
   ArrowLeft,
-  Package,
   Play,
   Square
 } from "lucide-react";
@@ -36,7 +34,6 @@ import { format, isPast } from "date-fns";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import ShowForm from "../components/shows/ShowForm";
-import ProductForm from "../components/products/ProductForm";
 
 // Debug flag for goLive instrumentation logs
 const DEBUG_GO_LIVE = true;
@@ -53,8 +50,6 @@ export default function SellerShows() {
   const [user, setUser] = useState(null);
   const [seller, setSeller] = useState(null);
   const [isLoadingSeller, setIsLoadingSeller] = useState(true);
-  const [showProductDialog, setShowProductDialog] = useState(false);
-  const [selectedShowForProduct, setSelectedShowForProduct] = useState(null);
   const [showPastShows, setShowPastShows] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
 
@@ -306,33 +301,6 @@ export default function SellerShows() {
     },
   });
 
-  const createProductMutation = useMutation({
-    mutationFn: (data) => {
-      if (!selectedShowForProduct?.id) {
-        throw new Error("Show ID is missing - cannot create product");
-      }
-      const productData = {
-        ...data,
-        seller_id: seller.id,
-        show_id: selectedShowForProduct.id, // CRITICAL: Assign to specific show
-        is_live_item: true
-      };
-      console.log("📦 SellerShows - Creating product for show:", selectedShowForProduct.title);
-      console.log("   Seller ID:", seller.id);
-      console.log("   Show ID:", selectedShowForProduct.id);
-      console.log("   Product data:", productData);
-      return base44.entities.Product.create(productData);
-    },
-    onSuccess: (newProduct) => {
-      console.log("✅ SellerShows - Product created and linked to show:", newProduct);
-      console.log("   Product ID:", newProduct.id);
-      console.log("   Show ID:", newProduct.show_id);
-      queryClient.invalidateQueries({ queryKey: ['show-products', selectedShowForProduct.id] });
-      setShowProductDialog(false);
-      setSelectedShowForProduct(null);
-    },
-  });
-
   const handleSubmit = (showData) => {
     console.log("📤 SellerShows - Submitting show data:", showData);
     if (editingShow) {
@@ -343,13 +311,9 @@ export default function SellerShows() {
   };
 
   const handleAddProductToShow = (show) => {
-    console.log("➕ Opening product form for show:", show.title, "ID:", show.id);
-    setSelectedShowForProduct(show);
-    setShowProductDialog(true);
-  };
-
-  const handleSaveProduct = (productData) => {
-    createProductMutation.mutate(productData);
+    console.log("➕ Add Product to Show - navigating to HostConsole:", show.title, "ID:", show.id);
+    const hostConsoleUrl = createPageUrl("HostConsole") + `?showId=${show.id}`;
+    navigate(hostConsoleUrl, { replace: true });
   };
 
   const goLive = (show) => {
@@ -761,31 +725,6 @@ export default function SellerShows() {
                 setEditingShow(null);
               }}
               isSubmitting={createShowMutation.isPending || updateShowMutation.isPending}
-            />
-          </DialogContent>
-        </Dialog>
-
-        {/* Add Product Dialog */}
-        <Dialog open={showProductDialog} onOpenChange={setShowProductDialog}>
-          <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle>Add Product to Show</DialogTitle>
-              {selectedShowForProduct && (
-                <p className="text-sm text-gray-500 mt-2">
-                  Adding product to: <strong>{selectedShowForProduct.title}</strong>
-                  <br />
-                  <strong className="text-purple-600">This product will ONLY appear in this specific show</strong>
-                </p>
-              )}
-            </DialogHeader>
-            <ProductForm
-              product={null}
-              onSave={handleSaveProduct}
-              onCancel={() => {
-                setShowProductDialog(false);
-                setSelectedShowForProduct(null);
-              }}
-              isSubmitting={createProductMutation.isPending}
             />
           </DialogContent>
         </Dialog>
