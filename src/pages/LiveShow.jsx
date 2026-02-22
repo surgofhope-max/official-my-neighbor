@@ -915,7 +915,7 @@ export default function LiveShow() {
               seller={seller}
               variant="ghost"
               size="icon"
-              className="text-white hover:bg-white/20 rounded-full h-10 w-10 p-0 bg-black/40 backdrop-blur-sm [&_svg]:w-5 [&_svg]:h-5"
+              className="rounded-full h-10 w-10 p-0 backdrop-blur-sm bg-black/40 hover:bg-white/20 transition-all duration-200 flex items-center justify-center [&_svg]:w-5 [&_svg]:h-5 data-[state=on]:bg-purple-600 data-[state=on]:text-white text-white"
             />
             <ShareButton
               type="show"
@@ -939,7 +939,7 @@ export default function LiveShow() {
               bottom: isAndroid ? "32vh" : "30vh"
             }}
           >
-            <span className="text-[10px] font-bold tracking-widest text-white mb-1">
+            <span className="text-xs font-extrabold tracking-wide text-white mb-1">
               PRODUCTS
             </span>
             <button
@@ -1365,7 +1365,7 @@ export default function LiveShow() {
                 seller={seller}
                 variant="ghost"
                 size="icon"
-                className="text-white hover:bg-white/20 rounded-full h-10 w-10 p-0 bg-black/40 backdrop-blur-sm [&_svg]:w-5 [&_svg]:h-5"
+                className="rounded-full h-10 w-10 p-0 backdrop-blur-sm bg-black/40 hover:bg-white/20 transition-all duration-200 flex items-center justify-center [&_svg]:w-5 [&_svg]:h-5 data-[state=on]:bg-purple-600 data-[state=on]:text-white text-white"
               />
               <ShareButton
                 type="show"
