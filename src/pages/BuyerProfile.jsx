@@ -42,6 +42,7 @@ import {
 } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { createPageUrl } from "@/utils";
+import arizonaDesert from "@/assets/arizona-desert.jpg";
 // Note: Batches not needed for buyer analytics (orders are authoritative)
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -789,7 +790,14 @@ export default function BuyerProfile() {
 
         {/* Profile Card */}
         <Card className="border-0 shadow-xl overflow-hidden">
-          <div className="h-32 bg-gradient-to-r from-purple-600 via-blue-600 to-purple-600"></div>
+          <div className="relative h-32 overflow-hidden">
+            <img
+              src={arizonaDesert}
+              alt="Arizona desert backdrop"
+              className="absolute inset-0 w-full h-full object-cover"
+            />
+            <div className="absolute inset-0 bg-black/20" />
+          </div>
           <CardContent className="relative pt-0 pb-6">
             <div className="flex flex-col sm:flex-row items-center sm:items-end gap-4 -mt-16 sm:-mt-12">
               {/* Profile Image */}
