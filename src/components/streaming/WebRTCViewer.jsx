@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import { supabase } from "@/lib/supabase/supabaseClient";
 import { isShowLive } from "@/api/streamSync";
-import { AlertCircle, Radio, Clock } from "lucide-react";
+import { AlertCircle, Radio } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 
 /**
@@ -133,6 +133,16 @@ export default function WebRTCViewer({ show, onViewerCountChange }) {
 
   // AUTHORITATIVE: stream_status === "live" is the ONLY rule for live
   const showIsLive = isShowLive(show);
+
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, []);
 
   // Fetch viewer token when show is live
   useEffect(() => {
@@ -452,6 +462,32 @@ export default function WebRTCViewer({ show, onViewerCountChange }) {
 
   // Waiting for stream (show not live or special waiting error)
   if (!showIsLive || joinError === "waiting") {
+    const scheduledTime = show?.scheduled_start_time
+      ? new Date(show.scheduled_start_time).getTime()
+      : null;
+
+    let timeRemaining = null;
+    if (scheduledTime) {
+      timeRemaining = Math.max(0, scheduledTime - now);
+    }
+
+    let countdownDisplay = null;
+
+    if (scheduledTime && timeRemaining > 0) {
+      const totalSeconds = Math.floor(timeRemaining / 1000);
+      const hours = Math.floor(totalSeconds / 3600);
+      const minutes = Math.floor((totalSeconds % 3600) / 60);
+      const seconds = totalSeconds % 60;
+
+      countdownDisplay = (
+        <div className="text-white text-4xl font-bold mb-4">
+          {hours > 0 ? `${hours.toString().padStart(2, "0")}:` : ""}
+          {minutes.toString().padStart(2, "0")}:
+          {seconds.toString().padStart(2, "0")}
+        </div>
+      );
+    }
+
     return (
       <div className="w-full h-full bg-gradient-to-br from-purple-900 via-blue-900 to-gray-900 flex items-center justify-center">
         {/* Background: video preview or thumbnail */}
@@ -482,13 +518,30 @@ export default function WebRTCViewer({ show, onViewerCountChange }) {
 
         {/* Overlay text */}
         <div className="relative z-10 text-center">
-          <Clock className="w-16 h-16 text-white/60 mx-auto mb-4 animate-pulse" />
-          <h3 className="text-2xl font-bold text-white mb-2">Waiting for Stream</h3>
-          <p className="text-white/80">The host will start streaming shortly...</p>
+          {countdownDisplay ? (
+            <>
+              <h3 className="text-2xl font-bold text-white mb-2">
+                Show starting soon
+              </h3>
+              {countdownDisplay}
+              <p className="text-white/70">
+                {scheduledTime
+                  ? new Date(show.scheduled_start_time).toLocaleString()
+                  : ""}
+              </p>
+            </>
+          ) : (
+            <>
+              <h3 className="text-2xl font-bold text-white mb-2">
+                Local seller starting soon
+              </h3>
+            </>
+          )}
+
           {joinError === "waiting" && (
             <button
               onClick={retryFetch}
-              className="mt-4 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-colors"
+              className="mt-6 bg-white text-black px-4 py-2 rounded-lg"
             >
               Check Again
             </button>
