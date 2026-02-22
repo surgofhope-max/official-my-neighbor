@@ -591,13 +591,6 @@ export default function BuyerProfile() {
       onClick: () => setShowOrdersDialog(true)
     },
     {
-      label: "Total Spent",
-      value: `$${totalSpent.toFixed(2)}`,  // FIX: Derived from orders
-      icon: DollarSign,
-      color: "from-green-500 to-emerald-500",
-      onClick: null
-    },
-    {
       label: "Following",
       value: followedSellers.length,
       icon: UserPlus,
