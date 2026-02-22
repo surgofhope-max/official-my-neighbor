@@ -1467,20 +1467,20 @@ export default function LiveShow() {
           {/* Overlay Container */}
           <div
             className="fixed left-0 right-0 bottom-0 z-[110] bg-white rounded-t-2xl shadow-xl"
-            style={{ height: "50vh" }}
+            style={{ height: "45vh" }}
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="h-full overflow-y-auto p-4 text-gray-900">
+            <div className="h-full overflow-y-auto px-4 pt-2 pb-4 text-gray-900">
               {!overlaySelectedProduct ? (
                 <>
-                  <div className="px-4 pt-4 pb-3">
+                  <div className="px-4 pt-2 pb-2 text-center">
                     <h2 className="text-lg font-semibold text-gray-900">
                       Checkout Products
                     </h2>
-                    <p className="text-sm text-gray-500 mt-1">
+                    <p className="text-sm text-gray-500 mt-0.5">
                       Check out our products for this show
                     </p>
-                    <div className="mt-3 border-b border-gray-200" />
+                    <div className="mt-2 border-b border-gray-200" />
                   </div>
                   <div className="grid grid-cols-4 gap-2">
                   {allShowProducts.map((product) => {
