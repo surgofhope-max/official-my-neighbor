@@ -50,6 +50,7 @@ import { createPageUrl } from "@/utils";
 import { getProductsBySellerId } from "@/api/products";
 import { getShowsBySellerId } from "@/api/shows";
 import { createShowProduct } from "@/api/showProducts";
+import { getInventoryBySeller, createInventoryProduct } from "@/api/inventoryProducts";
 import { FEATURES } from "@/config/features";
 import { toast } from "sonner";
 
@@ -77,6 +78,9 @@ export default function SellerProducts() {
   const [shows, setShows] = useState([]);
   const [allProducts, setAllProducts] = useState([]);
   const [showProductsData, setShowProductsData] = useState([]); // show_products join table
+  const [inventoryItems, setInventoryItems] = useState([]);
+  const [showInventoryDialog, setShowInventoryDialog] = useState(false);
+  const [inventorySaving, setInventorySaving] = useState(false);
 
   // Load seller data when auth user changes
   useEffect(() => {
@@ -253,6 +257,12 @@ export default function SellerProducts() {
     }
   }, [seller?.id]);
 
+  useEffect(() => {
+    if (seller?.id && activeTab === 'inventory') {
+      getInventoryBySeller(seller.id).then(setInventoryItems).catch(() => setInventoryItems([]));
+    }
+  }, [seller?.id, activeTab]);
+
   // Separate regular products from GIVEY items
   const regularProducts = allProducts.filter(p => !p.is_givey);
   const giveyProducts = allProducts.filter(p => p.is_givey);
@@ -415,27 +425,86 @@ export default function SellerProducts() {
   }
 
   // ========================================
-  // TAB: INVENTORY (placeholder)
+  // TAB: INVENTORY
   // ========================================
+  const handleSaveInventory = async (formData) => {
+    setInventorySaving(true);
+    try {
+      await createInventoryProduct({
+        seller_id: seller.id,
+        title: formData.title,
+        description: formData.description || null,
+        price: formData.price,
+        image_urls: formData.image_urls || [],
+        category: formData.category || null,
+      });
+      const items = await getInventoryBySeller(seller.id);
+      setInventoryItems(items);
+      setShowInventoryDialog(false);
+      toast.success("Inventory item added");
+    } catch (err) {
+      toast.error(err?.message || "Failed to add inventory item");
+      throw err;
+    } finally {
+      setInventorySaving(false);
+    }
+  };
+
   if (activeTab === 'inventory') {
     return (
       <div className="min-h-screen p-4 sm:p-8">
         <div className="max-w-7xl mx-auto space-y-6">
-          <div className="flex gap-2 mb-4">
-            <Button
-              variant={activeTab === 'shows' ? 'default' : 'outline'}
-              onClick={() => setActiveTab('shows')}
-            >
-              Shows
-            </Button>
-            <Button
-              variant={activeTab === 'inventory' ? 'default' : 'outline'}
-              onClick={() => setActiveTab('inventory')}
-            >
-              Inventory
+          <div className="flex justify-between items-center mb-4">
+            <div className="flex gap-2">
+              <Button
+                variant={activeTab === 'shows' ? 'default' : 'outline'}
+                onClick={() => setActiveTab('shows')}
+              >
+                Shows
+              </Button>
+              <Button
+                variant={activeTab === 'inventory' ? 'default' : 'outline'}
+                onClick={() => setActiveTab('inventory')}
+              >
+                Inventory
+              </Button>
+            </div>
+            <Button onClick={() => setShowInventoryDialog(true)}>
+              Add to Inventory
             </Button>
           </div>
-          <div>Inventory Coming Soon</div>
+          <Dialog open={showInventoryDialog} onOpenChange={setShowInventoryDialog}>
+            <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle>Add Inventory Item</DialogTitle>
+              </DialogHeader>
+              <ProductForm
+                product={null}
+                onSave={handleSaveInventory}
+                onCancel={() => setShowInventoryDialog(false)}
+                isSubmitting={inventorySaving}
+              />
+            </DialogContent>
+          </Dialog>
+          {inventoryItems.length === 0 ? (
+            <div className="flex items-center justify-center min-h-[200px] text-gray-600">
+              No inventory items yet
+            </div>
+          ) : (
+            <div className="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+              {inventoryItems.map((item) => (
+                <Card key={item.id} className="border-0 shadow-sm">
+                  <CardContent className="p-4">
+                    <h3 className="font-semibold text-lg mb-2 line-clamp-2">{item.title}</h3>
+                    <p className="text-xl font-bold text-purple-600">${(item.price || 0).toFixed(2)}</p>
+                    {item.category && (
+                      <p className="text-sm text-gray-600 mt-2">{item.category}</p>
+                    )}
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     );
