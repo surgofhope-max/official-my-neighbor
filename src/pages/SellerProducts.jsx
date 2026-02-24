@@ -31,16 +31,27 @@ import {
   ShoppingBag,
   ChevronDown,
   ChevronUp,
-  Grid
+  Grid,
+  MoreVertical,
+  Copy,
+  FileEdit
 } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { format } from "date-fns";
 import ProductForm from "../components/products/ProductForm";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { getProductsBySellerId } from "@/api/products";
 import { getShowsBySellerId } from "@/api/shows";
+import { createShowProduct } from "@/api/showProducts";
 import { FEATURES } from "@/config/features";
+import { toast } from "sonner";
 
 export default function SellerProducts() {
   const navigate = useNavigate();
@@ -53,6 +64,8 @@ export default function SellerProducts() {
   const [showProductDialog, setShowProductDialog] = useState(false);
   const [editingProduct, setEditingProduct] = useState(null);
   const [searchTerm, setSearchTerm] = useState("");
+  
+  const [activeTab, setActiveTab] = useState<'shows' | 'inventory'>('shows');
   
   // Navigation state: 'shows' | 'products' | 'givey'
   const [view, setView] = useState('shows');
@@ -294,6 +307,46 @@ export default function SellerProducts() {
     }
   };
 
+  const handleRewrite = (product) => {
+    const dupData = {
+      title: `${product.title} (Copy)`,
+      description: product.description || null,
+      price: product.price || 0,
+      quantity: 0,
+      image_urls: product.image_urls || [],
+      category: product.category || null,
+      status: "active",
+      is_givey: product.is_givey || false,
+    };
+    createProductMutation.mutate(dupData, {
+      onSuccess: async (newProduct) => {
+        if (newProduct?.id && seller?.id) {
+          if (selectedShow?.id) {
+            await createShowProduct({
+              show_id: selectedShow.id,
+              product_id: newProduct.id,
+              seller_id: seller.id,
+              is_featured: false,
+              is_givi: product.is_givey || false,
+            });
+          }
+          loadData();
+          toast.success("Product duplicated");
+        }
+      },
+    });
+  };
+
+  const handleCopy = async (product) => {
+    const text = `${product.title}\n$${product.price?.toFixed(2)}\n${product.description || ""}`;
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success("Copied to clipboard");
+    } catch {
+      toast.error("Failed to copy");
+    }
+  };
+
   const handleNewProduct = () => {
     setEditingProduct(null);
     setShowProductDialog(true); // Changed from setShowDialog
@@ -362,6 +415,33 @@ export default function SellerProducts() {
   }
 
   // ========================================
+  // TAB: INVENTORY (placeholder)
+  // ========================================
+  if (activeTab === 'inventory') {
+    return (
+      <div className="min-h-screen p-4 sm:p-8">
+        <div className="max-w-7xl mx-auto space-y-6">
+          <div className="flex gap-2 mb-4">
+            <Button
+              variant={activeTab === 'shows' ? 'default' : 'outline'}
+              onClick={() => setActiveTab('shows')}
+            >
+              Shows
+            </Button>
+            <Button
+              variant={activeTab === 'inventory' ? 'default' : 'outline'}
+              onClick={() => setActiveTab('inventory')}
+            >
+              Inventory
+            </Button>
+          </div>
+          <div>Inventory Coming Soon</div>
+        </div>
+      </div>
+    );
+  }
+
+  // ========================================
   // VIEW 1: SHOWS LIST
   // ========================================
   if (view === 'shows') {
@@ -376,6 +456,20 @@ export default function SellerProducts() {
     return (
       <div className="min-h-screen p-4 sm:p-8">
         <div className="max-w-7xl mx-auto space-y-6">
+          <div className="flex gap-2 mb-4">
+            <Button
+              variant={activeTab === 'shows' ? 'default' : 'outline'}
+              onClick={() => setActiveTab('shows')}
+            >
+              Shows
+            </Button>
+            <Button
+              variant={activeTab === 'inventory' ? 'default' : 'outline'}
+              onClick={() => setActiveTab('inventory')}
+            >
+              Inventory
+            </Button>
+          </div>
           {/* Header */}
           <div className="flex items-center gap-4 mb-4">
             <Button
@@ -610,6 +704,20 @@ export default function SellerProducts() {
     return (
       <div className="min-h-screen p-4 sm:p-8">
         <div className="max-w-7xl mx-auto space-y-6">
+          <div className="flex gap-2 mb-4">
+            <Button
+              variant={activeTab === 'shows' ? 'default' : 'outline'}
+              onClick={() => setActiveTab('shows')}
+            >
+              Shows
+            </Button>
+            <Button
+              variant={activeTab === 'inventory' ? 'default' : 'outline'}
+              onClick={() => setActiveTab('inventory')}
+            >
+              Inventory
+            </Button>
+          </div>
           {/* Header */}
           <div className="flex items-center gap-4">
             <Button
@@ -707,7 +815,7 @@ export default function SellerProducts() {
                         {product.category}
                       </Badge>
                     )}
-                    <div className="flex gap-2">
+                    <div className="flex gap-2 items-center">
                       <Button
                         variant="outline"
                         size="sm"
@@ -725,6 +833,23 @@ export default function SellerProducts() {
                       >
                         <Trash2 className="w-3 h-3" />
                       </Button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="outline" size="icon" className="h-8 w-8 shrink-0">
+                            <MoreVertical className="w-4 h-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onClick={() => handleRewrite(product)}>
+                            <FileEdit className="w-4 h-4 mr-2" />
+                            Rewrite (Duplicate)
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleCopy(product)}>
+                            <Copy className="w-4 h-4 mr-2" />
+                            Copy
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     </div>
                   </CardContent>
                 </Card>
@@ -762,6 +887,20 @@ export default function SellerProducts() {
     return (
       <div className="min-h-screen p-4 sm:p-8">
         <div className="max-w-7xl mx-auto space-y-6">
+          <div className="flex gap-2 mb-4">
+            <Button
+              variant={activeTab === 'shows' ? 'default' : 'outline'}
+              onClick={() => setActiveTab('shows')}
+            >
+              Shows
+            </Button>
+            <Button
+              variant={activeTab === 'inventory' ? 'default' : 'outline'}
+              onClick={() => setActiveTab('inventory')}
+            >
+              Inventory
+            </Button>
+          </div>
           {/* Header */}
           <div className="flex items-center gap-4">
             <Button
