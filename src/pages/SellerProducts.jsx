@@ -66,7 +66,7 @@ export default function SellerProducts() {
   const [editingProduct, setEditingProduct] = useState(null);
   const [searchTerm, setSearchTerm] = useState("");
   
-  const [activeTab, setActiveTab] = useState<'shows' | 'inventory'>('shows');
+  const [activeTab, setActiveTab] = useState("shows");
   
   // Navigation state: 'shows' | 'products' | 'givey'
   const [view, setView] = useState('shows');
