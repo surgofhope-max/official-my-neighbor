@@ -516,17 +516,58 @@ export default function SellerProducts() {
             </div>
           ) : (
             <div className="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-              {inventoryItems.map((item) => (
-                <Card key={item.id} className="border-0 shadow-sm">
-                  <CardContent className="p-4">
-                    <h3 className="font-semibold text-lg mb-2 line-clamp-2">{item.title}</h3>
-                    <p className="text-xl font-bold text-purple-600">${(item.price || 0).toFixed(2)}</p>
-                    {item.category && (
-                      <p className="text-sm text-gray-600 mt-2">{item.category}</p>
-                    )}
-                  </CardContent>
-                </Card>
-              ))}
+              {inventoryItems.map((item) => {
+                const firstImage =
+                  Array.isArray(item.image_urls) && item.image_urls.length > 0
+                    ? item.image_urls[0]
+                    : null;
+
+                return (
+                  <Card key={item.id} className="border-0 shadow-sm hover:shadow-md transition-all">
+                    <CardContent className="p-4">
+                      <div className="flex gap-4">
+
+                        {/* Image Left */}
+                        <div className="w-24 h-24 bg-gray-100 rounded-md overflow-hidden flex-shrink-0 flex items-center justify-center">
+                          {firstImage ? (
+                            <img
+                              src={firstImage}
+                              alt={item.title}
+                              className="w-full h-full object-cover"
+                            />
+                          ) : (
+                            <ImageIcon className="w-8 h-8 text-gray-400" />
+                          )}
+                        </div>
+
+                        {/* Content Right */}
+                        <div className="flex-1 min-w-0">
+                          <h3 className="font-semibold text-lg mb-1 line-clamp-2">
+                            {item.title}
+                          </h3>
+
+                          <p className="text-xl font-bold text-purple-600 mb-1">
+                            ${(item.price || 0).toFixed(2)}
+                          </p>
+
+                          {item.category && (
+                            <p className="text-sm text-gray-600 mb-1">
+                              {item.category}
+                            </p>
+                          )}
+
+                          {item.description && (
+                            <p className="text-sm text-gray-500 line-clamp-2">
+                              {item.description}
+                            </p>
+                          )}
+                        </div>
+
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })}
             </div>
           )}
         </div>
