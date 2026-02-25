@@ -4,6 +4,22 @@
  * Provides queries and mutations for product data.
  */
 
+/*
+ * AUDIT: Supabase SQL Editor snippet - check image_urls column data_type.
+ * Run in Supabase SQL Editor to verify DB column types for products + inventory_products.
+ *
+ * SELECT
+ *   table_schema,
+ *   table_name,
+ *   column_name,
+ *   data_type,
+ *   udt_name
+ * FROM information_schema.columns
+ * WHERE table_schema = 'public'
+ *   AND table_name IN ('products', 'inventory_products')
+ *   AND column_name = 'image_urls';
+ */
+
 import { supabase } from "@/lib/supabase/supabaseClient";
 
 export interface Product {
@@ -240,6 +256,14 @@ export async function createProduct(
   input: CreateProductInput
 ): Promise<Product | null> {
   try {
+    if (input.image_urls !== undefined && !Array.isArray(input.image_urls)) {
+      console.error("[AUDIT] products.createProduct: input.image_urls is defined and not an array", {
+        route: "api/products.createProduct",
+        typeofValue: typeof input.image_urls,
+        value: input.image_urls,
+        stack: new Error().stack,
+      });
+    }
     const { data, error } = await supabase
       .from("products")
       .insert({

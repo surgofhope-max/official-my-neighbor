@@ -875,7 +875,15 @@ export default function HostConsole() {
       let successCount = 0;
 
       for (const sourceProduct of remainingProducts) {
-
+        if (!Array.isArray(sourceProduct.image_urls)) {
+          console.error("[AUDIT] HostConsole.handleCloneProducts: sourceProduct.image_urls is not an array", {
+            route: "HostConsole",
+            productId: sourceProduct.id,
+            typeofValue: typeof sourceProduct.image_urls,
+            value: sourceProduct.image_urls,
+            stack: new Error().stack,
+          });
+        }
         // 1️⃣ Create new product
         const newProduct = await createProduct({
           seller_id: currentSeller.id,

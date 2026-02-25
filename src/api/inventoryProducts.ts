@@ -53,6 +53,14 @@ export async function getInventoryBySeller(
 export async function createInventoryProduct(
   input: CreateInventoryProductInput
 ): Promise<InventoryProduct> {
+  if (input.image_urls !== undefined && !Array.isArray(input.image_urls)) {
+    console.error("[AUDIT] inventoryProducts.createInventoryProduct: input.image_urls is defined and not an array", {
+      route: "api/inventoryProducts.createInventoryProduct",
+      typeofValue: typeof input.image_urls,
+      value: input.image_urls,
+      stack: new Error().stack,
+    });
+  }
   const { data, error } = await supabase
     .from("inventory_products")
     .insert({
@@ -120,6 +128,16 @@ export async function copyInventoryToShow(
 
   if (inventory.seller_id !== sellerId) {
     throw new Error("Seller mismatch: inventory does not belong to this seller");
+  }
+
+  if (!Array.isArray(inventory.image_urls)) {
+    console.error("[AUDIT] inventoryProducts.copyInventoryToShow: inventory.image_urls is not an array", {
+      route: "api/inventoryProducts.copyInventoryToShow",
+      inventoryId: inventory.id,
+      typeofValue: typeof inventory.image_urls,
+      value: inventory.image_urls,
+      stack: new Error().stack,
+    });
   }
 
   const newProduct = await createProduct({

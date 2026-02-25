@@ -27,6 +27,15 @@ export default function ProductForm({ product, onSave, onCancel, isSubmitting })
     category: product?.category || "",
     image_urls: product?.image_urls || []
   });
+  if (!Array.isArray(formData.image_urls)) {
+    console.error("[AUDIT] ProductForm: image_urls is not an array at init", {
+      route: "ProductForm",
+      productId: product?.id,
+      typeofValue: typeof formData.image_urls,
+      value: formData.image_urls,
+      stack: new Error().stack,
+    });
+  }
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef(null);
 
@@ -70,19 +79,41 @@ export default function ProductForm({ product, onSave, onCancel, isSubmitting })
       uploadedUrls.push(data.publicUrl);
     }
 
-    setFormData(prev => ({
-      ...prev,
-      image_urls: [...(prev.image_urls || []), ...uploadedUrls]
-    }));
+    setFormData(prev => {
+      if (!Array.isArray(prev.image_urls)) {
+        console.error("[AUDIT] ProductForm: image_urls is not an array in handleFileUpload (before setFormData)", {
+          route: "ProductForm",
+          productId: product?.id,
+          typeofValue: typeof prev.image_urls,
+          value: prev.image_urls,
+          stack: new Error().stack,
+        });
+      }
+      return {
+        ...prev,
+        image_urls: [...(prev.image_urls || []), ...uploadedUrls]
+      };
+    });
 
     setUploading(false);
   };
 
   const removeImage = (index) => {
-    setFormData(prev => ({
-      ...prev,
-      image_urls: (prev.image_urls || []).filter((_, i) => i !== index)
-    }));
+    setFormData(prev => {
+      if (!Array.isArray(prev.image_urls)) {
+        console.error("[AUDIT] ProductForm: image_urls is not an array in removeImage (before setFormData)", {
+          route: "ProductForm",
+          productId: product?.id,
+          typeofValue: typeof prev.image_urls,
+          value: prev.image_urls,
+          stack: new Error().stack,
+        });
+      }
+      return {
+        ...prev,
+        image_urls: (prev.image_urls || []).filter((_, i) => i !== index)
+      };
+    });
   };
 
   const handleSubmit = (e) => {

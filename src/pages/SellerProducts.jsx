@@ -241,6 +241,30 @@ export default function SellerProducts() {
         getProductsBySellerId(seller.id),
         fetchShowProducts(),
       ]);
+      (productsData || []).forEach((p) => {
+        if (p != null && "image_urls" in p && !Array.isArray(p.image_urls)) {
+          console.error("[AUDIT] SellerProducts.loadData: productsData product has non-array image_urls", {
+            route: "SellerProducts",
+            productId: p.id,
+            typeofValue: typeof p.image_urls,
+            value: p.image_urls,
+            stack: new Error().stack,
+          });
+        }
+      });
+      (showProductsResult || []).forEach((sp) => {
+        const prod = sp?.product;
+        if (prod != null && "image_urls" in prod && !Array.isArray(prod.image_urls)) {
+          console.error("[AUDIT] SellerProducts.loadData: showProductsResult sp.product has non-array image_urls", {
+            route: "SellerProducts",
+            productId: prod.id,
+            showProductId: sp.id,
+            typeofValue: typeof prod.image_urls,
+            value: prod.image_urls,
+            stack: new Error().stack,
+          });
+        }
+      });
       setShows(showsData);
       setAllProducts(productsData);
       setShowProductsData(showProductsResult);
