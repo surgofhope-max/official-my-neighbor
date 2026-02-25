@@ -50,7 +50,11 @@ import { createPageUrl } from "@/utils";
 import { getProductsBySellerId } from "@/api/products";
 import { getShowsBySellerId } from "@/api/shows";
 import { createShowProduct } from "@/api/showProducts";
-import { getInventoryBySeller, createInventoryProduct } from "@/api/inventoryProducts";
+import {
+  getInventoryBySeller,
+  createInventoryProduct,
+  archiveInventoryProduct
+} from "@/api/inventoryProducts";
 import { FEATURES } from "@/config/features";
 import { toast } from "sonner";
 
@@ -90,6 +94,26 @@ export default function SellerProducts() {
       }
       return [...prev, id];
     });
+  };
+
+  const handleDeleteInventory = async (id) => {
+    const confirmed = window.confirm("Are you sure you want to delete this inventory item?");
+    if (!confirmed) return;
+
+    try {
+      await archiveInventoryProduct(id);
+
+      setInventoryItems((prev) =>
+        prev.filter((item) => item.id !== id)
+      );
+
+      setSelectedInventoryIds((prev) =>
+        prev.filter((itemId) => itemId !== id)
+      );
+    } catch (error) {
+      console.error("Failed to delete inventory item:", error);
+      alert("Failed to delete inventory item.");
+    }
   };
 
   // Load seller data when auth user changes
@@ -610,6 +634,15 @@ export default function SellerProducts() {
                               {item.description}
                             </p>
                           )}
+
+                          <div className="flex justify-end mt-2">
+                            <button
+                              onClick={() => handleDeleteInventory(item.id)}
+                              className="text-sm text-red-600 hover:text-red-800"
+                            >
+                              Delete
+                            </button>
+                          </div>
                         </div>
 
                       </div>
