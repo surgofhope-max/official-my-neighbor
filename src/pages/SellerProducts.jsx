@@ -81,6 +81,16 @@ export default function SellerProducts() {
   const [inventoryItems, setInventoryItems] = useState([]);
   const [showInventoryDialog, setShowInventoryDialog] = useState(false);
   const [inventorySaving, setInventorySaving] = useState(false);
+  const [selectedInventoryIds, setSelectedInventoryIds] = useState([]);
+
+  const toggleInventorySelection = (id) => {
+    setSelectedInventoryIds((prev) => {
+      if (prev.includes(id)) {
+        return prev.filter((itemId) => itemId !== id);
+      }
+      return [...prev, id];
+    });
+  };
 
   // Load seller data when auth user changes
   useEffect(() => {
@@ -515,20 +525,59 @@ export default function SellerProducts() {
               No inventory items yet
             </div>
           ) : (
-            <div className="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-              {inventoryItems.map((item) => {
+            <>
+              {selectedInventoryIds.length > 0 && (
+                <div className="mb-4 p-3 bg-purple-50 border border-purple-200 rounded-md flex items-center justify-between">
+                  <span className="text-sm font-medium text-purple-700">
+                    {selectedInventoryIds.length} selected
+                  </span>
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => setSelectedInventoryIds([])}
+                      className="text-sm text-gray-600 hover:text-gray-900"
+                    >
+                      Clear
+                    </button>
+                    <button
+                      className="text-sm font-medium text-purple-600 hover:text-purple-800"
+                    >
+                      Assign to Show
+                    </button>
+                    <button
+                      className="text-sm font-medium text-red-600 hover:text-red-800"
+                    >
+                      Delete Selected
+                    </button>
+                  </div>
+                </div>
+              )}
+              <div className="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                {inventoryItems.map((item) => {
                 const firstImage =
                   Array.isArray(item.image_urls) && item.image_urls.length > 0
                     ? item.image_urls[0]
                     : null;
 
                 return (
-                  <Card key={item.id} className="border-0 shadow-sm hover:shadow-md transition-all">
+                  <Card
+                    key={item.id}
+                    className={`border-0 shadow-sm hover:shadow-md transition-all ${
+                      selectedInventoryIds.includes(item.id)
+                        ? "ring-2 ring-purple-500"
+                        : ""
+                    }`}
+                  >
                     <CardContent className="p-4">
                       <div className="flex gap-4">
 
                         {/* Image Left */}
-                        <div className="w-24 h-24 bg-gray-100 rounded-md overflow-hidden flex-shrink-0 flex items-center justify-center">
+                        <div className="relative w-24 h-24 bg-gray-100 rounded-md overflow-hidden flex-shrink-0 flex items-center justify-center">
+                          <input
+                            type="checkbox"
+                            checked={selectedInventoryIds.includes(item.id)}
+                            onChange={() => toggleInventorySelection(item.id)}
+                            className="absolute top-1 right-1 w-4 h-4 accent-purple-600 cursor-pointer"
+                          />
                           {firstImage ? (
                             <img
                               src={firstImage}
@@ -568,7 +617,8 @@ export default function SellerProducts() {
                   </Card>
                 );
               })}
-            </div>
+              </div>
+            </>
           )}
         </div>
       </div>
