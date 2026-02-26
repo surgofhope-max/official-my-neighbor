@@ -1,5 +1,5 @@
-
 import React, { useState, useEffect, useMemo } from "react";
+import { devLog, devWarn } from "@/utils/devLog";
 import { supabase } from "@/lib/supabase/supabaseClient";
 import { supabaseApi as base44 } from "@/api/supabaseClient"; // Keep for non-Seller entities
 import { useQuery } from "@tanstack/react-query";
@@ -25,7 +25,7 @@ import { getFollowingByUserId } from "@/api/following";
 const EARLY_MARKET_MODE = import.meta.env.VITE_EARLY_MARKET_MODE === "true";
 
 // EARLY MARKET AUDIT LOG (TEMPORARY - remove after verification)
-console.log(
+devLog(
   "[EARLY_MARKET_AUDIT]",
   "VITE_EARLY_MARKET_MODE =",
   import.meta.env.VITE_EARLY_MARKET_MODE,
@@ -108,7 +108,7 @@ export default function NearMe() {
   
   // GEO AUDIT: Trace userZip state changes
   useEffect(() => {
-    console.log("[GEO AUDIT] userZip state updated:", userZip);
+    devLog("[GEO AUDIT] userZip state updated:", userZip);
   }, [userZip]);
   
   // Phase-2: Persisted locality tier state
@@ -165,8 +165,8 @@ export default function NearMe() {
         { headers: { 'User-Agent': 'LiveMarket/1.0' } }
       );
       const data = await res.json();
-      console.log("[GEO AUDIT] reverse geocode raw response:", data);
-      console.log("[GEO AUDIT] resolved ZIP:", data?.address?.postcode);
+      devLog("[GEO AUDIT] reverse geocode raw response:", data);
+      devLog("[GEO AUDIT] resolved ZIP:", data?.address?.postcode);
       return data?.address?.postcode || null;
     } catch {
       return null;
@@ -213,7 +213,7 @@ export default function NearMe() {
         return [];
       }
       
-      console.log("NearMe: seller_cards fetched count =", data?.length || 0);
+      devLog("NearMe: seller_cards fetched count =", data?.length || 0);
       
       // Map to legacy shape for downstream components
       return (data || []).map(mapSellerCardToLegacy);
@@ -335,16 +335,16 @@ export default function NearMe() {
         const { latitude, longitude } = position.coords;
         
         // GEO AUDIT: Log raw geolocation data
-        console.log("[GEO AUDIT] latitude:", latitude);
-        console.log("[GEO AUDIT] longitude:", longitude);
-        console.log("[GEO AUDIT] accuracy_m:", position.coords.accuracy);
+        devLog("[GEO AUDIT] latitude:", latitude);
+        devLog("[GEO AUDIT] longitude:", longitude);
+        devLog("[GEO AUDIT] accuracy_m:", position.coords.accuracy);
         
         setUserLocation({ latitude, longitude });
         setLoadingLocation(false);
         
         // Phase-1: Resolve ZIP from GPS coordinates
         resolveZipFromCoords(latitude, longitude).then((zip) => {
-          console.log("[GEO AUDIT] setting userZip to:", zip);
+          devLog("[GEO AUDIT] setting userZip to:", zip);
           if (zip) {
             setUserZip(zip);
             setZipError(null);
@@ -409,12 +409,12 @@ export default function NearMe() {
   useEffect(() => {
     // TEMP DIAGNOSTICS — remove after we confirm root cause
     try {
-      console.log("[NearMe DIAG] userZip:", userZip);
-      console.log("[NearMe DIAG] selectedTier:", selectedTier);
-      console.log("[NearMe DIAG] ZIP_ADJACENCY has userZip:", !!ZIP_ADJACENCY?.[userZip]);
-      console.log("[NearMe DIAG] allowedZips:", allowedZips);
+      devLog("[NearMe DIAG] userZip:", userZip);
+      devLog("[NearMe DIAG] selectedTier:", selectedTier);
+      devLog("[NearMe DIAG] ZIP_ADJACENCY has userZip:", !!ZIP_ADJACENCY?.[userZip]);
+      devLog("[NearMe DIAG] allowedZips:", allowedZips);
     } catch (e) {
-      console.log("[NearMe DIAG] logging error:", e);
+      devLog("[NearMe DIAG] logging error:", e);
     }
   }, [userZip, selectedTier, allowedZips]);
   
@@ -459,7 +459,7 @@ export default function NearMe() {
   useEffect(() => {
     // TEMP DIAGNOSTICS — remove after we confirm root cause
     try {
-      console.log("[NearMe DIAG] counts:", {
+      devLog("[NearMe DIAG] counts:", {
         sellers_total: sellers?.length ?? null,
         nearbySellers: nearbySellers?.length ?? null,
         liveShows_total: liveShows?.length ?? null,
@@ -471,7 +471,7 @@ export default function NearMe() {
         distanceRadius
       });
     } catch (e) {
-      console.log("[NearMe DIAG] count logging error:", e);
+      devLog("[NearMe DIAG] count logging error:", e);
     }
   }, [sellers, nearbySellers, liveShows, nearbyLiveShows, upcomingShows, nearbyUpcomingShows, communities, nearbyCommunities, distanceRadius]);
 
@@ -543,7 +543,7 @@ export default function NearMe() {
   }, [inZoneCommunities, followedCommunityIds, liveCommunityIdsSet, showOnlyFollowed]);
   
   // DEBUG LOG (temporary - remove after verification)
-  console.log("[NearMe][Communities] inZone=", inZoneCommunities.length, "live=", liveCommunitiesInZone.length, "followedNotLive=", followedCommunitiesNotLive.length, "otherNotLive=", otherCommunitiesNotLive.length);
+  devLog("[NearMe][Communities] inZone=", inZoneCommunities.length, "live=", liveCommunitiesInZone.length, "followedNotLive=", followedCommunitiesNotLive.length, "otherNotLive=", otherCommunitiesNotLive.length);
 
   // ═══════════════════════════════════════════════════════════════════════════
   // LIVE SHOWS SECTION DATA (sectioned layout like Communities)
@@ -572,7 +572,7 @@ export default function NearMe() {
   }, [nearbyUpcomingShows, followedSellerIds]);
 
   // DEBUG LOG (temporary - remove after verification)
-  console.log(
+  devLog(
     "[NearMe][LiveShows FIX]",
     "zoneLive=", nearbyLiveShows.length,
     "followedLive=", liveShowsFollowedInZone.length,

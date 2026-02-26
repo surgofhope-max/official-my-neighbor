@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { devLog, devWarn } from "@/utils/devLog";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/lib/supabase/supabaseClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -28,10 +29,10 @@ export default function ModerationCenter({ sellerId }) {
   const { data: viewerBans = [], isLoading, error, refetch } = useQuery({
     queryKey: ['viewer-bans', sellerId],
     queryFn: async () => {
-      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-      console.log("📋 MODERATION CENTER - FETCHING BANS");
-      console.log("   Seller ID:", sellerId);
-      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+      devLog("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+      devLog("📋 MODERATION CENTER - FETCHING BANS");
+      devLog("   Seller ID:", sellerId);
+      devLog("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
       
       if (!sellerId) {
         throw new Error("Seller ID is required to fetch bans");
@@ -50,13 +51,13 @@ export default function ModerationCenter({ sellerId }) {
 
       const bans = data || [];
       
-      console.log("✅ BANS LOADED FROM DATABASE");
-      console.log("   Total Count:", bans.length);
+      devLog("✅ BANS LOADED FROM DATABASE");
+      devLog("   Total Count:", bans.length);
       
       if (bans.length > 0) {
-        console.log("   First ban sample:", bans[0]);
+        devLog("   First ban sample:", bans[0]);
         bans.forEach((ban, idx) => {
-          console.log(`   Ban ${idx + 1}:`, {
+          devLog(`   Ban ${idx + 1}:`, {
             id: ban.id,
             viewer_id: ban.viewer_id,
             ban_type: ban.ban_type,
@@ -64,9 +65,9 @@ export default function ModerationCenter({ sellerId }) {
           });
         });
       } else {
-        console.log("   ⚠️ No bans found for seller:", sellerId);
+        devLog("   ⚠️ No bans found for seller:", sellerId);
       }
-      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+      devLog("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
       
       return bans;
     },
@@ -77,7 +78,7 @@ export default function ModerationCenter({ sellerId }) {
 
   const unbanMutation = useMutation({
     mutationFn: async (banId) => {
-      console.log("🔓 UNBANNING viewer, deleting ban ID:", banId);
+      devLog("🔓 UNBANNING viewer, deleting ban ID:", banId);
       
       const { error } = await supabase
         .from("viewer_bans")
@@ -89,7 +90,7 @@ export default function ModerationCenter({ sellerId }) {
         throw error;
       }
 
-      console.log("✅ UNBAN SUCCESS");
+      devLog("✅ UNBAN SUCCESS");
       return true;
     },
     onSuccess: () => {
@@ -181,7 +182,7 @@ export default function ModerationCenter({ sellerId }) {
                 variant="outline"
                 size="sm"
                 onClick={() => {
-                  console.log("🔄 Manual refresh triggered");
+                  devLog("🔄 Manual refresh triggered");
                   refetch();
                 }}
                 disabled={isLoading}
@@ -234,8 +235,8 @@ export default function ModerationCenter({ sellerId }) {
                   variant="outline"
                   size="sm"
                   onClick={() => {
-                    console.log("🔍 Checking database for bans...");
-                    console.log("   Seller ID:", sellerId);
+                    devLog("🔍 Checking database for bans...");
+                    devLog("   Seller ID:", sellerId);
                     refetch();
                   }}
                 >

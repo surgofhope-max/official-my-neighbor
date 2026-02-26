@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { devLog, devWarn } from "@/utils/devLog";
 import { supabase } from "@/lib/supabase/supabaseClient";
 import { getLiveShowMessages, sendLiveShowMessage } from "@/api/liveChat";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -55,7 +56,7 @@ export default function LiveChat({ showId, isSeller = false, isEmbedded = false,
         .maybeSingle();
 
       if (error) {
-        console.warn('[CHAT] Failed to check ban status:', error.message);
+        devWarn('[CHAT] Failed to check ban status:', error.message);
         return null;
       }
       return data;
@@ -105,7 +106,7 @@ export default function LiveChat({ showId, isSeller = false, isEmbedded = false,
   };
 
   const handleBanViewer = (msg) => {
-    console.log("🚫 Ban viewer clicked for message:", msg);
+    devLog("🚫 Ban viewer clicked for message:", msg);
     setBanningViewer({
       user_id: msg.sender_id,
       user_name: msg.sender_name || msg.sender_id
@@ -154,9 +155,9 @@ export default function LiveChat({ showId, isSeller = false, isEmbedded = false,
             </div>
           ) : user ? (
             <>
-            {console.log("[CHAT DEBUG DESKTOP] user:", user)}
-            {console.log("[CHAT DEBUG DESKTOP] isSeller:", isSeller)}
-            {console.log("[CHAT DEBUG DESKTOP] showId:", showId)}
+            {devLog("[CHAT DEBUG DESKTOP] user:", user)}
+            {devLog("[CHAT DEBUG DESKTOP] isSeller:", isSeller)}
+            {devLog("[CHAT DEBUG DESKTOP] showId:", showId)}
             <div className="flex gap-2">
               <Input
                 value={message}

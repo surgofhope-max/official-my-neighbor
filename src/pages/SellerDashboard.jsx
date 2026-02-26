@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { devLog, devWarn } from "@/utils/devLog";
 import { supabaseApi as base44 } from "@/api/supabaseClient";
 import { supabase } from "@/lib/supabase/supabaseClient";
 import { getFollowersBySellerId } from "@/api/followers";
@@ -154,20 +155,20 @@ export default function SellerDashboard() {
       // [FOLLOWERS AUDIT] — TEMPORARY LOGGING (REMOVE AFTER DEBUG)
       // ═══════════════════════════════════════════════════════════════════════
       console.group('[FOLLOWERS AUDIT]');
-      console.log('seller.id (entity):', seller?.id);
-      console.log('seller.user_id (auth):', seller?.user_id);
-      console.log('RAW followRows count:', followRows?.length);
-      console.log('RAW followRows:', followRows);
-      console.log('RAW follower buyer_ids:', followRows?.map(f => f.buyer_id));
+      devLog('seller.id (entity):', seller?.id);
+      devLog('seller.user_id (auth):', seller?.user_id);
+      devLog('RAW followRows count:', followRows?.length);
+      devLog('RAW followRows:', followRows);
+      devLog('RAW follower buyer_ids:', followRows?.map(f => f.buyer_id));
       console.groupEnd();
       
       // Extract buyer_profiles from joined rows
       const mappedProfiles = followRows.map(f => f.buyer_profiles);
       
       console.group('[FOLLOWERS AUDIT — POST MAP]');
-      console.log('Mapped buyer_profiles (before filter):', mappedProfiles);
-      console.log('Mapped count (before filter):', mappedProfiles?.length);
-      console.log('Mapped count (after Boolean filter):', mappedProfiles?.filter(Boolean)?.length);
+      devLog('Mapped buyer_profiles (before filter):', mappedProfiles);
+      devLog('Mapped count (before filter):', mappedProfiles?.length);
+      devLog('Mapped count (after Boolean filter):', mappedProfiles?.filter(Boolean)?.length);
       console.groupEnd();
       
       return mappedProfiles.filter(Boolean);
@@ -521,7 +522,7 @@ export default function SellerDashboard() {
 
     try {
       const result = await createStripeAccount();
-      console.log("Stripe account result:", result);
+      devLog("Stripe account result:", result);
 
       if (result?.onboarding_url) {
         window.location.href = result.onboarding_url;
@@ -911,8 +912,8 @@ export default function SellerDashboard() {
       // [FOLLOWERS TILE AUDIT] — log before consuming
       value: (() => {
         console.group('[FOLLOWERS TILE]');
-        console.log('followers array:', followers);
-        console.log('followers.length:', followers?.length);
+        devLog('followers array:', followers);
+        devLog('followers.length:', followers?.length);
         console.groupEnd();
         return followers.length;
       })(),

@@ -13,6 +13,7 @@
  */
 
 import { supabase } from "@/lib/supabase/supabaseClient";
+import { devLog, devWarn } from "@/utils/devLog";
 
 /**
  * Live chat message
@@ -69,8 +70,8 @@ export async function getLiveShowMessages(
     afterId?: string;
   } = {}
 ): Promise<GetMessagesResult> {
-  console.log("[CHAT DEBUG] getLiveShowMessages - auth user:", await supabase.auth.getUser());
-  console.log("[CHAT DEBUG] getLiveShowMessages - showId:", showId);
+  devLog("[CHAT DEBUG] getLiveShowMessages - auth user:", await supabase.auth.getUser());
+  devLog("[CHAT DEBUG] getLiveShowMessages - showId:", showId);
 
   if (!showId) {
     return { messages: [], error: null };
@@ -101,14 +102,14 @@ export async function getLiveShowMessages(
     }
 
     const { data, error } = await query;
-    console.log("[CHAT DEBUG] getLiveShowMessages - query result:", { data, error });
+    devLog("[CHAT DEBUG] getLiveShowMessages - query result:", { data, error });
 
     if (error) {
       // RLS error when show is not live - expected, return empty
       if (error.code === "PGRST301" || error.message.includes("RLS")) {
         return { messages: [], error: null };
       }
-      console.warn("Failed to fetch live chat messages:", error.message);
+      devWarn("Failed to fetch live chat messages:", error.message);
       return { messages: [], error: error.message };
     }
 
@@ -117,7 +118,7 @@ export async function getLiveShowMessages(
       error: null,
     };
   } catch (err) {
-    console.warn("Unexpected error fetching live chat messages:", err);
+    devWarn("Unexpected error fetching live chat messages:", err);
     return { messages: [], error: "Failed to load messages" };
   }
 }
@@ -149,8 +150,8 @@ export async function sendLiveShowMessage(
   message: string,
   senderRole: "seller" | "viewer"
 ): Promise<SendMessageResult> {
-  console.log("[CHAT DEBUG] sendLiveShowMessage - auth user:", await supabase.auth.getUser());
-  console.log("[CHAT DEBUG] sendLiveShowMessage - showId:", showId, "senderRole:", senderRole);
+  devLog("[CHAT DEBUG] sendLiveShowMessage - auth user:", await supabase.auth.getUser());
+  devLog("[CHAT DEBUG] sendLiveShowMessage - showId:", showId, "senderRole:", senderRole);
 
   // Validate input
   const trimmedMessage = message.trim();
@@ -186,14 +187,14 @@ export async function sendLiveShowMessage(
       })
       .select()
       .single();
-    console.log("[CHAT DEBUG] sendLiveShowMessage - insert result:", { data, error });
+    devLog("[CHAT DEBUG] sendLiveShowMessage - insert result:", { data, error });
 
     if (error) {
       // RLS error when show is not live
       if (error.code === "PGRST301" || error.message.includes("RLS")) {
         return { message: null, error: "Chat is only available during live shows" };
       }
-      console.warn("Failed to send live chat message:", error.message);
+      devWarn("Failed to send live chat message:", error.message);
       return { message: null, error: "Failed to send message" };
     }
 
@@ -202,7 +203,7 @@ export async function sendLiveShowMessage(
       error: null,
     };
   } catch (err) {
-    console.warn("Unexpected error sending live chat message:", err);
+    devWarn("Unexpected error sending live chat message:", err);
     return { message: null, error: "Failed to send message" };
   }
 }

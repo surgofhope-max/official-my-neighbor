@@ -14,6 +14,7 @@
  */
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
+import { devLog, devWarn } from "@/utils/devLog";
 import { supabase } from "@/lib/supabase/supabaseClient";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -57,7 +58,7 @@ export default function SupabaseLiveChat({
   expandedProduct,
   onMessageSeller,
 }) {
-  console.log("[CHAT PROPS DEBUG][SupabaseLiveChat]", {
+  devLog("[CHAT PROPS DEBUG][SupabaseLiveChat]", {
     showId,
     sellerId,
     isSeller,
@@ -203,7 +204,7 @@ export default function SupabaseLiveChat({
         .maybeSingle();
       
       if (error) {
-        console.warn('[CHAT] Failed to check ban status:', error.message);
+        devWarn('[CHAT] Failed to check ban status:', error.message);
         return null;
       }
       return data;
@@ -214,17 +215,17 @@ export default function SupabaseLiveChat({
     refetchOnWindowFocus: false,
     // Debug callbacks
     onSuccess: (data) => {
-      console.log("[VB QUERY][SUCCESS]", { key: viewerBanQueryKey, data, fetchedAt: Date.now() });
+      devLog("[VB QUERY][SUCCESS]", { key: viewerBanQueryKey, data, fetchedAt: Date.now() });
     },
     onError: (error) => {
-      console.log("[VB QUERY][ERROR]", { key: viewerBanQueryKey, error });
+      devLog("[VB QUERY][ERROR]", { key: viewerBanQueryKey, error });
     },
   });
   const viewerBan = viewerBanQuery.data;
 
   // Debug: observe query state changes
   useEffect(() => {
-    console.log("[VB QUERY][STATE]", {
+    devLog("[VB QUERY][STATE]", {
       key: viewerBanQueryKey,
       enabled,
       status: viewerBanQuery.status,
@@ -345,21 +346,21 @@ export default function SupabaseLiveChat({
         async (payload) => {
           const row = payload?.new;
           if (!row?.id) return;
-          console.log("[REALTIME_CHAT] insert", { id: row.id, showId });
+          devLog("[REALTIME_CHAT] insert", { id: row.id, showId });
           await applyIncomingMessages([row]);
         }
       )
       .subscribe((status) => {
         realtimeActiveRef.current = status === "SUBSCRIBED";
-        console.log("[REALTIME_CHAT] status", { status, showId });
+        devLog("[REALTIME_CHAT] status", { status, showId });
       });
 
-    console.log("[REALTIME_CHAT] subscribed", { showId });
+    devLog("[REALTIME_CHAT] subscribed", { showId });
 
     return () => {
       realtimeActiveRef.current = false;
       supabase.removeChannel(channel);
-      console.log("[REALTIME_CHAT] unsubscribed", { showId });
+      devLog("[REALTIME_CHAT] unsubscribed", { showId });
     };
   }, [showId, applyIncomingMessages]);
 
@@ -580,9 +581,9 @@ export default function SupabaseLiveChat({
       </div>
 
       {/* Input Form */}
-      {console.log("[CHAT DEBUG] viewer user:", user)}
-      {console.log("[CHAT DEBUG] sellerId:", sellerId)}
-      {console.log("[CHAT DEBUG] showId:", showId)}
+      {devLog("[CHAT DEBUG] viewer user:", user)}
+      {devLog("[CHAT DEBUG] sellerId:", sellerId)}
+      {devLog("[CHAT DEBUG] showId:", showId)}
       {user ? (
         isChatBanned ? (
           <div 
