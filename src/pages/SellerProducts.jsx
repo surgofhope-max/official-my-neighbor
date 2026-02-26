@@ -152,15 +152,19 @@ export default function SellerProducts() {
     try {
       setAssigning(true);
 
-      await Promise.all(
-        selectedInventoryIds.map((inventoryId) =>
-          copyInventoryToShow(inventoryId, selectedShowId, seller.id)
-        )
-      );
+      // Sequential assignment to avoid box_number race condition
+      for (const inventoryId of selectedInventoryIds) {
+        await copyInventoryToShow(
+          inventoryId,
+          selectedShowId,
+          seller.id
+        );
+      }
 
       setSelectedInventoryIds([]);
       setSelectedShowId("");
       setShowAssignModalOpen(false);
+
     } catch (error) {
       console.error("Failed to assign inventory to show:", error);
       alert("Failed to assign inventory to show.");
