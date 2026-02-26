@@ -116,6 +116,32 @@ export default function SellerProducts() {
     }
   };
 
+  const handleBulkDeleteInventory = async () => {
+    if (selectedInventoryIds.length === 0) return;
+
+    const confirmed = window.confirm(
+      `Are you sure you want to delete ${selectedInventoryIds.length} selected item(s)?`
+    );
+    if (!confirmed) return;
+
+    try {
+      await Promise.all(
+        selectedInventoryIds.map((id) =>
+          archiveInventoryProduct(id)
+        )
+      );
+
+      setInventoryItems((prev) =>
+        prev.filter((item) => !selectedInventoryIds.includes(item.id))
+      );
+
+      setSelectedInventoryIds([]);
+    } catch (error) {
+      console.error("Failed to bulk delete inventory:", error);
+      alert("Failed to delete selected inventory items.");
+    }
+  };
+
   // Load seller data when auth user changes
   useEffect(() => {
     if (isLoadingAuth) return; // Wait for auth check to complete
@@ -568,6 +594,7 @@ export default function SellerProducts() {
                       Assign to Show
                     </button>
                     <button
+                      onClick={handleBulkDeleteInventory}
                       className="text-sm font-medium text-red-600 hover:text-red-800"
                     >
                       Delete Selected
