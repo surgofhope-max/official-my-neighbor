@@ -684,7 +684,7 @@ export default function SellerProducts() {
                   </div>
                 </div>
               )}
-              <div className="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
                 {inventoryItems.map((item) => {
                 const firstImage =
                   Array.isArray(item.image_urls) && item.image_urls.length > 0
@@ -694,23 +694,25 @@ export default function SellerProducts() {
                 return (
                   <Card
                     key={item.id}
-                    className={`border-0 shadow-sm hover:shadow-md transition-all ${
+                    className={`relative border-0 shadow-sm hover:shadow-md transition-all ${
                       selectedInventoryIds.includes(item.id)
                         ? "ring-2 ring-purple-500"
                         : ""
                     }`}
                   >
+                    <div className="absolute top-3 right-3 z-10">
+                      <input
+                        type="checkbox"
+                        checked={selectedInventoryIds.includes(item.id)}
+                        onChange={() => toggleInventorySelection(item.id)}
+                        className="w-5 h-5 accent-purple-600 cursor-pointer"
+                      />
+                    </div>
                     <CardContent className="p-4">
                       <div className="flex gap-4">
 
                         {/* Image Left */}
                         <div className="relative w-24 h-24 bg-gray-100 rounded-md overflow-hidden flex-shrink-0 flex items-center justify-center">
-                          <input
-                            type="checkbox"
-                            checked={selectedInventoryIds.includes(item.id)}
-                            onChange={() => toggleInventorySelection(item.id)}
-                            className="absolute top-1 right-1 w-4 h-4 accent-purple-600 cursor-pointer"
-                          />
                           {firstImage ? (
                             <img
                               src={firstImage}
