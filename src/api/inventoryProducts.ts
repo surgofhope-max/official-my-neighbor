@@ -145,7 +145,7 @@ export async function copyInventoryToShow(
     title: inventory.title,
     description: inventory.description ?? null,
     price: inventory.price,
-    quantity: 0,
+    quantity: 1,
     image_urls: inventory.image_urls ?? [],
     category: inventory.category ?? null,
     status: "active",
