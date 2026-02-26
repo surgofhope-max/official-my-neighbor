@@ -1141,42 +1141,6 @@ export default function SellerProducts() {
                         {product.category}
                       </Badge>
                     )}
-                    <div className="flex gap-2 items-center">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="flex-1"
-                        onClick={() => handleEdit(product)}
-                      >
-                        <Edit className="w-3 h-3 mr-1" />
-                        Edit
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="text-red-600 hover:bg-red-50"
-                        onClick={() => handleDelete(product.id)}
-                      >
-                        <Trash2 className="w-3 h-3" />
-                      </Button>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button variant="outline" size="icon" className="h-8 w-8 shrink-0">
-                            <MoreVertical className="w-4 h-4" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem onClick={() => handleRewrite(product)}>
-                            <FileEdit className="w-4 h-4 mr-2" />
-                            Rewrite (Duplicate)
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => handleCopy(product)}>
-                            <Copy className="w-4 h-4 mr-2" />
-                            Copy
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </div>
                   </CardContent>
                 </Card>
               ))}
