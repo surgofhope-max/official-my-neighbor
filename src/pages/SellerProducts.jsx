@@ -53,7 +53,8 @@ import { createShowProduct } from "@/api/showProducts";
 import {
   getInventoryBySeller,
   createInventoryProduct,
-  archiveInventoryProduct
+  archiveInventoryProduct,
+  copyInventoryToShow
 } from "@/api/inventoryProducts";
 import { FEATURES } from "@/config/features";
 import { toast } from "sonner";
@@ -86,6 +87,9 @@ export default function SellerProducts() {
   const [showInventoryDialog, setShowInventoryDialog] = useState(false);
   const [inventorySaving, setInventorySaving] = useState(false);
   const [selectedInventoryIds, setSelectedInventoryIds] = useState([]);
+  const [showAssignModalOpen, setShowAssignModalOpen] = useState(false);
+  const [selectedShowId, setSelectedShowId] = useState("");
+  const [assigning, setAssigning] = useState(false);
 
   const toggleInventorySelection = (id) => {
     setSelectedInventoryIds((prev) => {
@@ -139,6 +143,29 @@ export default function SellerProducts() {
     } catch (error) {
       console.error("Failed to bulk delete inventory:", error);
       alert("Failed to delete selected inventory items.");
+    }
+  };
+
+  const handleAssignToShow = async () => {
+    if (!selectedShowId || selectedInventoryIds.length === 0) return;
+
+    try {
+      setAssigning(true);
+
+      await Promise.all(
+        selectedInventoryIds.map((inventoryId) =>
+          copyInventoryToShow(inventoryId, selectedShowId, seller.id)
+        )
+      );
+
+      setSelectedInventoryIds([]);
+      setSelectedShowId("");
+      setShowAssignModalOpen(false);
+    } catch (error) {
+      console.error("Failed to assign inventory to show:", error);
+      alert("Failed to assign inventory to show.");
+    } finally {
+      setAssigning(false);
     }
   };
 
@@ -570,6 +597,56 @@ export default function SellerProducts() {
               />
             </DialogContent>
           </Dialog>
+          <Dialog open={showAssignModalOpen} onOpenChange={setShowAssignModalOpen}>
+            <DialogContent className="max-w-md">
+              <DialogHeader>
+                <DialogTitle>Assign to Show</DialogTitle>
+              </DialogHeader>
+
+              <div className="space-y-4">
+
+                <select
+                  value={selectedShowId}
+                  onChange={(e) => setSelectedShowId(e.target.value)}
+                  className="w-full border rounded-md p-2"
+                >
+                  <option value="">Select a show</option>
+                  {shows
+                    .filter(
+                      (show) =>
+                        show.status === "live" ||
+                        show.status === "scheduled"
+                    )
+                    .map((show) => (
+                      <option key={show.id} value={show.id}>
+                        {show.title}
+                      </option>
+                    ))}
+                </select>
+
+                <div className="flex justify-end gap-3">
+                  <button
+                    onClick={() => {
+                      setShowAssignModalOpen(false);
+                      setSelectedShowId("");
+                    }}
+                    className="text-sm text-gray-600"
+                  >
+                    Cancel
+                  </button>
+
+                  <button
+                    onClick={handleAssignToShow}
+                    disabled={!selectedShowId || assigning}
+                    className="text-sm font-medium text-purple-600 disabled:opacity-50"
+                  >
+                    {assigning ? "Assigning..." : "Assign"}
+                  </button>
+                </div>
+
+              </div>
+            </DialogContent>
+          </Dialog>
           {inventoryItems.length === 0 ? (
             <div className="flex items-center justify-center min-h-[200px] text-gray-600">
               No inventory items yet
@@ -589,6 +666,7 @@ export default function SellerProducts() {
                       Clear
                     </button>
                     <button
+                      onClick={() => setShowAssignModalOpen(true)}
                       className="text-sm font-medium text-purple-600 hover:text-purple-800"
                     >
                       Assign to Show
