@@ -521,6 +521,19 @@ export default function SellerDashboard() {
     }
 
     try {
+      if (seller?.connect_type === "standard") {
+        const { data, error } = await supabase.functions.invoke("stripe-oauth-start", {
+          body: {},
+        });
+        if (error) throw error;
+        if (data?.authorize_url) {
+          window.location.href = data.authorize_url;
+          return;
+        }
+        alert("Stripe OAuth URL not returned. Check logs.");
+        return;
+      }
+
       const result = await createStripeAccount();
       devLog("Stripe account result:", result);
 
