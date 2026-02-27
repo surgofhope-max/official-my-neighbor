@@ -48,6 +48,7 @@ import {
   EyeOff,
   Shield,
   LogOut,
+  ExternalLink,
   PartyPopper,
   Sparkles,
   ArrowRight,
@@ -1163,6 +1164,14 @@ export default function SellerDashboard() {
                   </span>
                 )}
               </AlertDescription>
+              {seller.stripe_connected && (
+                <Button asChild className="mt-3 bg-gradient-to-r from-purple-600 to-blue-500">
+                  <a href="https://dashboard.stripe.com" target="_blank" rel="noopener noreferrer">
+                    <ExternalLink className="w-4 h-4 mr-2" />
+                    Open Stripe Dashboard
+                  </a>
+                </Button>
+              )}
               {!seller.stripe_connected && (
                 <Button
                   className="mt-3 bg-gradient-to-r from-purple-600 to-blue-500"

@@ -42,3 +42,6 @@ verify_jwt = false
 # ──────────────────────────────────────────────────────────────────────────────
 [functions.stripe-return]
 verify_jwt = false
+
+[functions.stripe-oauth-callback]
+verify_jwt = false
