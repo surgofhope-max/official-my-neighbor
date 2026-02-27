@@ -169,7 +169,7 @@ serve(async (req: Request) => {
 
     const { data: seller, error: sellerError } = await supabase
       .from("sellers")
-      .select("id, user_id, stripe_account_id, business_name")
+      .select("id, user_id, stripe_account_id, business_name, seller_tax_rate")
       .eq("id", intent.seller_id)
       .single();
 
@@ -193,7 +193,26 @@ serve(async (req: Request) => {
 
     const quantity = intent.quantity ?? 1;
     const pricePerUnit = Number(product.price) || 0;
-    const amountInCents = Math.round(pricePerUnit * quantity * 100);
+
+    // Subtotal (dollars)
+    const subtotal = pricePerUnit * quantity;
+
+    // Seller tax rate (safe fallback to 0)
+    const sellerTaxRate = Number(seller.seller_tax_rate) || 0;
+
+    // Tax amount (dollars)
+    const taxAmount = subtotal * sellerTaxRate;
+
+    // Final total (dollars)
+    const totalAmount = subtotal + taxAmount;
+
+    // Convert total to cents for Stripe
+    const amountInCents = Math.round(totalAmount * 100);
+
+    // Platform fee = 11% of subtotal ONLY
+    const PLATFORM_FEE_RATE = 0.11;
+    const platformFee = Math.round(subtotal * PLATFORM_FEE_RATE * 100);
+
     if (amountInCents < 50) {
       console.error("CREATE_PI_VALIDATION_FAILED", {
         stage: "AMOUNT_INVALID",
@@ -211,8 +230,6 @@ serve(async (req: Request) => {
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
-
-    const platformFee = Math.round(amountInCents * 0.05);
 
     const nowIso = new Date().toISOString();
 
