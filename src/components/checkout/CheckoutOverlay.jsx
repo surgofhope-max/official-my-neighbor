@@ -164,6 +164,12 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, c
   const onIntentExpiredRef = useRef(onIntentExpired);
   const onCloseRef = useRef(onClose);
 
+  const subtotal = product?.price || 0;
+  const delivery = product?.delivery_fee || 0;
+  const taxRate = seller?.seller_tax_rate || 0;
+  const tax = Math.round(subtotal * taxRate * 100) / 100;
+  const total = subtotal + tax + delivery;
+
   useEffect(() => { onIntentExpiredRef.current = onIntentExpired; }, [onIntentExpired]);
   useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
 
@@ -880,6 +886,12 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, c
                               <span className="text-gray-600 text-sm">Price:</span>
                               <span className="font-semibold">${product.price?.toFixed(2)}</span>
                             </div>
+                            <div className="flex justify-between items-center">
+                              <span className="text-gray-600 text-sm">
+                                Tax {taxRate > 0 ? `(${(taxRate * 100).toFixed(1)}%)` : ""}:
+                              </span>
+                              <span className="font-semibold">${tax.toFixed(2)}</span>
+                            </div>
                             {product.delivery_fee > 0 && (
                               <div className="flex justify-between items-center mt-1 text-blue-600">
                                 <span className="text-sm">Delivery Fee:</span>
@@ -889,7 +901,7 @@ export default function CheckoutOverlay({ product, seller, show, buyerProfile, c
                             <div className="border-t border-gray-200 mt-2 pt-2 flex justify-between items-center">
                               <span className="font-bold text-gray-900">Total:</span>
                               <span className="text-2xl font-bold text-gray-900">
-                                ${((product.price || 0) + (product.delivery_fee || 0)).toFixed(2)}
+                                ${total.toFixed(2)}
                               </span>
                             </div>
                           </div>
