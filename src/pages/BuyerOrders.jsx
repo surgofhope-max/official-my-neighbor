@@ -97,6 +97,10 @@ export default function BuyerOrders() {
         getOrdersByBuyerId(effectiveUserId),
       ]);
 
+      console.log("[BuyerOrders] effectiveUserId:", effectiveUserId);
+      console.log("[BuyerOrders] batches returned:", batchesData);
+      console.log("[BuyerOrders] orders returned:", ordersData);
+
       setBatches(batchesData);
       setAllOrders(ordersData);
     } catch (error) {
