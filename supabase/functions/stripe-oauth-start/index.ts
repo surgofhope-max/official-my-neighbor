@@ -65,16 +65,19 @@ serve(async (req: Request) => {
     );
   }
 
-  const stripeClientId = Deno.env.get("STRIPE_CLIENT_ID");
-  const stripeSecretKey = Deno.env.get("STRIPE_SECRET_KEY") || Deno.env.get("STRIPE_SECRET") || "";
-  const supabaseUrl = Deno.env.get("SUPABASE_URL");
-
-  if (!stripeClientId) {
+  const stripeClientIdRaw = Deno.env.get("STRIPE_CLIENT_ID") ?? "";
+  const stripeClientId = stripeClientIdRaw.trim();
+  console.log("STRIPE_CLIENT_ID raw:", JSON.stringify(stripeClientIdRaw));
+  console.log("STRIPE_CLIENT_ID trimmed:", JSON.stringify(stripeClientId));
+  if (!stripeClientId.startsWith("ca_")) {
+    console.error("invalid_stripe_client_id", { raw: JSON.stringify(stripeClientIdRaw), trimmed: JSON.stringify(stripeClientId) });
     return new Response(
-      JSON.stringify({ error: "STRIPE_CLIENT_ID not configured" }),
+      JSON.stringify({ error: "invalid_stripe_client_id" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
+  const stripeSecretKey = Deno.env.get("STRIPE_SECRET_KEY") || Deno.env.get("STRIPE_SECRET") || "";
+  const supabaseUrl = Deno.env.get("SUPABASE_URL");
 
   if (!supabaseUrl) {
     return new Response(
