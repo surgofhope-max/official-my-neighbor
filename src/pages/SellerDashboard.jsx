@@ -111,6 +111,7 @@ export default function SellerDashboard() {
     pickup_state: "Arizona",
     pickup_zip: "",
     pickup_notes: "",
+    seller_tax_rate_percent: "",
     bio: "",
     profile_image_url: "",
     background_image_url: "",
@@ -118,6 +119,8 @@ export default function SellerDashboard() {
     show_contact_phone: true,
     show_pickup_address: true
   });
+
+  const [sellerTaxRateError, setSellerTaxRateError] = useState("");
 
   const { data: products = [] } = useQuery({
     queryKey: ['seller-products', seller?.id],
@@ -344,6 +347,8 @@ export default function SellerDashboard() {
 
   // Helper to populate form data from seller profile
   const populateFormData = (sellerProfile, currentUser) => {
+    const taxRate = sellerProfile.seller_tax_rate;
+    const taxRatePercent = taxRate != null && taxRate !== "" ? String((Number(taxRate) * 100)) : "";
     setFormData({
       business_name: sellerProfile.business_name || "",
       contact_phone: sellerProfile.contact_phone || "",
@@ -353,6 +358,7 @@ export default function SellerDashboard() {
       pickup_state: sellerProfile.pickup_state || "Arizona",
       pickup_zip: sellerProfile.pickup_zip || "",
       pickup_notes: sellerProfile.pickup_notes || "",
+      seller_tax_rate_percent: taxRatePercent,
       bio: sellerProfile.bio || "",
       profile_image_url: sellerProfile.profile_image_url || "",
       background_image_url: sellerProfile.background_image_url || "",
@@ -373,6 +379,7 @@ export default function SellerDashboard() {
       pickup_state: "Arizona",
       pickup_zip: "",
       pickup_notes: "",
+      seller_tax_rate_percent: "",
       bio: "",
       profile_image_url: "",
       background_image_url: "",
@@ -415,6 +422,7 @@ export default function SellerDashboard() {
           pickup_state: data.pickup_state,
           pickup_zip: data.pickup_zip,
           pickup_notes: data.pickup_notes,
+          seller_tax_rate: data.seller_tax_rate ?? null,
           bio: data.bio,
           profile_image_url: data.profile_image_url ?? null,
           background_image_url: data.background_image_url ?? null,
@@ -433,12 +441,51 @@ export default function SellerDashboard() {
     },
   });
 
+  const validateSellerTaxRate = () => {
+    const val = formData.seller_tax_rate_percent?.trim?.() ?? "";
+    if (!val) {
+      setSellerTaxRateError("Sales tax rate is required.");
+      return false;
+    }
+    const num = Number(val);
+    if (Number.isNaN(num)) {
+      setSellerTaxRateError("Must be a valid number.");
+      return false;
+    }
+    if (num < 0 || num > 20) {
+      setSellerTaxRateError("Must be between 0 and 20.");
+      return false;
+    }
+    setSellerTaxRateError("");
+    return true;
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (!validateSellerTaxRate()) return;
     if (seller) {
-      updateSellerMutation.mutate({ id: seller.id, data: formData });
+      const payload = { ...formData };
+      payload.seller_tax_rate = formData.seller_tax_rate_percent !== "" ? Number(formData.seller_tax_rate_percent) / 100 : null;
+      updateSellerMutation.mutate({ id: seller.id, data: payload });
     } else {
-      createSellerMutation.mutate(formData);
+      const createPayload = {
+        business_name: formData.business_name,
+        contact_phone: formData.contact_phone,
+        contact_email: formData.contact_email,
+        pickup_address: formData.pickup_address,
+        pickup_city: formData.pickup_city,
+        pickup_state: formData.pickup_state,
+        pickup_zip: formData.pickup_zip,
+        pickup_notes: formData.pickup_notes,
+        seller_tax_rate: formData.seller_tax_rate_percent !== "" ? Number(formData.seller_tax_rate_percent) / 100 : null,
+        bio: formData.bio,
+        profile_image_url: formData.profile_image_url,
+        background_image_url: formData.background_image_url,
+        show_contact_email: formData.show_contact_email,
+        show_contact_phone: formData.show_contact_phone,
+        show_pickup_address: formData.show_pickup_address
+      };
+      createSellerMutation.mutate(createPayload);
     }
   };
 
@@ -864,6 +911,24 @@ export default function SellerDashboard() {
                     placeholder="e.g., Ring doorbell, pickup from garage"
                     rows={3}
                   />
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Sales tax rate (%) *</Label>
+                  <Input
+                    type="number"
+                    step={0.01}
+                    min={0}
+                    max={20}
+                    value={formData.seller_tax_rate_percent}
+                    onChange={(e) => {
+                      setFormData({ ...formData, seller_tax_rate_percent: e.target.value });
+                      setSellerTaxRateError("");
+                    }}
+                    placeholder="e.g. 8.6"
+                  />
+                  <p className="text-xs text-gray-500">Required. This is the sales tax rate for your pickup location.</p>
+                  {sellerTaxRateError && <p className="text-xs text-red-600">{sellerTaxRateError}</p>}
                 </div>
 
                 <div className="space-y-2">
@@ -1470,6 +1535,24 @@ export default function SellerDashboard() {
                 </div>
 
                 <div className="space-y-2">
+                  <Label>Sales tax rate (%) *</Label>
+                  <Input
+                    type="number"
+                    step={0.01}
+                    min={0}
+                    max={20}
+                    value={formData.seller_tax_rate_percent}
+                    onChange={(e) => {
+                      setFormData({ ...formData, seller_tax_rate_percent: e.target.value });
+                      setSellerTaxRateError("");
+                    }}
+                    placeholder="e.g. 8.6"
+                  />
+                  <p className="text-xs text-gray-500">Required. This is the sales tax rate for your pickup location.</p>
+                  {sellerTaxRateError && <p className="text-xs text-red-600">{sellerTaxRateError}</p>}
+                </div>
+
+                <div className="space-y-2">
                   <Label>Bio</Label>
                   <Textarea
                     value={formData.bio}
@@ -1493,6 +1576,9 @@ export default function SellerDashboard() {
                       variant="outline"
                       onClick={() => {
                         setShowProfileEditor(false);
+                        setSellerTaxRateError("");
+                        const taxRate = seller.seller_tax_rate;
+                        const taxRatePercent = taxRate != null && taxRate !== "" ? String((Number(taxRate) * 100)) : "";
                         setFormData({
                           business_name: seller.business_name || "",
                           contact_phone: seller.contact_phone || "",
@@ -1502,6 +1588,7 @@ export default function SellerDashboard() {
                           pickup_state: seller.pickup_state || "Arizona",
                           pickup_zip: seller.pickup_zip || "",
                           pickup_notes: seller.pickup_notes || "",
+                          seller_tax_rate_percent: taxRatePercent,
                           bio: seller.bio || "",
                           profile_image_url: seller.profile_image_url || "",
                           background_image_url: seller.background_image_url || "",
