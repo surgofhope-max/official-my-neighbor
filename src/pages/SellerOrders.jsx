@@ -1231,7 +1231,10 @@ export default function SellerOrders() {
                 <div>
                   <p className="text-gray-600 text-sm">Show Revenue</p>
                   <p className="text-2xl font-bold text-gray-900">
-                    ${allOrders.filter(o => o.show_id === selectedShow?.id).reduce((sum, o) => sum + (Number(o.price) || 0) + (Number(o.delivery_fee) || 0), 0).toFixed(2)}
+                    ${allOrders
+                    .filter(o => o.show_id === selectedShow?.id)
+                    .reduce((sum, o) => sum + getOrderFinancials(o).total, 0)
+                    .toFixed(2)}
                   </p>
                 </div>
               </div>
