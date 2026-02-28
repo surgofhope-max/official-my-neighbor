@@ -1278,14 +1278,19 @@ export default function HostConsole() {
 
     if (!searchLower) return true;
 
+    const isNumeric = /^\d+$/.test(searchLower);
+
+    if (isNumeric) {
+      const boxNumber = p.box_number?.toString() || "";
+      return boxNumber.includes(searchLower);
+    }
+
     const title = p.title?.toLowerCase() || "";
     const description = p.description?.toLowerCase() || "";
-    const boxNumber = p.box_number?.toString() || "";
 
     return (
       title.includes(searchLower) ||
-      description.includes(searchLower) ||
-      boxNumber.includes(searchLower)
+      description.includes(searchLower)
     );
   });
 
