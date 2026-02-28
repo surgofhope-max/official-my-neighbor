@@ -1638,11 +1638,11 @@ export default function HostConsole() {
                     )}
 
                     {overlayMode === "detail" && overlaySelectedProduct && (
-                      <div className="flex flex-col h-full">
-
-                        <div className="flex items-center justify-between mb-3">
+                      <div className="flex flex-col h-full pt-1">
+                        <div className="flex items-center">
                           <Button
                             variant="ghost"
+                            className="px-0 py-1"
                             onClick={() => {
                               setOverlayMode("grid");
                               setOverlaySelectedProduct(null);
@@ -1652,28 +1652,29 @@ export default function HostConsole() {
                           </Button>
                         </div>
 
-                        <SellerProductDetailContent
-                          product={overlaySelectedProduct}
-                          showId={showId}
-                          onClose={() => {
-                            setOverlayMode("grid");
-                            setOverlaySelectedProduct(null);
-                          }}
-                          onPushToLive={(product) => {
-                            const isFeatured = product.is_featured || product.id === show.featured_product_id;
+                        <div className="mt-1">
+                          <SellerProductDetailContent
+                            product={overlaySelectedProduct}
+                            showId={showId}
+                            onClose={() => {
+                              setOverlayMode("grid");
+                              setOverlaySelectedProduct(null);
+                            }}
+                            onPushToLive={(product) => {
+                              const isFeatured = product.is_featured || product.id === show.featured_product_id;
 
-                            if (isFeatured) {
-                              unfeatureProductMutation.mutate();
-                            } else if (product.status === "active") {
-                              featureProductMutation.mutate(product);
+                              if (isFeatured) {
+                                unfeatureProductMutation.mutate();
+                              } else if (product.status === "active") {
+                                featureProductMutation.mutate(product);
+                              }
+                            }}
+                            isFeatured={
+                              overlaySelectedProduct.is_featured ||
+                              overlaySelectedProduct.id === show.featured_product_id
                             }
-                          }}
-                          isFeatured={
-                            overlaySelectedProduct.is_featured ||
-                            overlaySelectedProduct.id === show.featured_product_id
-                          }
-                        />
-
+                          />
+                        </div>
                       </div>
                     )}
 
