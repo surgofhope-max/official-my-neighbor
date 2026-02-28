@@ -1457,7 +1457,7 @@ export default function HostConsole() {
           )}
           
           {/* Seller Product Detail Card (Overlay) */}
-          {selectedProduct && (
+          {!showHostProductOverlay && selectedProduct && (
             <SellerProductDetailCard 
               product={selectedProduct}
               showId={showId}
