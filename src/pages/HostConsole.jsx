@@ -133,6 +133,7 @@ export default function HostConsole() {
       setShowHostProductOverlay(false);
       setOverlayMode("grid");
       setOverlaySelectedProduct(null);
+      setSearchTerm("");
     };
     document.addEventListener("pointerdown", handler, true);
     return () => document.removeEventListener("pointerdown", handler, true);
@@ -1273,10 +1274,18 @@ export default function HostConsole() {
   // Find featured product - check is_featured flag from show_products first, then fall back to show.featured_product_id
   const featuredProduct = products.find(p => p.is_featured) || products.find(p => p.id === show.featured_product_id);
   const filteredProducts = products.filter(p => {
-    const searchLower = searchTerm.toLowerCase();
+    const searchLower = searchTerm.trim().toLowerCase();
+
+    if (!searchLower) return true;
+
+    const title = p.title?.toLowerCase() || "";
+    const description = p.description?.toLowerCase() || "";
+    const boxNumber = p.box_number?.toString() || "";
+
     return (
-      p.title.toLowerCase().includes(searchLower) ||
-      p.description?.toLowerCase().includes(searchLower)
+      title.includes(searchLower) ||
+      description.includes(searchLower) ||
+      boxNumber.includes(searchLower)
     );
   });
 
@@ -1427,7 +1436,7 @@ export default function HostConsole() {
         {/* CONDITIONAL CONTAINER: Only mount mobile layout on mobile devices.
             Device-locked classification prevents remount on rotation. */}
         {isMobileDevice && (
-        <div className="fixed inset-0 bg-black" style={{ zIndex: 1 }} onClick={() => { if (showHostProductOverlay) { setShowHostProductOverlay(false); setOverlayMode("grid"); setOverlaySelectedProduct(null); } }}>
+        <div className="fixed inset-0 bg-black" style={{ zIndex: 1 }} onClick={() => { if (showHostProductOverlay) { setShowHostProductOverlay(false); setOverlayMode("grid"); setOverlaySelectedProduct(null); setSearchTerm(""); } }}>
           {/* Back Arrow - Top Left */}
           <Button
             variant="ghost"
