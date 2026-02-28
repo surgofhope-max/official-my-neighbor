@@ -1445,6 +1445,7 @@ export default function HostConsole() {
                   sellerId={currentSeller?.id}
                   isSeller={true}
                   isOverlay={true}
+                  expandedProduct={showHostProductOverlay}
                   user={currentUser}
                 />
               ) : (
