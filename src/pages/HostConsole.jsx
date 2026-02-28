@@ -46,6 +46,7 @@ import {
 } from "lucide-react";
 import HostBottomControls from "../components/host/HostBottomControls";
 import SellerProductDetailCard from "../components/host/SellerProductDetailCard";
+import SellerProductDetailContent from "../components/host/SellerProductDetailContent";
 import LiveChat from "../components/chat/LiveChat";
 import LiveChatOverlay from "../components/chat/LiveChatOverlay";
 import SupabaseLiveChat from "../components/chat/SupabaseLiveChat";
@@ -105,6 +106,8 @@ export default function HostConsole() {
   const [sellerShowsForClone, setSellerShowsForClone] = useState([]);
   const [isCloning, setIsCloning] = useState(false);
   const [showHostProductOverlay, setShowHostProductOverlay] = useState(false);
+  const [overlayMode, setOverlayMode] = useState("grid"); // "grid" | "detail"
+  const [overlaySelectedProduct, setOverlaySelectedProduct] = useState(null);
 
   // ═══════════════════════════════════════════════════════════════════════════
   // DEVICE-LOCKED CLASSIFICATION (NO VIEWPORT FLIPS)
@@ -1611,22 +1614,69 @@ export default function HostConsole() {
                     </Button>
                   </div>
 
-                  {/* Body: Product Bubbles */}
+                  {/* Body: Product Bubbles or Detail */}
                   <div className="flex-1 overflow-y-auto p-3">
-                    <HostBottomControls
-                      mode={"products"}
-                      showId={showId}
-                      sellerId={currentSeller?.id}
-                      products={filteredProducts}
-                      featuredProductId={show.featured_product_id}
-                      onFeatureProduct={(product) => setSelectedProduct(product)}
-                      onAddProduct={() => setShowAddProductDrawer(true)}
-                      onSearch={setSearchTerm}
-                      searchTerm={searchTerm}
-                      useSupabaseChat={useSupabaseChat}
-                      user={currentUser}
-                      embedded={true}
-                    />
+
+                    {overlayMode === "grid" && (
+                      <HostBottomControls
+                        mode={"products"}
+                        showId={showId}
+                        sellerId={currentSeller?.id}
+                        products={filteredProducts}
+                        featuredProductId={show.featured_product_id}
+                        onFeatureProduct={(product) => {
+                          setOverlaySelectedProduct(product);
+                          setOverlayMode("detail");
+                        }}
+                        onAddProduct={() => setShowAddProductDrawer(true)}
+                        onSearch={setSearchTerm}
+                        searchTerm={searchTerm}
+                        useSupabaseChat={useSupabaseChat}
+                        user={currentUser}
+                        embedded={true}
+                      />
+                    )}
+
+                    {overlayMode === "detail" && overlaySelectedProduct && (
+                      <div className="flex flex-col h-full">
+
+                        <div className="flex items-center justify-between mb-3">
+                          <Button
+                            variant="ghost"
+                            onClick={() => {
+                              setOverlayMode("grid");
+                              setOverlaySelectedProduct(null);
+                            }}
+                          >
+                            ← Back
+                          </Button>
+                        </div>
+
+                        <SellerProductDetailContent
+                          product={overlaySelectedProduct}
+                          showId={showId}
+                          onClose={() => {
+                            setOverlayMode("grid");
+                            setOverlaySelectedProduct(null);
+                          }}
+                          onPushToLive={(product) => {
+                            const isFeatured = product.is_featured || product.id === show.featured_product_id;
+
+                            if (isFeatured) {
+                              unfeatureProductMutation.mutate();
+                            } else if (product.status === "active") {
+                              featureProductMutation.mutate(product);
+                            }
+                          }}
+                          isFeatured={
+                            overlaySelectedProduct.is_featured ||
+                            overlaySelectedProduct.id === show.featured_product_id
+                          }
+                        />
+
+                      </div>
+                    )}
+
                   </div>
 
                 </div>
