@@ -838,6 +838,13 @@ export default function LiveShow() {
     const searchLower = buyerSearchTerm.trim().toLowerCase();
     if (!searchLower) return true;
 
+    const isNumeric = /^\d+$/.test(searchLower);
+
+    if (isNumeric) {
+      const boxNumber = p.box_number?.toString() || "";
+      return boxNumber.includes(searchLower);
+    }
+
     const title = p.title?.toLowerCase() || "";
     const description = p.description?.toLowerCase() || "";
 
