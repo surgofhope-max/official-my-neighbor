@@ -687,7 +687,7 @@ export default function SellerOrders() {
                 <div className="text-center">
                   <p className="text-xs text-gray-600">Revenue</p>
                   <p className="text-lg font-bold text-gray-900">
-                    ${show.totalRevenue.toFixed(0)}
+                    ${show.totalRevenue.toFixed(2)}
                   </p>
                 </div>
               </div>
