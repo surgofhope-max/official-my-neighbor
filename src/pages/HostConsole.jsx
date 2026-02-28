@@ -1551,7 +1551,7 @@ export default function HostConsole() {
 
           {isMobileDevice && (
             <div
-              className="fixed right-4 z-[100] flex flex-col items-center"
+              className="fixed right-4 z-[250] flex flex-col items-center"
               style={{ bottom: isAndroid ? "32vh" : "30vh" }}
             >
               <span className="text-xs font-extrabold tracking-wide text-white mb-1">
