@@ -98,6 +98,30 @@ export default function SellerOrders() {
   // ═══════════════════════════════════════════════════════════════════════════
   const [buyerProfiles, setBuyerProfiles] = useState({});
 
+  const getOrderFinancials = (order) => {
+    const subtotal =
+      order.subtotal_amount != null
+        ? Number(order.subtotal_amount)
+        : Number(order.price) || 0;
+
+    const tax =
+      order.tax_amount != null
+        ? Number(order.tax_amount)
+        : 0;
+
+    const delivery =
+      order.delivery_fee_amount != null
+        ? Number(order.delivery_fee_amount)
+        : Number(order.delivery_fee) || 0;
+
+    const total =
+      order.total_amount != null
+        ? Number(order.total_amount)
+        : subtotal + delivery;
+
+    return { subtotal, tax, delivery, total };
+  };
+
   // Track if initial load is complete
   const initialLoadDone = useRef(false);
 
@@ -478,7 +502,10 @@ export default function SellerOrders() {
     const showBatches = allBatches.filter(batch => batch.show_id === show.id && batchHasOrders(batch));
     // Revenue from ORDERS (already filtered by paid/fulfilled/completed/ready in sellerOrders.ts)
     const showOrders = allOrders.filter(o => o.show_id === show.id);
-    const totalRevenue = showOrders.reduce((sum, o) => sum + (Number(o.price) || 0) + (Number(o.delivery_fee) || 0), 0);
+    const totalRevenue = showOrders.reduce(
+      (sum, o) => sum + getOrderFinancials(o).total,
+      0
+    );
     const totalItems = showOrders.length;
     const pendingCount = getPendingCountForShow(show.id);
     const doneCount = getDoneCountForShow(show.id);
@@ -723,7 +750,10 @@ export default function SellerOrders() {
               <CardContent className="p-2 text-center">
                 <p className="text-xs text-gray-600 mb-0.5">Revenue</p>
                 <p className="text-lg font-bold text-gray-900">
-                  ${allOrders.reduce((sum, o) => sum + (Number(o.price) || 0) + (Number(o.delivery_fee) || 0), 0).toFixed(2)}
+                  ${allOrders.reduce(
+                    (sum, o) => sum + getOrderFinancials(o).total,
+                    0
+                  ).toFixed(2)}
                 </p>
               </CardContent>
             </Card>
@@ -932,7 +962,10 @@ export default function SellerOrders() {
               <div>
                 <p className="text-xs text-gray-600">Total</p>
                 <p className="text-lg font-bold text-gray-900">
-                  ${batchOrders.reduce((sum, o) => sum + (Number(o.price) || 0), 0).toFixed(2)}
+                  ${batchOrders.reduce(
+                    (sum, o) => sum + getOrderFinancials(o).total,
+                    0
+                  ).toFixed(2)}
                 </p>
               </div>
             </div>
@@ -1031,7 +1064,7 @@ export default function SellerOrders() {
                             <p className="text-sm font-bold text-green-600">FREE</p>
                           ) : (
                             <p className="text-sm font-bold text-gray-900">
-                              ${order.price?.toFixed(2)}
+                              ${getOrderFinancials(order).total.toFixed(2)}
                             </p>
                           )}
                           
@@ -1306,7 +1339,7 @@ export default function SellerOrders() {
                                 <Package className="w-3 h-3 text-orange-600" />
                                 <span className="text-gray-700">{order.product_title}</span>
                                 <span className="ml-auto font-semibold text-gray-900">
-                                  ${order.price?.toFixed(2)}
+                                  ${getOrderFinancials(order).total.toFixed(2)}
                                 </span>
                               </div>
                             ))}
