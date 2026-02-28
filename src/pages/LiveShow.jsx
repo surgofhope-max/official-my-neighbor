@@ -957,7 +957,7 @@ export default function LiveShow() {
         {/* Shop Button - Buyer Product Overlay (feature flagged) */}
         {ENABLE_BUYER_PRODUCT_OVERLAY && (
           <div
-            className="fixed right-4 z-[250] flex flex-col items-center"
+            className="fixed right-4 z-[150] flex flex-col items-center"
             style={{
               bottom: isAndroid ? "32vh" : "30vh"
             }}
