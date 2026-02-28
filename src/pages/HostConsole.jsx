@@ -116,6 +116,7 @@ export default function HostConsole() {
   // This ensures SDKs don't remount on orientation change.
   // ═══════════════════════════════════════════════════════════════════════════
   const { isMobileDevice, isDesktopDevice, reason: deviceClassReason } = useDeviceClass();
+  const isAndroid = typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent);
   useMobilePortraitLock(isMobileDevice);
 
   const getOrderFinancials = (order) => {
@@ -1499,19 +1500,6 @@ export default function HostConsole() {
           <div 
             className="fixed top-16 right-3 flex flex-col gap-3 z-[200]"
           >
-            {/* Message Toggle (Icon Only) */}
-            <Button
-              onClick={() => setBottomBarMode("message")}
-              size="icon"
-              className={`h-10 w-10 rounded-full backdrop-blur-md border transition-all ${
-                bottomBarMode === "message" 
-                  ? "bg-white text-purple-600 border-white" 
-                  : "bg-black/40 text-white border-white/20 hover:bg-black/60"
-              }`}
-            >
-              <MessageCircle className="w-5 h-5" />
-            </Button>
-
             {/* GIVI Button (Icon Only) - Gated by feature flag */}
             {FEATURES.givi && (
               <Button
@@ -1525,29 +1513,6 @@ export default function HostConsole() {
                 <Sparkles className="w-5 h-5 text-white" />
               </Button>
             )}
-
-            {/* Products Button (Icon Only) - Toggles Product Mode */}
-            <Button
-              onClick={() => setBottomBarMode("products")}
-              size="icon"
-              className={`h-10 w-10 rounded-full shadow-lg border transition-all ${
-                bottomBarMode === "products"
-                  ? "bg-gradient-to-r from-blue-500 to-cyan-500 border-white scale-110"
-                  : "bg-gradient-to-r from-blue-600 to-cyan-600 border-white/20"
-              }`}
-            >
-              <Package className="w-5 h-5 text-white" />
-            </Button>
-
-            {/* PRODUCTS Overlay Button - Opens product overlay */}
-            <Button
-              onClick={() => setShowHostProductOverlay(true)}
-              size="icon"
-              className="h-10 w-10 rounded-full bg-black/50 backdrop-blur-md border border-white/20 text-white z-[250]"
-              title="Products"
-            >
-              <Package className="w-5 h-5" />
-            </Button>
 
             {/* Fulfillment Button (Icon Only) — DISABLED: never shown on mobile */}
             {false && (
@@ -1581,6 +1546,27 @@ export default function HostConsole() {
                   </Button>
                 )}
           </div>
+
+          {isMobileDevice && (
+            <div
+              className="fixed right-4 z-[100] flex flex-col items-center"
+              style={{ bottom: isAndroid ? "32vh" : "30vh" }}
+            >
+              <span className="text-xs font-extrabold tracking-wide text-white mb-1">
+                PRODUCTS
+              </span>
+              <button
+                onClick={() => setShowHostProductOverlay(true)}
+                className="w-12 h-12 rounded-xl relative overflow-hidden
+                           bg-white hover:bg-gray-100 border border-gray-200 shadow-lg
+                           active:scale-95 transition-all duration-200"
+              >
+                <div className="relative z-10 flex items-center justify-center h-full">
+                  <Package className="w-8 h-8 text-gray-700" />
+                </div>
+              </button>
+            </div>
+          )}
 
           {showHostProductOverlay && (
             <>
