@@ -275,6 +275,10 @@ serve(async (req: Request) => {
         completion_code: completionCode,
         price: orderPrice,
         delivery_fee: 0,
+        subtotal_amount: subtotal,
+        tax_amount: taxAmount,
+        delivery_fee_amount: 0,
+        total_amount: totalAmount,
         status: "pending",
       })
       .select("id")
