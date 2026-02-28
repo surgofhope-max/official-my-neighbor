@@ -1372,7 +1372,7 @@ export default function HostConsole() {
         {/* CONDITIONAL CONTAINER: Only mount mobile layout on mobile devices.
             Device-locked classification prevents remount on rotation. */}
         {isMobileDevice && (
-        <div className="fixed inset-0 bg-black" style={{ zIndex: 1 }}>
+        <div className="fixed inset-0 bg-black" style={{ zIndex: 1 }} onClick={() => { if (showHostProductOverlay) { setShowHostProductOverlay(false); setOverlayMode("grid"); setOverlaySelectedProduct(null); } }}>
           {/* Back Arrow - Top Left */}
           <Button
             variant="ghost"
@@ -1434,7 +1434,7 @@ export default function HostConsole() {
               Device-locked classification prevents double polling and freeze
               under load by ensuring only one chat instance mounts at any time. */}
           {isMobileDevice && (
-            <div style={{ zIndex: 100 }}>
+            <div style={{ zIndex: 100 }} onClick={(e) => e.stopPropagation()}>
               {console.log("[HOSTCONSOLE AUTH DEBUG][MOBILE]", {
                 currentUserId: currentUser?.id ?? null,
                 currentUserRole: currentUser?.role ?? null
@@ -1571,15 +1571,6 @@ export default function HostConsole() {
           )}
 
           {showHostProductOverlay && (
-            <>
-              {/* Backdrop */}
-              <div
-                className="fixed left-0 right-0 bottom-0 z-[260] bg-black/50"
-                style={{ height: "45vh" }}
-                onClick={() => setShowHostProductOverlay(false)}
-              />
-
-              {/* Overlay Panel */}
               <div
                 className="fixed left-0 right-0 bottom-0 z-[261] bg-white rounded-t-2xl shadow-xl"
                 style={{ height: "45vh" }}
@@ -1673,8 +1664,6 @@ export default function HostConsole() {
 
                 </div>
               </div>
-
-            </>
           )}
         </div>
         )}
