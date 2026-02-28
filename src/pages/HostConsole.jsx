@@ -1446,6 +1446,7 @@ export default function HostConsole() {
                   isSeller={true}
                   isOverlay={true}
                   expandedProduct={showHostProductOverlay}
+                  overlayLiftHeight="45vh"
                   user={currentUser}
                 />
               ) : (
