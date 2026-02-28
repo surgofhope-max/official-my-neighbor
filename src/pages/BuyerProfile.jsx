@@ -127,6 +127,30 @@ export default function BuyerProfile() {
   const [showBookmarksDialog, setShowBookmarksDialog] = useState(false);
   const [showCommunitiesDialog, setShowCommunitiesDialog] = useState(false);
 
+  const getOrderFinancials = (order) => {
+    const subtotal =
+      order.subtotal_amount != null
+        ? Number(order.subtotal_amount)
+        : Number(order.price) || 0;
+
+    const tax =
+      order.tax_amount != null
+        ? Number(order.tax_amount)
+        : 0;
+
+    const delivery =
+      order.delivery_fee_amount != null
+        ? Number(order.delivery_fee_amount)
+        : Number(order.delivery_fee) || 0;
+
+    const total =
+      order.total_amount != null
+        ? Number(order.total_amount)
+        : subtotal;
+
+    return { subtotal, tax, delivery, total };
+  };
+
   useEffect(() => {
     loadUser();
   }, []);
@@ -580,7 +604,7 @@ export default function BuyerProfile() {
   // Derive analytics from ORDERS (authoritative source for buyers)
   // Note: Supabase helper already filters to valid orders only (paid/fulfilled/completed)
   const totalOrders = orders.length;
-  const totalSpent = orders.reduce((sum, order) => sum + (order.price || 0), 0);
+  const totalSpent = orders.reduce((sum, order) => sum + getOrderFinancials(order).total, 0);
   
   const stats = [
     {
@@ -1164,7 +1188,7 @@ export default function BuyerProfile() {
                   )}
                   <div className="flex-1">
                     <h4 className="font-semibold text-gray-900">{order.product_title}</h4>
-                    <p className="text-sm text-gray-600">${order.price?.toFixed(2)}</p>
+                    <p className="text-sm text-gray-600">${getOrderFinancials(order).total.toFixed(2)}</p>
                   </div>
                   <Badge className={
                     order.status === "paid" ? "bg-green-100 text-green-800" :

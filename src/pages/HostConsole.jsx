@@ -113,6 +113,30 @@ export default function HostConsole() {
   // ═══════════════════════════════════════════════════════════════════════════
   const { isMobileDevice, isDesktopDevice, reason: deviceClassReason } = useDeviceClass();
   useMobilePortraitLock(isMobileDevice);
+
+  const getOrderFinancials = (order) => {
+    const subtotal =
+      order.subtotal_amount != null
+        ? Number(order.subtotal_amount)
+        : Number(order.price) || 0;
+
+    const tax =
+      order.tax_amount != null
+        ? Number(order.tax_amount)
+        : 0;
+
+    const delivery =
+      order.delivery_fee_amount != null
+        ? Number(order.delivery_fee_amount)
+        : Number(order.delivery_fee) || 0;
+
+    const total =
+      order.total_amount != null
+        ? Number(order.total_amount)
+        : subtotal + delivery;
+
+    return { subtotal, tax, delivery, total };
+  };
   
   // Log device classification for debugging
   useEffect(() => {
@@ -1963,7 +1987,7 @@ export default function HostConsole() {
                         <p className="font-semibold text-gray-900 truncate">{order.product?.title}</p>
                         <p className="text-sm text-gray-600">{order.buyer?.display_name || 'Buyer'}</p>
                       </div>
-                      <p className="text-lg font-bold text-gray-900 flex-shrink-0">${order.price?.toFixed(2)}</p>
+                      <p className="text-lg font-bold text-gray-900 flex-shrink-0">${getOrderFinancials(order).total.toFixed(2)}</p>
                     </div>
                   ))}
                 </div>

@@ -1417,7 +1417,7 @@ export default function SellerOrders() {
                         <strong>Expected Code:</strong> {selectedBatch.completion_code}
                       </p>
                       <p className="text-xs text-gray-600 mt-1">
-                        <strong>Batch:</strong> {selectedBatchOrders.length} items, ${selectedBatchOrders.reduce((sum, o) => sum + (Number(o.price) || 0), 0).toFixed(2)}
+                        <strong>Batch:</strong> {selectedBatchOrders.length} items, ${selectedBatchOrders.reduce((sum, o) => sum + getOrderFinancials(o).total, 0).toFixed(2)}
                       </p>
                     </div>
                     
