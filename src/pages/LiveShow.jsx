@@ -15,6 +15,7 @@ import { isShowLive } from "@/api/streamSync";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import {
   Dialog,
   DialogContent,
@@ -87,6 +88,7 @@ export default function LiveShow() {
   const [showPurchaseBanner, setShowPurchaseBanner] = useState(false);
   const [__auditSalesCount, set__auditSalesCount] = useState(null);
   const [showProductOverlay, setShowProductOverlay] = useState(false);
+  const [buyerSearchTerm, setBuyerSearchTerm] = useState("");
   const carouselRef = useRef(null);
   const lastSalesCountRef = useRef(null);
 
@@ -832,6 +834,19 @@ export default function LiveShow() {
   const productImages = expandedProduct?.image_urls || [];
   const hasMultipleImages = productImages.length > 1;
 
+  const filteredProducts = allShowProducts.filter(p => {
+    const searchLower = buyerSearchTerm.trim().toLowerCase();
+    if (!searchLower) return true;
+
+    const title = p.title?.toLowerCase() || "";
+    const description = p.description?.toLowerCase() || "";
+
+    return (
+      title.includes(searchLower) ||
+      description.includes(searchLower)
+    );
+  });
+
   if (isLoadingAuth) return authLoadingUI;
 
   return (
@@ -1472,20 +1487,20 @@ export default function LiveShow() {
             style={{ height: "45vh" }}
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="h-full overflow-y-auto px-4 pt-2 pb-4 text-gray-900">
+            <div className="h-full flex flex-col text-gray-900">
               {!overlaySelectedProduct ? (
                 <>
-                  <div className="px-4 pt-2 pb-2 text-center">
-                    <h2 className="text-lg font-semibold text-gray-900">
-                      Checkout Products
-                    </h2>
-                    <p className="text-sm text-gray-500 mt-0.5">
-                      Check out our products for this show
-                    </p>
-                    <div className="mt-2 border-b border-gray-200" />
+                  <div className="p-3 border-b border-gray-200 bg-white">
+                    <Input
+                      value={buyerSearchTerm}
+                      onChange={(e) => setBuyerSearchTerm(e.target.value)}
+                      placeholder="Search products in this show"
+                      className="bg-gray-100 border-gray-300"
+                    />
                   </div>
-                  <div className="grid grid-cols-4 gap-2">
-                  {allShowProducts.map((product) => {
+                  <div className="flex-1 overflow-y-auto px-4 pt-3 pb-4">
+                    <div className="grid grid-cols-4 gap-2">
+                  {filteredProducts.map((product) => {
                     const isFeatured = product.id === featuredProduct?.id;
                     const isPriceChanging = isFeatured && priceJustChanged;
                     return (
@@ -1542,7 +1557,8 @@ export default function LiveShow() {
                       </div>
                     );
                   })}
-                </div>
+                    </div>
+                  </div>
                 </>
               ) : (
                 <div className="relative h-full flex flex-col">
