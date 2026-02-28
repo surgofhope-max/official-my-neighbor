@@ -109,6 +109,7 @@ export default function HostConsole() {
   const [overlayMode, setOverlayMode] = useState("grid"); // "grid" | "detail"
   const [overlaySelectedProduct, setOverlaySelectedProduct] = useState(null);
   const hostOverlayPanelRef = useRef(null);
+  const hostChatRef = useRef(null);
 
   // ═══════════════════════════════════════════════════════════════════════════
   // DEVICE-LOCKED CLASSIFICATION (NO VIEWPORT FLIPS)
@@ -126,6 +127,8 @@ export default function HostConsole() {
     const handler = (event) => {
       if (!showHostProductOverlay) return;
       if (hostOverlayPanelRef.current?.contains(event.target)) return;
+      // If user tapped inside chat area (including input), do NOT close overlay
+      if (hostChatRef.current && hostChatRef.current.contains(event.target)) return;
       setShowHostProductOverlay(false);
       setOverlayMode("grid");
       setOverlaySelectedProduct(null);
@@ -1449,7 +1452,7 @@ export default function HostConsole() {
               Device-locked classification prevents double polling and freeze
               under load by ensuring only one chat instance mounts at any time. */}
           {isMobileDevice && (
-            <div style={{ zIndex: 100 }} onClick={(e) => e.stopPropagation()}>
+            <div ref={hostChatRef} style={{ zIndex: 100 }} onClick={(e) => e.stopPropagation()}>
               {console.log("[HOSTCONSOLE AUTH DEBUG][MOBILE]", {
                 currentUserId: currentUser?.id ?? null,
                 currentUserRole: currentUser?.role ?? null
