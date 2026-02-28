@@ -108,6 +108,7 @@ export default function HostConsole() {
   const [showHostProductOverlay, setShowHostProductOverlay] = useState(false);
   const [overlayMode, setOverlayMode] = useState("grid"); // "grid" | "detail"
   const [overlaySelectedProduct, setOverlaySelectedProduct] = useState(null);
+  const [showConfirmGoLive, setShowConfirmGoLive] = useState(false);
   const hostOverlayPanelRef = useRef(null);
   const hostChatRef = useRef(null);
 
@@ -1386,6 +1387,42 @@ export default function HostConsole() {
           </Dialog>
         )}
 
+        {/* Go Live Confirmation Dialog */}
+        <Dialog open={showConfirmGoLive} onOpenChange={setShowConfirmGoLive}>
+          <DialogContent className="max-w-sm bg-white">
+            <DialogHeader>
+              <DialogTitle className="text-gray-900 text-lg">
+                Go Live?
+              </DialogTitle>
+            </DialogHeader>
+
+            <div className="text-sm text-gray-600 mt-2">
+              Are you sure you want to start this live broadcast?
+              This will make the show visible to buyers.
+            </div>
+
+            <div className="flex justify-end gap-2 mt-6">
+              <Button
+                variant="outline"
+                onClick={() => setShowConfirmGoLive(false)}
+              >
+                Cancel
+              </Button>
+
+              <Button
+                onClick={async () => {
+                  setShowConfirmGoLive(false);
+                  await startDailyBroadcast();
+                }}
+                disabled={dailyLoading}
+                className="bg-green-600 hover:bg-green-700 text-white"
+              >
+                {dailyLoading ? "Starting..." : "Yes, Go Live"}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+
         {/* MOBILE: Fullscreen Video with Overlay Chat */}
         {/* CONDITIONAL CONTAINER: Only mount mobile layout on mobile devices.
             Device-locked classification prevents remount on rotation. */}
@@ -1550,7 +1587,7 @@ export default function HostConsole() {
                   </div>
                 ) : (
                   <Button
-                    onClick={startDailyBroadcast}
+                    onClick={() => setShowConfirmGoLive(true)}
                     size="icon"
                     disabled={isBroadcastBlocked || dailyLoading}
                     className={`h-10 w-10 rounded-full shadow-lg border border-white/20 ${
@@ -1728,7 +1765,7 @@ export default function HostConsole() {
                 </div>
               ) : (
                 <Button
-                  onClick={startDailyBroadcast}
+                  onClick={() => setShowConfirmGoLive(true)}
                   disabled={isBroadcastBlocked || dailyLoading}
                   className={`w-full font-bold py-3 ${
                     isBroadcastBlocked || dailyLoading
