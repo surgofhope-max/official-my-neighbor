@@ -52,6 +52,30 @@ export default function BuyerOrders() {
   // Track if initial load is complete
   const initialLoadDone = useRef(false);
 
+  const getOrderFinancials = (order) => {
+    const subtotal =
+      order.subtotal_amount != null
+        ? Number(order.subtotal_amount)
+        : Number(order.price) || 0;
+
+    const tax =
+      order.tax_amount != null
+        ? Number(order.tax_amount)
+        : 0;
+
+    const delivery =
+      order.delivery_fee_amount != null
+        ? Number(order.delivery_fee_amount)
+        : Number(order.delivery_fee) || 0;
+
+    const total =
+      order.total_amount != null
+        ? Number(order.total_amount)
+        : subtotal;
+
+    return { subtotal, tax, delivery, total };
+  };
+
   // Load user on mount
   useEffect(() => {
     loadUser();
@@ -274,7 +298,10 @@ export default function BuyerOrders() {
   // Derive buyer analytics from ORDERS (authoritative source for buyers)
   const totalOrders = validOrders.length;
   const totalItems = validOrders.length;  // Each order = 1 item
-  const totalSpent = validOrders.reduce((sum, order) => sum + (order.price || 0), 0);
+  const totalSpent = validOrders.reduce(
+    (sum, order) => sum + getOrderFinancials(order).total,
+    0
+  );
   const giviWins = validOrders.filter(o => o.price === 0).length;
   
   // Keep batches for display grouping only
@@ -290,7 +317,10 @@ export default function BuyerOrders() {
     
     // FIX: Derive totals from ORDERS (authoritative for buyers), not batch fields
     const cardItemCount = batchOrders.length;
-    const cardTotalAmount = batchOrders.reduce((sum, o) => sum + (o.price || 0), 0);
+    const cardTotalAmount = batchOrders.reduce(
+      (sum, o) => sum + getOrderFinancials(o).total,
+      0
+    );
 
     return (
       <Card key={batch.id} className={`border-0 shadow-lg overflow-hidden ${hasGIVIItems ? 'ring-2 ring-yellow-400' : ''}`}>
@@ -537,7 +567,7 @@ export default function BuyerOrders() {
                               </div>
                             ) : (
                               <p className="text-lg sm:text-xl font-bold text-gray-900">
-                                ${order.price?.toFixed(2)}
+                                ${getOrderFinancials(order).total.toFixed(2)}
                               </p>
                             )}
                           </div>
