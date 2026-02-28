@@ -108,6 +108,7 @@ export default function HostConsole() {
   const [showHostProductOverlay, setShowHostProductOverlay] = useState(false);
   const [overlayMode, setOverlayMode] = useState("grid"); // "grid" | "detail"
   const [overlaySelectedProduct, setOverlaySelectedProduct] = useState(null);
+  const hostOverlayPanelRef = useRef(null);
 
   // ═══════════════════════════════════════════════════════════════════════════
   // DEVICE-LOCKED CLASSIFICATION (NO VIEWPORT FLIPS)
@@ -118,6 +119,20 @@ export default function HostConsole() {
   const { isMobileDevice, isDesktopDevice, reason: deviceClassReason } = useDeviceClass();
   const isAndroid = typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent);
   useMobilePortraitLock(isMobileDevice);
+
+  // Capture-phase listener: close overlay on tap outside (works even when chat stops propagation)
+  useEffect(() => {
+    if (!showHostProductOverlay) return;
+    const handler = (event) => {
+      if (!showHostProductOverlay) return;
+      if (hostOverlayPanelRef.current?.contains(event.target)) return;
+      setShowHostProductOverlay(false);
+      setOverlayMode("grid");
+      setOverlaySelectedProduct(null);
+    };
+    document.addEventListener("pointerdown", handler, true);
+    return () => document.removeEventListener("pointerdown", handler, true);
+  }, [showHostProductOverlay]);
 
   const getOrderFinancials = (order) => {
     const subtotal =
@@ -1572,6 +1587,7 @@ export default function HostConsole() {
 
           {showHostProductOverlay && (
               <div
+                ref={hostOverlayPanelRef}
                 className="fixed left-0 right-0 bottom-0 z-[261] bg-white rounded-t-2xl shadow-xl"
                 style={{ height: "45vh" }}
                 onClick={(e) => e.stopPropagation()}

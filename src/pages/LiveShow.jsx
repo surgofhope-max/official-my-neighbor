@@ -1459,7 +1459,7 @@ export default function LiveShow() {
         <>
           {/* Backdrop */}
           <div
-            className="fixed inset-0 z-[109] bg-black/50"
+            className="fixed inset-0 z-[260] bg-black/50"
             onClick={() => {
               setShowProductOverlay(false);
               setOverlaySelectedProduct(null);
@@ -1468,7 +1468,7 @@ export default function LiveShow() {
 
           {/* Overlay Container */}
           <div
-            className="fixed left-0 right-0 bottom-0 z-[110] bg-white rounded-t-2xl shadow-xl"
+            className="fixed left-0 right-0 bottom-0 z-[261] bg-white rounded-t-2xl shadow-xl"
             style={{ height: "45vh" }}
             onClick={(e) => e.stopPropagation()}
           >
