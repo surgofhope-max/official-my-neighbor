@@ -22,6 +22,14 @@
 
 import { supabase } from "@/lib/supabase/supabaseClient";
 
+/** Clamp quantity to 0 or 1 for MVP binary inventory. null/undefined -> undefined; NaN -> 1. */
+function clampQty01(n: unknown): number | undefined {
+  if (n == null) return undefined;
+  const num = typeof n === "number" ? n : Number(n);
+  if (Number.isNaN(num)) return 1;
+  return num <= 0 ? 0 : 1;
+}
+
 export interface Product {
   id: string;
   seller_id: string;
@@ -264,6 +272,7 @@ export async function createProduct(
         stack: new Error().stack,
       });
     }
+    const qty = clampQty01(input.quantity) ?? 1;
     const { data, error } = await supabase
       .from("products")
       .insert({
@@ -273,7 +282,7 @@ export async function createProduct(
         description: input.description ?? null,
         price: input.price,
         original_price: input.original_price ?? null,
-        quantity: input.quantity,
+        quantity: qty,
         image_urls: input.image_urls ?? [],
         category: input.category ?? null,
         givi_type: input.givi_type ?? null,
@@ -315,6 +324,9 @@ export async function updateProduct(
   }
 
   try {
+    if ("quantity" in updates) {
+      (updates as { quantity?: number }).quantity = clampQty01((updates as { quantity?: unknown }).quantity) ?? 1;
+    }
     const { data, error } = await supabase
       .from("products")
       .update(updates)

@@ -104,8 +104,20 @@ export default function SellerProductDetailContent({
 
   // Immediate update for buttons (quantity, etc)
   const handleImmediateUpdate = (field, value) => {
+    if (field === "quantity" && quantityEditsDisabled) return;
     setFormData(prev => ({ ...prev, [field]: value }));
     updateProductMutation.mutate({ [field]: value });
+  };
+
+  const quantityEditsDisabled = true;
+
+  const incrementQty = () => {
+    if (quantityEditsDisabled) return;
+    handleImmediateUpdate("quantity", (formData.quantity || 0) + 1);
+  };
+  const decrementQty = () => {
+    if (quantityEditsDisabled) return;
+    handleImmediateUpdate("quantity", Math.max(0, (formData.quantity || 0) - 1));
   };
 
   const handleImageUpload = async (e) => {
@@ -123,9 +135,6 @@ export default function SellerProductDetailContent({
     }
     setIsUploading(false);
   };
-
-  const incrementQty = () => handleImmediateUpdate('quantity', (formData.quantity || 0) + 1);
-  const decrementQty = () => handleImmediateUpdate('quantity', Math.max(0, (formData.quantity || 0) - 1));
 
   // Use prop if provided, otherwise fallback to status check
   const isFeatured = isFeaturedProp !== undefined ? isFeaturedProp : (product.status === "featured");
@@ -312,8 +321,11 @@ export default function SellerProductDetailContent({
              {/* Row C - Quantity */}
              <div className="flex items-center justify-between bg-black/20 rounded-lg border border-white/10 h-8 overflow-hidden">
                 <button 
+                    type="button"
                     onClick={decrementQty}
-                    className="w-10 h-full flex items-center justify-center text-white hover:bg-white/10 active:scale-95 transition-colors bg-white/5"
+                    disabled={quantityEditsDisabled}
+                    title={quantityEditsDisabled ? "Quantity edits disabled on mobile. Use desktop Host Console." : undefined}
+                    className={`w-10 h-full flex items-center justify-center transition-colors bg-white/5 ${quantityEditsDisabled ? "opacity-50 cursor-not-allowed text-white/50" : "text-white hover:bg-white/10 active:scale-95"}`}
                 >
                     <Minus className="w-3 h-3" />
                 </button>
@@ -321,8 +333,11 @@ export default function SellerProductDetailContent({
                     {formData.quantity} <span className="text-xs font-normal opacity-60">qty</span>
                 </div>
                 <button 
+                    type="button"
                     onClick={incrementQty}
-                    className="w-10 h-full flex items-center justify-center text-white hover:bg-white/10 active:scale-95 transition-colors bg-white/5"
+                    disabled={quantityEditsDisabled}
+                    title={quantityEditsDisabled ? "Quantity edits disabled on mobile. Use desktop Host Console." : undefined}
+                    className={`w-10 h-full flex items-center justify-center transition-colors bg-white/5 ${quantityEditsDisabled ? "opacity-50 cursor-not-allowed text-white/50" : "text-white hover:bg-white/10 active:scale-95"}`}
                 >
                     <Plus className="w-3 h-3" />
                 </button>

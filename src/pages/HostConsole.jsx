@@ -699,10 +699,11 @@ export default function HostConsole() {
     mutationFn: async ({ productId, newQuantity }) => {
       console.log("📦 HostConsole - Updating quantity for product:", productId, "to", newQuantity);
       
-      const qty = parseInt(newQuantity);
-      if (isNaN(qty) || qty < 0) {
+      const qtyRaw = parseInt(newQuantity, 10);
+      if (isNaN(qtyRaw) || qtyRaw < 0) {
         throw new Error("Quantity must be a non-negative number.");
       }
+      const qty = qtyRaw <= 0 ? 0 : 1;
       
       // If quantity becomes 0, mark as sold_out
       const updates = {
@@ -1970,6 +1971,8 @@ export default function HostConsole() {
                               <Input
                                 type="number"
                                 min="0"
+                                max="1"
+                                step="1"
                                 value={newQuantity}
                                 onChange={(e) => setNewQuantity(e.target.value)}
                                 className="h-6 w-12 text-xs"

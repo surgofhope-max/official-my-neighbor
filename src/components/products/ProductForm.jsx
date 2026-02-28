@@ -15,6 +15,13 @@ import { supabase } from "@/lib/supabase/supabaseClient";
 import { Upload, X, Gift, Video } from "lucide-react";
 import { FEATURES } from "@/config/features";
 
+/** Clamp quantity to 0 or 1 for MVP binary inventory. NaN/blank -> 1. */
+function clampQty01(value) {
+  const n = parseInt(value, 10);
+  if (Number.isNaN(n)) return 1;
+  return n <= 0 ? 0 : 1;
+}
+
 export default function ProductForm({ product, onSave, onCancel, isSubmitting }) {
   const [formData, setFormData] = useState({
     title: product?.title || "",
@@ -121,7 +128,7 @@ export default function ProductForm({ product, onSave, onCancel, isSubmitting })
     onSave({
       ...formData,
       price: parseFloat(formData.price),
-      quantity: parseInt(formData.quantity)
+      quantity: clampQty01(parseInt(formData.quantity, 10))
     });
   };
 
@@ -233,8 +240,14 @@ export default function ProductForm({ product, onSave, onCancel, isSubmitting })
           <Input
             type="number"
             min="0"
+            max="1"
+            step="1"
             value={formData.quantity}
-            onChange={(e) => setFormData({ ...formData, quantity: e.target.value })}
+            onChange={(e) => {
+              const raw = e.target.value;
+              const clamped = raw === "" ? "1" : String(clampQty01(parseInt(raw, 10)));
+              setFormData({ ...formData, quantity: clamped });
+            }}
             placeholder="1"
             required
           />
