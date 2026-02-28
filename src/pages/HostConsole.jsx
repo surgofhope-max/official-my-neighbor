@@ -1538,10 +1538,10 @@ export default function HostConsole() {
             <Button
               onClick={() => setShowHostProductOverlay(true)}
               size="icon"
-              className="h-10 w-10 rounded-full shadow-lg border border-white/20 bg-black/40 text-white hover:bg-black/60"
+              className="h-10 w-10 rounded-full bg-black/50 backdrop-blur-md border border-white/20 text-white z-[250]"
               title="Products"
             >
-              <Package className="w-5 h-5 text-white" />
+              <Package className="w-5 h-5" />
             </Button>
 
             {/* Fulfillment Button (Icon Only) — DISABLED: never shown on mobile */}
@@ -1576,6 +1576,64 @@ export default function HostConsole() {
                   </Button>
                 )}
           </div>
+
+          {showHostProductOverlay && (
+            <>
+              {/* Backdrop */}
+              <div
+                className="fixed inset-0 z-[260] bg-black/50"
+                onClick={() => setShowHostProductOverlay(false)}
+              />
+
+              {/* Overlay Panel */}
+              <div
+                className="fixed left-0 right-0 bottom-0 z-[261] bg-white rounded-t-2xl shadow-xl"
+                style={{ height: "45vh" }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="h-full flex flex-col">
+
+                  {/* Header: Search + Add */}
+                  <div className="p-3 border-b border-gray-200 flex gap-2 items-center">
+                    <div className="relative flex-1">
+                      <Input
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                        placeholder="Search products..."
+                      />
+                    </div>
+
+                    <Button
+                      onClick={() => setShowAddProductDrawer(true)}
+                      className="bg-green-600 hover:bg-green-700 text-white font-bold"
+                    >
+                      Add
+                    </Button>
+                  </div>
+
+                  {/* Body: Product Bubbles */}
+                  <div className="flex-1 overflow-y-auto p-3">
+                    <HostBottomControls
+                      mode={"products"}
+                      showId={showId}
+                      sellerId={currentSeller?.id}
+                      products={filteredProducts}
+                      featuredProductId={show.featured_product_id}
+                      onFeatureProduct={(product) => setSelectedProduct(product)}
+                      onAddProduct={() => setShowAddProductDrawer(true)}
+                      onSearch={setSearchTerm}
+                      searchTerm={searchTerm}
+                      useSupabaseChat={useSupabaseChat}
+                      user={currentUser}
+                      embedded={true}
+                    />
+                  </div>
+
+                </div>
+              </div>
+
+            </>
+          )}
         </div>
         )}
 

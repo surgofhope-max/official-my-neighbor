@@ -18,11 +18,12 @@ export default function HostBottomControls({
   // NEW: Props for Supabase chat wiring
   useSupabaseChat = false,
   user = null,
+  embedded = false,
 }) {
   const carouselRef = useRef(null);
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-[100] flex flex-col pointer-events-none">
+    <div className={embedded ? "w-full flex flex-col pointer-events-none" : "fixed bottom-0 left-0 right-0 z-[100] flex flex-col pointer-events-none"}>
       {/* Product Bubbles Row - ALWAYS VISIBLE - pointer-events-auto for interaction */}
       <div className="mb-2 px-3 pointer-events-auto">
         <div 
