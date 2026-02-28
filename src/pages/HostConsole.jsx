@@ -104,6 +104,7 @@ export default function HostConsole() {
   const [targetShowId, setTargetShowId] = useState("");
   const [sellerShowsForClone, setSellerShowsForClone] = useState([]);
   const [isCloning, setIsCloning] = useState(false);
+  const [showHostProductOverlay, setShowHostProductOverlay] = useState(false);
 
   // ═══════════════════════════════════════════════════════════════════════════
   // DEVICE-LOCKED CLASSIFICATION (NO VIEWPORT FLIPS)
@@ -1529,6 +1530,16 @@ export default function HostConsole() {
                   ? "bg-gradient-to-r from-blue-500 to-cyan-500 border-white scale-110"
                   : "bg-gradient-to-r from-blue-600 to-cyan-600 border-white/20"
               }`}
+            >
+              <Package className="w-5 h-5 text-white" />
+            </Button>
+
+            {/* PRODUCTS Overlay Button - Opens product overlay */}
+            <Button
+              onClick={() => setShowHostProductOverlay(true)}
+              size="icon"
+              className="h-10 w-10 rounded-full shadow-lg border border-white/20 bg-black/40 text-white hover:bg-black/60"
+              title="Products"
             >
               <Package className="w-5 h-5 text-white" />
             </Button>
