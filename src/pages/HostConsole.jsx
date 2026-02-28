@@ -1378,11 +1378,21 @@ export default function HostConsole() {
             <ArrowLeft className="w-5 h-5" />
           </Button>
           
-          {/* Mobile Stats - Top Right (Revenue + Viewers) */}
-          <div className="fixed top-4 right-3 z-[250] bg-black/50 backdrop-blur-md rounded-lg px-3 py-2 text-right">
-            <p className="text-[10px] text-white/70 leading-tight">Revenue</p>
-            <p className="text-sm font-bold text-white leading-tight">${stats.revenue.toFixed(2)}</p>
-            <p className="text-[9px] text-white/50 leading-tight mt-0.5">👁 {stats.viewers} viewers</p>
+          {/* Mobile Metrics Header */}
+          <div className="fixed top-4 left-0 right-0 z-[250] px-16 flex items-start justify-between pointer-events-none">
+            <div className="bg-black/50 backdrop-blur-md rounded-lg px-4 py-2 text-left pointer-events-auto">
+              <p className="text-[10px] text-white/70 uppercase tracking-wide">Revenue</p>
+              <p className="text-xl font-bold text-white whitespace-nowrap">
+                ${stats.revenue.toFixed(2)}
+              </p>
+            </div>
+
+            <div className="bg-black/50 backdrop-blur-md rounded-lg px-4 py-2 text-right pointer-events-auto">
+              <p className="text-[10px] text-white/70 uppercase tracking-wide">Viewers</p>
+              <p className="text-xl font-bold text-white whitespace-nowrap">
+                {stats.viewers}
+              </p>
+            </div>
           </div>
           
           {/* Video Background - Daily SDK Broadcaster or Placeholder */}
