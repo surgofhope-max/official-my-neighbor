@@ -1479,19 +1479,21 @@ export default function HostConsole() {
           )}
 
           {/* Bottom Controls (Product Bubbles + Toggle Area) */}
-          <HostBottomControls
-            mode={bottomBarMode}
-            showId={showId}
-            sellerId={currentSeller?.id}
-            products={filteredProducts}
-            featuredProductId={show.featured_product_id}
-            onFeatureProduct={(product) => setSelectedProduct(product)}
-            onAddProduct={() => setShowAddProductDrawer(true)}
-            onSearch={setSearchTerm}
-            searchTerm={searchTerm}
-            useSupabaseChat={useSupabaseChat}
-            user={currentUser}
-          />
+          {!isMobileDevice && (
+            <HostBottomControls
+              mode={bottomBarMode}
+              showId={showId}
+              sellerId={currentSeller?.id}
+              products={filteredProducts}
+              featuredProductId={show.featured_product_id}
+              onFeatureProduct={(product) => setSelectedProduct(product)}
+              onAddProduct={() => setShowAddProductDrawer(true)}
+              onSearch={setSearchTerm}
+              searchTerm={searchTerm}
+              useSupabaseChat={useSupabaseChat}
+              user={currentUser}
+            />
+          )}
           
           {/* Host Controls - Top Right Icons */}
           <div 
