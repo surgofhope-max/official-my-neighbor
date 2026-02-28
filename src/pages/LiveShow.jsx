@@ -1485,6 +1485,7 @@ export default function LiveShow() {
             onClick={() => {
               setShowProductOverlay(false);
               setOverlaySelectedProduct(null);
+              setBuyerSearchTerm("");
             }}
           />
 
