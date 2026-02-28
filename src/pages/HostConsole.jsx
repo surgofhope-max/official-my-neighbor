@@ -1452,7 +1452,7 @@ export default function HostConsole() {
               Device-locked classification prevents double polling and freeze
               under load by ensuring only one chat instance mounts at any time. */}
           {isMobileDevice && (
-            <div ref={hostChatRef} style={{ zIndex: 100 }} onClick={(e) => e.stopPropagation()}>
+            <div ref={hostChatRef} style={{ zIndex: 100 }}>
               {console.log("[HOSTCONSOLE AUTH DEBUG][MOBILE]", {
                 currentUserId: currentUser?.id ?? null,
                 currentUserRole: currentUser?.role ?? null
