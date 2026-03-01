@@ -1914,6 +1914,7 @@ export default function HostConsole() {
 
                   {!activeGivey && (
                     <Button
+                      type="button"
                       onClick={handleStartGivey}
                       disabled={startingGivey || !nextGiveyNumber}
                       className="mt-2 w-full bg-purple-600 hover:bg-purple-700 text-white"
