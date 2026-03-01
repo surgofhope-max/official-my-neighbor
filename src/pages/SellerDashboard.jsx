@@ -1640,7 +1640,6 @@ export default function SellerDashboard() {
                   </Avatar>
                   <div className="flex-1 min-w-0">
                     <p className="font-semibold text-gray-900 truncate">{buyer.full_name}</p>
-                    <p className="text-sm text-gray-500 truncate">{buyer.email}</p>
                   </div>
                 </div>
               ))}
@@ -1665,17 +1664,31 @@ export default function SellerDashboard() {
             </DialogTitle>
           </DialogHeader>
           {followingSellers.length > 0 ? (
-            <div className="grid grid-cols-3 lg:grid-cols-4 gap-4">
-              {followingSellers.map((followedSeller) => (
-                <SellerCard
-                  key={followedSeller.id}
-                  seller={followedSeller}
-                  initialFollowStatus={true}
+            <div className="space-y-2">
+              {followingSellers.map((seller) => (
+                <div
+                  key={seller.id}
                   onClick={() => {
                     setShowFollowingDialog(false);
-                    navigate(createPageUrl("SellerStorefront") + `?sellerId=${followedSeller.id}`);
+                    navigate(createPageUrl("SellerStorefront") + `?sellerId=${seller.id}`);
                   }}
-                />
+                  className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors cursor-pointer"
+                >
+                  <Avatar className="w-12 h-12 flex-shrink-0">
+                    <AvatarImage src={seller.profile_image_url} />
+                    <AvatarFallback className="bg-gradient-to-r from-purple-600 to-blue-500 text-white">
+                      {seller.business_name?.[0] || "S"}
+                    </AvatarFallback>
+                  </Avatar>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-semibold text-gray-900 truncate">
+                      {seller.business_name}
+                    </p>
+                    <p className="text-sm text-gray-500 truncate">
+                      {seller.email || seller.contact_email || ""}
+                    </p>
+                  </div>
+                </div>
               ))}
             </div>
           ) : (

@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   Dialog,
@@ -1223,17 +1224,31 @@ export default function BuyerProfile() {
             <DialogTitle>Sellers You Follow</DialogTitle>
           </DialogHeader>
           {followedSellers.length > 0 ? (
-            <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
+            <div className="space-y-2">
               {followedSellers.map((seller) => (
-                <SellerCard
+                <div
                   key={seller.id}
-                  seller={seller}
-                  initialFollowStatus={true}
                   onClick={() => {
                     setShowFollowingDialog(false);
                     navigate(createPageUrl("SellerStorefront") + `?sellerId=${seller.id}`);
                   }}
-                />
+                  className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors cursor-pointer"
+                >
+                  <Avatar className="w-12 h-12 flex-shrink-0">
+                    <AvatarImage src={seller.profile_image_url} />
+                    <AvatarFallback className="bg-gradient-to-r from-purple-600 to-blue-500 text-white">
+                      {seller.business_name?.[0] || "S"}
+                    </AvatarFallback>
+                  </Avatar>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-semibold text-gray-900 truncate">
+                      {seller.business_name}
+                    </p>
+                    <p className="text-sm text-gray-500 truncate">
+                      {seller.email || seller.contact_email || ""}
+                    </p>
+                  </div>
+                </div>
               ))}
             </div>
           ) : (
