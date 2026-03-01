@@ -110,6 +110,9 @@ export default function HostConsole() {
   const [overlaySelectedProduct, setOverlaySelectedProduct] = useState(null);
   const [showConfirmGoLive, setShowConfirmGoLive] = useState(false);
   const [showConfirmEndShow, setShowConfirmEndShow] = useState(false);
+  const [activeGivey, setActiveGivey] = useState(null);
+  const [nextGiveyNumber, setNextGiveyNumber] = useState(null);
+  const [startingGivey, setStartingGivey] = useState(false);
   const hostOverlayPanelRef = useRef(null);
   const hostChatRef = useRef(null);
 
@@ -384,6 +387,45 @@ export default function HostConsole() {
       setDailyRoomUrl(show.daily_room_url);
     }
   }, [show?.daily_room_url]);
+
+  // Load next givey number (desktop only - used when show/seller available)
+  useEffect(() => {
+    async function loadNextGiveyNumber() {
+      if (!show?.id || !currentSeller?.id) return;
+
+      const { data, error } = await supabase
+        .from("givey_events")
+        .select("givey_number")
+        .eq("show_id", show.id)
+        .order("givey_number", { ascending: false })
+        .limit(1);
+
+      if (!error) {
+        const next = data?.length ? data[0].givey_number + 1 : 1;
+        setNextGiveyNumber(next);
+      }
+    }
+
+    loadNextGiveyNumber();
+  }, [show?.id, currentSeller?.id]);
+
+  async function handleStartGivey() {
+    if (!show?.id || !currentSeller?.id) return;
+    setStartingGivey(true);
+
+    const { data, error } = await supabase.rpc("start_givey_event", {
+      p_show_id: show.id,
+      p_seller_id: currentSeller.id,
+      p_require_follow: true
+    });
+
+    if (!error && data) {
+      setActiveGivey(data);
+      setNextGiveyNumber(data.givey_number + 1);
+    }
+
+    setStartingGivey(false);
+  }
 
   // Access control
   useEffect(() => {
@@ -1857,6 +1899,26 @@ export default function HostConsole() {
               >
                 {endShowMutation.isPending ? 'Ending Show...' : 'End Show'}
               </Button>
+
+              {isDesktopDevice && show?.stream_status === "live" && (
+                <div className="mt-4 border border-purple-500 rounded-xl p-4 bg-purple-50">
+                  <p className="text-sm font-semibold text-purple-700">
+                    {activeGivey
+                      ? `Givey #${activeGivey.givey_number} is Active`
+                      : `Next Givey: #${nextGiveyNumber ?? "-"}`}
+                  </p>
+
+                  {!activeGivey && (
+                    <Button
+                      onClick={handleStartGivey}
+                      disabled={startingGivey || !nextGiveyNumber}
+                      className="mt-2 w-full bg-purple-600 hover:bg-purple-700 text-white"
+                    >
+                      {startingGivey ? "Starting..." : "Start Givey"}
+                    </Button>
+                  )}
+                </div>
+              )}
               
               {FEATURES.givi && (
                 <Button
