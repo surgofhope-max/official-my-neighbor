@@ -109,6 +109,7 @@ export default function HostConsole() {
   const [overlayMode, setOverlayMode] = useState("grid"); // "grid" | "detail"
   const [overlaySelectedProduct, setOverlaySelectedProduct] = useState(null);
   const [showConfirmGoLive, setShowConfirmGoLive] = useState(false);
+  const [showConfirmEndShow, setShowConfirmEndShow] = useState(false);
   const hostOverlayPanelRef = useRef(null);
   const hostChatRef = useRef(null);
 
@@ -1438,6 +1439,41 @@ export default function HostConsole() {
           </DialogContent>
         </Dialog>
 
+        <Dialog open={showConfirmEndShow} onOpenChange={setShowConfirmEndShow}>
+          <DialogContent className="max-w-sm bg-white">
+            <DialogHeader>
+              <DialogTitle className="text-gray-900 text-lg">
+                End Show?
+              </DialogTitle>
+            </DialogHeader>
+
+            <div className="text-sm text-gray-600 mt-2">
+              Are you sure you want to end this live show?
+              This action cannot be undone.
+            </div>
+
+            <div className="flex justify-end gap-2 mt-6">
+              <Button
+                variant="outline"
+                onClick={() => setShowConfirmEndShow(false)}
+              >
+                Cancel
+              </Button>
+
+              <Button
+                onClick={async () => {
+                  setShowConfirmEndShow(false);
+                  await endShowMutation.mutateAsync();
+                }}
+                className="bg-red-600 hover:bg-red-700 text-white"
+                disabled={endShowMutation.isPending}
+              >
+                {endShowMutation.isPending ? "Ending..." : "Yes, End Show"}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+
         {/* MOBILE: Fullscreen Video with Overlay Chat */}
         {/* CONDITIONAL CONTAINER: Only mount mobile layout on mobile devices.
             Device-locked classification prevents remount on rotation. */}
@@ -1615,6 +1651,17 @@ export default function HostConsole() {
                     <Radio className="w-5 h-5 text-white" />
                   </Button>
                 )}
+
+            {isAlreadyLive && (
+              <Button
+                onClick={() => setShowConfirmEndShow(true)}
+                variant="outline"
+                className="border-2 border-red-500 text-red-600 hover:bg-red-50 font-bold px-3 py-1 text-xs"
+                disabled={endShowMutation.isPending}
+              >
+                {endShowMutation.isPending ? "Ending..." : "End Show"}
+              </Button>
+            )}
           </div>
 
           {isMobileDevice && (
