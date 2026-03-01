@@ -419,6 +419,10 @@ export default function HostConsole() {
       p_require_follow: true
     });
 
+    if (error) {
+      console.error("Failed to start givey:", error);
+    }
+
     if (!error && data) {
       setActiveGivey(data);
       setNextGiveyNumber(data.givey_number + 1);
@@ -1900,7 +1904,7 @@ export default function HostConsole() {
                 {endShowMutation.isPending ? 'Ending Show...' : 'End Show'}
               </Button>
 
-              {isDesktopDevice && show?.stream_status === "live" && (
+              {isDesktopDevice && show?.stream_status === "live" && currentSeller?.id && (
                 <div className="mt-4 border border-purple-500 rounded-xl p-4 bg-purple-50">
                   <p className="text-sm font-semibold text-purple-700">
                     {activeGivey
