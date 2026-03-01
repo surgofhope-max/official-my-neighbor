@@ -1633,12 +1633,28 @@ export default function HostConsole() {
 
                 {/* Broadcast Button (Icon Only) - ONE-WAY: Shows LIVE or Start */}
                 {isAlreadyLive ? (
-                  <div className="h-10 w-10 rounded-full shadow-lg border border-red-500 bg-red-600 flex items-center justify-center">
+                  <Button
+                    onClick={() => {
+                      if (isAlreadyLive) {
+                        setShowConfirmEndShow(true);
+                      } else {
+                        setShowConfirmGoLive(true);
+                      }
+                    }}
+                    size="icon"
+                    className="h-10 w-10 rounded-full shadow-lg border border-red-500 bg-red-600 flex items-center justify-center p-0"
+                  >
                     <Radio className="w-5 h-5 text-white animate-pulse" />
-                  </div>
+                  </Button>
                 ) : (
                   <Button
-                    onClick={() => setShowConfirmGoLive(true)}
+                    onClick={() => {
+                      if (isAlreadyLive) {
+                        setShowConfirmEndShow(true);
+                      } else {
+                        setShowConfirmGoLive(true);
+                      }
+                    }}
                     size="icon"
                     disabled={isBroadcastBlocked || dailyLoading}
                     className={`h-10 w-10 rounded-full shadow-lg border border-white/20 ${
@@ -1651,17 +1667,6 @@ export default function HostConsole() {
                     <Radio className="w-5 h-5 text-white" />
                   </Button>
                 )}
-
-            {isAlreadyLive && (
-              <Button
-                onClick={() => setShowConfirmEndShow(true)}
-                variant="outline"
-                className="border-2 border-red-500 text-red-600 hover:bg-red-50 font-bold px-3 py-1 text-xs"
-                disabled={endShowMutation.isPending}
-              >
-                {endShowMutation.isPending ? "Ending..." : "End Show"}
-              </Button>
-            )}
           </div>
 
           {isMobileDevice && (
