@@ -116,52 +116,6 @@ export default function HostConsole() {
   const hostOverlayPanelRef = useRef(null);
   const hostChatRef = useRef(null);
 
-  async function loadNextGiveyNumber() {
-    if (!show?.id || !currentSeller?.id) return;
-
-    const { data, error } = await supabase
-      .from("givey_events")
-      .select("givey_number")
-      .eq("show_id", show.id)
-      .order("givey_number", { ascending: false })
-      .limit(1);
-
-    if (!error) {
-      const next = data?.length ? data[0].givey_number + 1 : 1;
-      setNextGiveyNumber(next);
-    }
-  }
-
-  // Realtime subscription: clear activeGivey when givey ends
-  useEffect(() => {
-    if (!show?.id) return;
-
-    const channel = supabase
-      .channel("givey-events-" + show.id)
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "givey_events",
-          filter: `show_id=eq.${show.id}`
-        },
-        (payload) => {
-          console.log("[GIVEY REALTIME UPDATE]", payload);
-
-          if (payload.new.status !== "active") {
-            setActiveGivey(null);
-            loadNextGiveyNumber();
-          }
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [show?.id]);
-
   // ═══════════════════════════════════════════════════════════════════════════
   // DEVICE-LOCKED CLASSIFICATION (NO VIEWPORT FLIPS)
   // Prevents dual DailyBroadcaster AND dual SupabaseLiveChat mount.
@@ -400,6 +354,52 @@ export default function HostConsole() {
     refetchInterval: 15000, // REDUCED from 5s to 15s
     staleTime: 10000
   });
+
+  async function loadNextGiveyNumber() {
+    if (!show?.id || !currentSeller?.id) return;
+
+    const { data, error } = await supabase
+      .from("givey_events")
+      .select("givey_number")
+      .eq("show_id", show.id)
+      .order("givey_number", { ascending: false })
+      .limit(1);
+
+    if (!error) {
+      const next = data?.length ? data[0].givey_number + 1 : 1;
+      setNextGiveyNumber(next);
+    }
+  }
+
+  // Realtime subscription: clear activeGivey when givey ends
+  useEffect(() => {
+    if (!show?.id) return;
+
+    const channel = supabase
+      .channel("givey-events-" + show.id)
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "givey_events",
+          filter: `show_id=eq.${show.id}`
+        },
+        (payload) => {
+          console.log("[GIVEY REALTIME UPDATE]", payload);
+
+          if (payload.new.status !== "active") {
+            setActiveGivey(null);
+            loadNextGiveyNumber();
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [show?.id]);
 
   const { data: showSeller, isLoading: sellerLoading } = useQuery({
     queryKey: ['show-seller', show?.seller_id],
