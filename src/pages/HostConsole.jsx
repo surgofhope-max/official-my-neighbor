@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { supabaseApi as base44 } from "@/api/supabaseClient";
 import { supabase } from "@/lib/supabase/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -371,7 +371,50 @@ export default function HostConsole() {
     }
   }
 
-  // Realtime subscription: clear activeGivey when givey ends
+  const syncActiveGiveyFromDb = useCallback(async () => {
+    if (!show?.id) return;
+
+    const { data: row, error } = await supabase
+      .from("givey_events")
+      .select("*")
+      .eq("show_id", show.id)
+      .eq("status", "active")
+      .order("started_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      console.warn("🧭 GIVEY SYNC FROM DB error:", error);
+      return;
+    }
+
+    if (row) {
+      setActiveGivey(row);
+      console.log("🧭 GIVEY SYNC FROM DB: active givey", row.id);
+    } else {
+      setActiveGivey(null);
+      console.log("🧭 GIVEY SYNC FROM DB: no active givey");
+    }
+
+    loadNextGiveyNumber();
+  }, [show?.id]);
+
+  // Initial sync + polling when active givey exists
+  useEffect(() => {
+    if (!show?.id) return;
+
+    syncActiveGiveyFromDb();
+
+    if (!activeGivey) return;
+
+    const interval = setInterval(() => {
+      syncActiveGiveyFromDb();
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [show?.id, activeGivey, syncActiveGiveyFromDb]);
+
+  // Realtime subscription: sync from DB on givey_events UPDATE (DB-authoritative)
   useEffect(() => {
     console.log("🟡 GIVEY EFFECT EVALUATED. show?.id:", show?.id);
 
@@ -396,12 +439,7 @@ export default function HostConsole() {
         },
         (payload) => {
           console.log("🔥 GIVEY REALTIME UPDATE RECEIVED:", payload);
-
-          if (payload.new.status !== "active") {
-            console.log("🟣 GIVEY STATUS NOT ACTIVE — clearing UI");
-            setActiveGivey(null);
-            loadNextGiveyNumber();
-          }
+          syncActiveGiveyFromDb();
         }
       )
       .subscribe((status) => {
@@ -412,7 +450,7 @@ export default function HostConsole() {
       console.log("🔴 GIVEY CHANNEL CLEANUP:", channelName);
       supabase.removeChannel(channel);
     };
-  }, [show?.id]);
+  }, [show?.id, syncActiveGiveyFromDb]);
 
   const { data: showSeller, isLoading: sellerLoading } = useQuery({
     queryKey: ['show-seller', show?.seller_id],
@@ -475,6 +513,7 @@ export default function HostConsole() {
     if (!error && data) {
       setActiveGivey(data);
       setNextGiveyNumber(data.givey_number + 1);
+      syncActiveGiveyFromDb();
     }
 
     setStartingGivey(false);
