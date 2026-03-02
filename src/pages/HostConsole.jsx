@@ -396,8 +396,17 @@ export default function HostConsole() {
     }
 
     if (row) {
-      setActiveGivey(row);
-      console.log("🧭 GIVEY SYNC FROM DB: active givey", row.id);
+      // HARD UX UNLOCK: If ends_at has passed, treat as expired for UI
+      const now = new Date();
+      const endsAt = row.ends_at ? new Date(row.ends_at) : null;
+
+      if (endsAt && endsAt <= now) {
+        console.log("⏰ GIVEY HARD UNLOCK (ends_at passed):", row.id);
+        setActiveGivey(null);
+      } else {
+        setActiveGivey(row);
+        console.log("🧭 GIVEY SYNC FROM DB: active givey", row.id);
+      }
     } else {
       setActiveGivey(null);
       console.log("🧭 GIVEY SYNC FROM DB: no active givey");
