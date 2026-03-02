@@ -410,14 +410,20 @@ export default function HostConsole() {
   }, [show?.id, currentSeller?.id]);
 
   async function handleStartGivey() {
+    console.log("[GIVEY] Clicked Start Givey");
     if (!show?.id || !currentSeller?.id) return;
     setStartingGivey(true);
+
+    console.log("[GIVEY] show.id:", show?.id);
+    console.log("[GIVEY] currentSeller.id:", currentSeller?.id);
 
     const { data, error } = await supabase.rpc("start_givey_event", {
       p_show_id: show.id,
       p_seller_id: currentSeller.id,
       p_require_follow: true
     });
+
+    console.log("[GIVEY] RPC response:", data, error);
 
     if (error) {
       console.error("Failed to start givey:", error);
