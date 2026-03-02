@@ -336,6 +336,11 @@ export default function LiveShow() {
       .limit(1)
       .maybeSingle();
 
+    console.log("BUYER GIVEY SYNC RESULT:", {
+      showId: show?.id,
+      givey: data
+    });
+
     if (error) {
       console.warn("GIVEY BUYER SYNC ERROR:", error);
       setActiveGivey(null);
@@ -363,7 +368,8 @@ export default function LiveShow() {
           table: "givey_events",
           filter: `show_id=eq.${show.id}`,
         },
-        () => {
+        (payload) => {
+          console.log("BUYER GIVEY REALTIME PAYLOAD:", payload);
           syncActiveGiveyFromDb();
         }
       )
@@ -1114,6 +1120,9 @@ export default function LiveShow() {
           </div>
         </div>
 
+        {console.log("BUYER RENDER CHECK:", {
+          activeGivey
+        })}
         {activeGivey && (
           <div style={{
             padding: "12px",
