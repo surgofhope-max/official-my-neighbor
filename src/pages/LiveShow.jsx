@@ -90,6 +90,9 @@ export default function LiveShow() {
   const [showProductOverlay, setShowProductOverlay] = useState(false);
   const [buyerSearchTerm, setBuyerSearchTerm] = useState("");
   const [activeGivey, setActiveGivey] = useState(null);
+  const [enteringGivey, setEnteringGivey] = useState(false);
+  const [enteredGivey, setEnteredGivey] = useState(false);
+  const [giveyTimeLeft, setGiveyTimeLeft] = useState(null);
   const carouselRef = useRef(null);
   const lastSalesCountRef = useRef(null);
 
@@ -370,6 +373,40 @@ export default function LiveShow() {
       supabase.removeChannel(channel);
     };
   }, [show?.id, syncActiveGiveyFromDb]);
+
+  useEffect(() => {
+    if (!activeGivey?.ends_at) {
+      setGiveyTimeLeft(null);
+      return;
+    }
+
+    const interval = setInterval(() => {
+      const now = new Date().getTime();
+      const end = new Date(activeGivey.ends_at).getTime();
+      const diff = Math.max(0, end - now);
+      setGiveyTimeLeft(diff);
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [activeGivey]);
+
+  const handleEnterGivey = async () => {
+    if (!activeGivey?.id) return;
+
+    setEnteringGivey(true);
+
+    const { data, error } = await supabase.rpc("enter_givey", {
+      p_givey_event_id: activeGivey.id,
+    });
+
+    if (error) {
+      console.error("Enter givey failed:", error);
+    } else {
+      setEnteredGivey(true);
+    }
+
+    setEnteringGivey(false);
+  };
 
   // Load products using show_products table (via adapter for compatibility)
   const loadProducts = async () => {
@@ -1076,6 +1113,37 @@ export default function LiveShow() {
             </div>
           </div>
         </div>
+
+        {activeGivey && (
+          <div style={{
+            padding: "12px",
+            border: "2px solid purple",
+            borderRadius: "8px",
+            marginBottom: "12px",
+            background: "#f3e8ff"
+          }}>
+            <div style={{ fontWeight: "bold" }}>
+              Givey #{activeGivey.givey_number}
+            </div>
+
+            {giveyTimeLeft !== null && (
+              <div>
+                Time Left: {Math.floor(giveyTimeLeft / 1000)}s
+              </div>
+            )}
+
+            {!enteredGivey ? (
+              <button
+                onClick={handleEnterGivey}
+                disabled={enteringGivey}
+              >
+                {enteringGivey ? "Entering..." : "Enter Givey"}
+              </button>
+            ) : (
+              <div>✅ Entered</div>
+            )}
+          </div>
+        )}
 
         {/* Chat Messages Overlay */}
         {/* Container is device-gated (isMobileDevice), so chat mounts only on mobile.
