@@ -89,6 +89,7 @@ export default function LiveShow() {
   const [__auditSalesCount, set__auditSalesCount] = useState(null);
   const [showProductOverlay, setShowProductOverlay] = useState(false);
   const [buyerSearchTerm, setBuyerSearchTerm] = useState("");
+  const [activeGivey, setActiveGivey] = useState(null);
   const carouselRef = useRef(null);
   const lastSalesCountRef = useRef(null);
 
@@ -319,6 +320,56 @@ export default function LiveShow() {
     },
     enabled: !!show?.seller_id && !!user?.id
   });
+
+  const syncActiveGiveyFromDb = useCallback(async () => {
+    if (!show?.id) return;
+
+    const { data, error } = await supabase
+      .from("givey_events")
+      .select("*")
+      .eq("show_id", show.id)
+      .eq("status", "active")
+      .order("started_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      console.warn("GIVEY BUYER SYNC ERROR:", error);
+      setActiveGivey(null);
+      return;
+    }
+
+    setActiveGivey(data ?? null);
+  }, [show?.id]);
+
+  useEffect(() => {
+    if (!show?.id) return;
+    syncActiveGiveyFromDb();
+  }, [show?.id, syncActiveGiveyFromDb]);
+
+  useEffect(() => {
+    if (!show?.id) return;
+
+    const channel = supabase
+      .channel("buyer-givey-" + show.id)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "givey_events",
+          filter: `show_id=eq.${show.id}`,
+        },
+        () => {
+          syncActiveGiveyFromDb();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [show?.id, syncActiveGiveyFromDb]);
 
   // Load products using show_products table (via adapter for compatibility)
   const loadProducts = async () => {
