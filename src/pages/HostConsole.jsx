@@ -373,30 +373,43 @@ export default function HostConsole() {
 
   // Realtime subscription: clear activeGivey when givey ends
   useEffect(() => {
-    if (!show?.id) return;
+    console.log("🟡 GIVEY EFFECT EVALUATED. show?.id:", show?.id);
+
+    if (!show?.id) {
+      console.log("⛔ GIVEY EFFECT EXITED — show.id missing");
+      return;
+    }
+
+    console.log("🟢 GIVEY EFFECT RUNNING — attaching channel for show:", show.id);
+
+    const channelName = "givey-events-" + show.id;
 
     const channel = supabase
-      .channel("givey-events-" + show.id)
+      .channel(channelName)
       .on(
         "postgres_changes",
         {
           event: "UPDATE",
           schema: "public",
           table: "givey_events",
-          filter: `show_id=eq.${show.id}`
+          filter: `show_id=eq.${show.id}`,
         },
         (payload) => {
-          console.log("[GIVEY REALTIME UPDATE]", payload);
+          console.log("🔥 GIVEY REALTIME UPDATE RECEIVED:", payload);
 
           if (payload.new.status !== "active") {
+            console.log("🟣 GIVEY STATUS NOT ACTIVE — clearing UI");
             setActiveGivey(null);
             loadNextGiveyNumber();
           }
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        console.log("📡 GIVEY CHANNEL STATUS:", status);
+      });
 
     return () => {
+      console.log("🔴 GIVEY CHANNEL CLEANUP:", channelName);
       supabase.removeChannel(channel);
     };
   }, [show?.id]);
