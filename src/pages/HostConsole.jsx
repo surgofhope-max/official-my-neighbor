@@ -384,7 +384,14 @@ export default function HostConsole() {
       .maybeSingle();
 
     if (error) {
-      console.warn("🧭 GIVEY SYNC FROM DB error:", error);
+      console.warn("🧭 GIVEY SYNC FROM DB error:", {
+        message: error?.message,
+        code: error?.code,
+        details: error?.details,
+        hint: error?.hint,
+      });
+      setActiveGivey(null);
+      try { loadNextGiveyNumber(); } catch (e) {}
       return;
     }
 
@@ -413,6 +420,17 @@ export default function HostConsole() {
 
     return () => clearInterval(interval);
   }, [show?.id, activeGivey, syncActiveGiveyFromDb]);
+
+  // TEMPORARY: Audit auth.uid() vs expected seller owner (remove after verification)
+  useEffect(() => {
+    if (!show?.id) return;
+    (async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      console.log("🪪 HOSTCONSOLE AUTH USER:", user?.id);
+      console.log("🪪 HOSTCONSOLE AUTH EMAIL:", user?.email ?? "(none)");
+      console.log("🪪 EXPECTED SELLER OWNER USER_ID:", "c33adf0f-c4d2-4de9-89bd-f0552abfcf4c");
+    })();
+  }, [show?.id]);
 
   // Realtime subscription: sync from DB on givey_events UPDATE (DB-authoritative)
   useEffect(() => {
