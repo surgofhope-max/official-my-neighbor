@@ -1005,6 +1005,39 @@ export default function LiveShow() {
 
   if (isLoadingAuth) return authLoadingUI;
 
+  const GiveyEntryBanner = activeGivey && (
+    <div className="fixed left-1/2 -translate-x-1/2 bottom-24 z-[9999] w-[90%] max-w-md">
+      <div style={{
+        padding: "12px",
+        border: "2px solid purple",
+        borderRadius: "8px",
+        marginBottom: "12px",
+        background: "#f3e8ff"
+      }}>
+        <div style={{ fontWeight: "bold" }}>
+          Givey #{activeGivey.givey_number} is live
+        </div>
+
+        {activeGivey.ends_at && (() => {
+          const remaining = Math.max(0, new Date(activeGivey.ends_at).getTime() - Date.now());
+          const m = Math.floor(remaining / 60000);
+          const s = Math.floor((remaining % 60000) / 1000);
+          return <div>Time left: {m}m {s}s</div>;
+        })()}
+
+        <button
+          onClick={handleEnterGivey}
+          disabled={enteringGivey || giveyEntryStatus === "entered"}
+        >
+          {enteringGivey ? "Entering..." : "Enter Givey"}
+        </button>
+
+        {giveyEntryStatus === "entered" && <div>Entered</div>}
+        {giveyEntryStatus === "error" && <div>Error — try again</div>}
+      </div>
+    </div>
+  );
+
   return (
     <div style={{ 
       overscrollBehavior: 'none',
@@ -1047,6 +1080,8 @@ export default function LiveShow() {
 
       {/* Pickup Instructions Bubble */}
       <PickupInstructionsBubble pickupInstructions={show.pickup_instructions} isIOS={isIOS} />
+
+      {GiveyEntryBanner}
 
       {/* MOBILE VIEW - Original Layout */}
       {/* CONTAINER GATED BY DEVICE CLASS: Only mount on mobile devices.
@@ -1174,40 +1209,6 @@ export default function LiveShow() {
             </div>
           </div>
         </div>
-
-        {console.log("BUYER RENDER CHECK:", {
-          activeGivey
-        })}
-        {activeGivey && (
-          <div style={{
-            padding: "12px",
-            border: "2px solid purple",
-            borderRadius: "8px",
-            marginBottom: "12px",
-            background: "#f3e8ff"
-          }}>
-            <div style={{ fontWeight: "bold" }}>
-              Givey #{activeGivey.givey_number} is live
-            </div>
-
-            {activeGivey.ends_at && (() => {
-              const remaining = Math.max(0, new Date(activeGivey.ends_at).getTime() - Date.now());
-              const m = Math.floor(remaining / 60000);
-              const s = Math.floor((remaining % 60000) / 1000);
-              return <div>Time left: {m}m {s}s</div>;
-            })()}
-
-            <button
-              onClick={handleEnterGivey}
-              disabled={enteringGivey || giveyEntryStatus === "entered"}
-            >
-              {enteringGivey ? "Entering..." : "Enter Givey"}
-            </button>
-
-            {giveyEntryStatus === "entered" && <div>Entered</div>}
-            {giveyEntryStatus === "error" && <div>Error — try again</div>}
-          </div>
-        )}
 
         {/* Chat Messages Overlay */}
         {/* Container is device-gated (isMobileDevice), so chat mounts only on mobile.
@@ -1605,37 +1606,6 @@ export default function LiveShow() {
             </div>
           </div>
         </div>
-
-        {activeGivey && (
-          <div style={{
-            padding: "12px",
-            border: "2px solid purple",
-            borderRadius: "8px",
-            marginBottom: "12px",
-            background: "#f3e8ff"
-          }}>
-            <div style={{ fontWeight: "bold" }}>
-              Givey #{activeGivey.givey_number} is live
-            </div>
-
-            {activeGivey.ends_at && (() => {
-              const remaining = Math.max(0, new Date(activeGivey.ends_at).getTime() - Date.now());
-              const m = Math.floor(remaining / 60000);
-              const s = Math.floor((remaining % 60000) / 1000);
-              return <div>Time left: {m}m {s}s</div>;
-            })()}
-
-            <button
-              onClick={handleEnterGivey}
-              disabled={enteringGivey || giveyEntryStatus === "entered"}
-            >
-              {enteringGivey ? "Entering..." : "Enter Givey"}
-            </button>
-
-            {giveyEntryStatus === "entered" && <div>Entered</div>}
-            {giveyEntryStatus === "error" && <div>Error — try again</div>}
-          </div>
-        )}
 
         {/* Chat Component - Full Height */}
         {/* Container is device-gated (isDesktopDevice), so chat mounts only on desktop.
