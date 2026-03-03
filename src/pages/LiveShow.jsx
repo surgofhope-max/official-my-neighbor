@@ -94,6 +94,8 @@ export default function LiveShow() {
   const [enteredGivey, setEnteredGivey] = useState(false);
   const [giveyEntryStatus, setGiveyEntryStatus] = useState(null); // "entered" | "error" | null
   const [giveyTimeLeft, setGiveyTimeLeft] = useState(null);
+  const [latestGivey, setLatestGivey] = useState(null);
+  const [winnerDisplayName, setWinnerDisplayName] = useState(null);
   const carouselRef = useRef(null);
   const lastSalesCountRef = useRef(null);
 
@@ -351,10 +353,40 @@ export default function LiveShow() {
     setActiveGivey(data ?? null);
   }, [show?.id]);
 
+  const syncLatestGiveyFromDb = useCallback(async () => {
+    if (!show?.id) return;
+
+    const { data, error } = await supabase
+      .from("givey_events")
+      .select("*")
+      .eq("show_id", show.id)
+      .order("started_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      console.warn("LATEST GIVEY SYNC ERROR:", error);
+      return;
+    }
+
+    setLatestGivey(data ?? null);
+
+    if (data?.status === "winner_selected" && data?.winner_user_id) {
+      const { data: userData } = await supabase
+        .from("users")
+        .select("display_name")
+        .eq("id", data.winner_user_id)
+        .maybeSingle();
+
+      setWinnerDisplayName(userData?.display_name ?? "Winner");
+    }
+  }, [show?.id]);
+
   useEffect(() => {
     if (!show?.id) return;
     syncActiveGiveyFromDb();
-  }, [show?.id, syncActiveGiveyFromDb]);
+    syncLatestGiveyFromDb();
+  }, [show?.id, syncActiveGiveyFromDb, syncLatestGiveyFromDb]);
 
   useEffect(() => {
     if (!show?.id) return;
@@ -383,6 +415,7 @@ export default function LiveShow() {
         (payload) => {
           console.log("BUYER GIVEY REALTIME PAYLOAD:", payload);
           syncActiveGiveyFromDb();
+          syncLatestGiveyFromDb();
         }
       )
       .subscribe();
@@ -390,7 +423,7 @@ export default function LiveShow() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [show?.id, syncActiveGiveyFromDb]);
+  }, [show?.id, syncActiveGiveyFromDb, syncLatestGiveyFromDb]);
 
   useEffect(() => {
     if (!activeGivey?.ends_at) {
@@ -1005,6 +1038,13 @@ export default function LiveShow() {
 
   if (isLoadingAuth) return authLoadingUI;
 
+  const WinnerBanner =
+    latestGivey?.status === "winner_selected" && winnerDisplayName && (
+      <div className="fixed top-24 left-1/2 -translate-x-1/2 z-[9999] bg-green-600 text-white px-6 py-3 rounded-xl shadow-lg">
+        Winner: {winnerDisplayName}
+      </div>
+    );
+
   const GiveyEntryBanner = activeGivey && (
     <div className="fixed left-1/2 -translate-x-1/2 bottom-24 z-[9999] w-[90%] max-w-md">
       <div style={{
@@ -1081,6 +1121,7 @@ export default function LiveShow() {
       {/* Pickup Instructions Bubble */}
       <PickupInstructionsBubble pickupInstructions={show.pickup_instructions} isIOS={isIOS} />
 
+      {WinnerBanner}
       {GiveyEntryBanner}
 
       {/* MOBILE VIEW - Original Layout */}
