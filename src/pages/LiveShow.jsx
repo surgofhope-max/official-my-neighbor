@@ -65,6 +65,11 @@ export default function LiveShow() {
   
   // Use canonical auth from SupabaseAuthProvider (single source of truth)
   const { user, isLoadingAuth } = useSupabaseAuth();
+
+  useEffect(() => {
+    console.log("DEBUG LIVE SHOW — USER:", user?.id);
+  }, [user]);
+
   const authLoadingUI = (
     <div className="w-full h-full flex items-center justify-center text-white/70 text-sm">
       Loading…
@@ -122,6 +127,10 @@ export default function LiveShow() {
   // Role detection
   const [isShowOwner, setIsShowOwner] = useState(false);
   const [isAdminUser, setIsAdminUser] = useState(false);
+
+  useEffect(() => {
+    console.log("DEBUG LIVE SHOW — isShowOwner:", isShowOwner);
+  }, [isShowOwner]);
 
   // IVS Player state
   const [ivsPlayerState, setIvsPlayerState] = useState(null);
@@ -443,6 +452,12 @@ export default function LiveShow() {
   }, [activeGivey]);
 
   useEffect(() => {
+    console.log("DEBUG FINALIZE EFFECT RUNNING", {
+      isShowOwner,
+      activeGiveyId: activeGivey?.id,
+      endsAt: activeGivey?.ends_at
+    });
+
     if (!activeGivey) return;
     if (!isShowOwner) return;
     if (!activeGivey.ends_at) return;
