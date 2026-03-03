@@ -92,6 +92,7 @@ export default function LiveShow() {
   const [activeGivey, setActiveGivey] = useState(null);
   const [enteringGivey, setEnteringGivey] = useState(false);
   const [enteredGivey, setEnteredGivey] = useState(false);
+  const [giveyEntryStatus, setGiveyEntryStatus] = useState(null); // "entered" | "error" | null
   const [giveyTimeLeft, setGiveyTimeLeft] = useState(null);
   const carouselRef = useRef(null);
   const lastSalesCountRef = useRef(null);
@@ -357,6 +358,17 @@ export default function LiveShow() {
 
   useEffect(() => {
     if (!show?.id) return;
+    if (!activeGivey) return;
+    if (activeGivey?.ends_at && new Date(activeGivey.ends_at).getTime() <= Date.now()) {
+      setActiveGivey(null);
+      return;
+    }
+    const interval = setInterval(() => syncActiveGiveyFromDb(), 5000);
+    return () => clearInterval(interval);
+  }, [show?.id, activeGivey?.id, activeGivey?.ends_at, syncActiveGiveyFromDb]);
+
+  useEffect(() => {
+    if (!show?.id) return;
 
     const channel = supabase
       .channel("buyer-givey-" + show.id)
@@ -396,23 +408,66 @@ export default function LiveShow() {
     return () => clearInterval(interval);
   }, [activeGivey]);
 
-  const handleEnterGivey = async () => {
-    if (!activeGivey?.id) return;
-
+  async function handleEnterGivey() {
+    if (!show?.id || !activeGivey?.id) return;
     setEnteringGivey(true);
+    setGiveyEntryStatus(null);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user?.id) throw new Error("Not authenticated");
 
-    const { data, error } = await supabase.rpc("enter_givey", {
-      p_givey_event_id: activeGivey.id,
-    });
+      const { data: bp, error: bpErr } = await supabase
+        .from("buyer_profiles")
+        .select("id")
+        .eq("user_id", user.id)
+        .maybeSingle();
+      if (bpErr) throw bpErr;
+      if (!bp?.id) throw new Error("Buyer profile missing");
 
-    if (error) {
-      console.error("Enter givey failed:", error);
-    } else {
-      setEnteredGivey(true);
+      if (activeGivey.require_follow) {
+        const { data: existingFollow, error: followSelErr } = await supabase
+          .from("followed_sellers")
+          .select("buyer_id,seller_id")
+          .eq("buyer_id", bp.id)
+          .eq("seller_id", activeGivey.seller_id)
+          .maybeSingle();
+        if (followSelErr && followSelErr.code !== "PGRST116") throw followSelErr;
+
+        if (!existingFollow) {
+          const { error: insFollowErr } = await supabase
+            .from("followed_sellers")
+            .insert({ buyer_id: bp.id, seller_id: activeGivey.seller_id });
+          if (insFollowErr) throw insFollowErr;
+        }
+      }
+
+      const { error: entryErr } = await supabase
+        .from("givey_entries")
+        .insert({
+          givey_event_id: activeGivey.id,
+          show_id: show.id,
+          seller_id: activeGivey.seller_id,
+          user_id: user.id,
+          buyer_id: bp.id,
+        });
+
+      if (entryErr) {
+        const msg = (entryErr.message || "").toLowerCase();
+        if (msg.includes("duplicate") || msg.includes("unique") || msg.includes("givey_entries_unique_per_user")) {
+          setGiveyEntryStatus("entered");
+        } else {
+          throw entryErr;
+        }
+      } else {
+        setGiveyEntryStatus("entered");
+      }
+    } catch (e) {
+      console.error("BUYER GIVEY ENTER ERROR:", e);
+      setGiveyEntryStatus("error");
+    } finally {
+      setEnteringGivey(false);
     }
-
-    setEnteringGivey(false);
-  };
+  }
 
   // Load products using show_products table (via adapter for compatibility)
   const loadProducts = async () => {
@@ -1132,25 +1187,25 @@ export default function LiveShow() {
             background: "#f3e8ff"
           }}>
             <div style={{ fontWeight: "bold" }}>
-              Givey #{activeGivey.givey_number}
+              Givey #{activeGivey.givey_number} is live
             </div>
 
-            {giveyTimeLeft !== null && (
-              <div>
-                Time Left: {Math.floor(giveyTimeLeft / 1000)}s
-              </div>
-            )}
+            {activeGivey.ends_at && (() => {
+              const remaining = Math.max(0, new Date(activeGivey.ends_at).getTime() - Date.now());
+              const m = Math.floor(remaining / 60000);
+              const s = Math.floor((remaining % 60000) / 1000);
+              return <div>Time left: {m}m {s}s</div>;
+            })()}
 
-            {!enteredGivey ? (
-              <button
-                onClick={handleEnterGivey}
-                disabled={enteringGivey}
-              >
-                {enteringGivey ? "Entering..." : "Enter Givey"}
-              </button>
-            ) : (
-              <div>✅ Entered</div>
-            )}
+            <button
+              onClick={handleEnterGivey}
+              disabled={enteringGivey || giveyEntryStatus === "entered"}
+            >
+              {enteringGivey ? "Entering..." : "Enter Givey"}
+            </button>
+
+            {giveyEntryStatus === "entered" && <div>Entered</div>}
+            {giveyEntryStatus === "error" && <div>Error — try again</div>}
           </div>
         )}
 
@@ -1547,12 +1602,43 @@ export default function LiveShow() {
               <div className="flex items-center gap-2 text-gray-300">
                 <ShoppingBag className="w-4 h-4" />
                 <span>{allShowProducts.length} products</span>
-              </div>
             </div>
           </div>
+        </div>
 
-          {/* Chat Component - Full Height */}
-          {/* Container is device-gated (isDesktopDevice), so chat mounts only on desktop.
+        {activeGivey && (
+          <div style={{
+            padding: "12px",
+            border: "2px solid purple",
+            borderRadius: "8px",
+            marginBottom: "12px",
+            background: "#f3e8ff"
+          }}>
+            <div style={{ fontWeight: "bold" }}>
+              Givey #{activeGivey.givey_number} is live
+            </div>
+
+            {activeGivey.ends_at && (() => {
+              const remaining = Math.max(0, new Date(activeGivey.ends_at).getTime() - Date.now());
+              const m = Math.floor(remaining / 60000);
+              const s = Math.floor((remaining % 60000) / 1000);
+              return <div>Time left: {m}m {s}s</div>;
+            })()}
+
+            <button
+              onClick={handleEnterGivey}
+              disabled={enteringGivey || giveyEntryStatus === "entered"}
+            >
+              {enteringGivey ? "Entering..." : "Enter Givey"}
+            </button>
+
+            {giveyEntryStatus === "entered" && <div>Entered</div>}
+            {giveyEntryStatus === "error" && <div>Error — try again</div>}
+          </div>
+        )}
+
+        {/* Chat Component - Full Height */}
+        {/* Container is device-gated (isDesktopDevice), so chat mounts only on desktop.
               This prevents double polling and freeze under load. */}
           <div className="flex-1 flex flex-col min-h-0">
             {useSupabaseChat ? (
