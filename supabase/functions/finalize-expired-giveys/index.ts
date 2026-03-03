@@ -24,7 +24,6 @@ serve(async () => {
     .from("givey_events")
     .select("id")
     .eq("status", "active")
-    .not("ends_at", "eq", null)
     .lte("ends_at", now)
     .order("ends_at", { ascending: true })
     .limit(200);
