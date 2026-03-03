@@ -396,17 +396,8 @@ export default function HostConsole() {
     }
 
     if (row) {
-      // HARD UX UNLOCK: If ends_at has passed, treat as expired for UI
-      const now = new Date();
-      const endsAt = row.ends_at ? new Date(row.ends_at) : null;
-
-      if (endsAt && endsAt <= now) {
-        console.log("⏰ GIVEY HARD UNLOCK (ends_at passed):", row.id);
-        setActiveGivey(null);
-      } else {
-        setActiveGivey(row);
-        console.log("🧭 GIVEY SYNC FROM DB: active givey", row.id);
-      }
+      setActiveGivey(row);
+      console.log("🧭 GIVEY SYNC FROM DB: active givey", row.id);
     } else {
       setActiveGivey(null);
       console.log("🧭 GIVEY SYNC FROM DB: no active givey");
@@ -478,6 +469,44 @@ export default function HostConsole() {
       supabase.removeChannel(channel);
     };
   }, [show?.id, syncActiveGiveyFromDb]);
+
+  const hasTriggeredFinalizeRef = useRef(null);
+
+  useEffect(() => {
+    if (!activeGivey) return;
+    if (!activeGivey.ends_at) return;
+
+    const checkExpiration = async () => {
+      const now = Date.now();
+      const endsAt = new Date(activeGivey.ends_at).getTime();
+
+      if (now >= endsAt) {
+        if (hasTriggeredFinalizeRef.current === activeGivey.id) return;
+
+        hasTriggeredFinalizeRef.current = activeGivey.id;
+
+        try {
+          console.log("🏆 HOST TRIGGERING FINALIZE:", activeGivey.id);
+
+          const { error } = await supabase.rpc(
+            "finalize_givey_event",
+            { p_givey_event_id: activeGivey.id }
+          );
+
+          if (error) {
+            console.error("FINALIZE ERROR:", error);
+          }
+        } catch (err) {
+          console.error("FINALIZE EXCEPTION:", err);
+        }
+      }
+    };
+
+    const interval = setInterval(checkExpiration, 1000);
+
+    return () => clearInterval(interval);
+
+  }, [activeGivey]);
 
   const { data: showSeller, isLoading: sellerLoading } = useQuery({
     queryKey: ['show-seller', show?.seller_id],
