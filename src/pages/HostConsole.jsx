@@ -355,6 +355,11 @@ export default function HostConsole() {
     staleTime: 10000
   });
 
+  useEffect(() => {
+    console.log("HOST DEBUG — show object:", show);
+    console.log("HOST DEBUG — show.id:", show?.id);
+  }, [show]);
+
   async function loadNextGiveyNumber() {
     if (!show?.id || !currentSeller?.id) return;
 
