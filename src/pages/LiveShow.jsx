@@ -96,6 +96,7 @@ export default function LiveShow() {
   const [giveyTimeLeft, setGiveyTimeLeft] = useState(null);
   const [latestGivey, setLatestGivey] = useState(null);
   const [winnerDisplayName, setWinnerDisplayName] = useState(null);
+  const hasTriggeredFinalizeRef = useRef(null);
   const carouselRef = useRef(null);
   const lastSalesCountRef = useRef(null);
 
@@ -440,6 +441,43 @@ export default function LiveShow() {
 
     return () => clearInterval(interval);
   }, [activeGivey]);
+
+  useEffect(() => {
+    if (!activeGivey) return;
+    if (!isShowOwner) return;
+    if (!activeGivey.ends_at) return;
+
+    const checkExpiration = async () => {
+      const now = Date.now();
+      const endsAt = new Date(activeGivey.ends_at).getTime();
+
+      if (now >= endsAt) {
+        if (hasTriggeredFinalizeRef.current === activeGivey.id) return;
+
+        hasTriggeredFinalizeRef.current = activeGivey.id;
+
+        try {
+          console.log("SELLER TRIGGERING FINALIZE:", activeGivey.id);
+
+          const { error } = await supabase.rpc(
+            "finalize_givey_event",
+            { p_givey_event_id: activeGivey.id }
+          );
+
+          if (error) {
+            console.error("FINALIZE ERROR:", error);
+          }
+        } catch (err) {
+          console.error("FINALIZE EXCEPTION:", err);
+        }
+      }
+    };
+
+    const interval = setInterval(checkExpiration, 1000);
+
+    return () => clearInterval(interval);
+
+  }, [activeGivey, isShowOwner]);
 
   async function handleEnterGivey() {
     if (!show?.id || !activeGivey?.id) return;
