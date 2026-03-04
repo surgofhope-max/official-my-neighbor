@@ -81,7 +81,7 @@ export default function SellerOrders() {
   const [showPastShows, setShowPastShows] = useState(false);
   const [banningBuyer, setBanningBuyer] = useState(null);
   
-  // Navigation state: 'shows' | 'batches' | 'orders'
+  // Navigation state: 'shows' | 'batches' | 'giveys'
   const [view, setView] = useState('shows');
   const [selectedShow, setSelectedShow] = useState(null);
 
@@ -1148,6 +1148,12 @@ export default function SellerOrders() {
               <h1 className="text-3xl font-bold text-gray-900">{selectedShow.title}</h1>
               <p className="text-gray-600 mt-1">Buyer batches from this show</p>
             </div>
+            <Button
+              className="ml-auto"
+              onClick={() => setView('giveys')}
+            >
+              Verify Giveys
+            </Button>
           </div>
 
           <div className="relative max-w-md">
@@ -1441,6 +1447,38 @@ export default function SellerOrders() {
             </div>
           </>
         )}
+      </div>
+    );
+  }
+
+  // ========================================
+  // VIEW 3: GIVEY VERIFICATION (placeholder)
+  // ========================================
+  if (view === 'giveys') {
+    return (
+      <div className="min-h-screen p-4 sm:p-8">
+        <div className="max-w-7xl mx-auto space-y-6">
+          <div className="flex items-center gap-4">
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={() => setView('batches')}
+            >
+              <ArrowLeft className="w-4 h-4" />
+            </Button>
+            <div>
+              <h1 className="text-3xl font-bold text-gray-900">Verify Giveys</h1>
+              <p className="text-gray-600 mt-1">{selectedShow?.title} — Givey verification</p>
+            </div>
+          </div>
+          <Card className="border-0 shadow-lg">
+            <CardContent className="p-8 text-center">
+              <Gift className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+              <h3 className="text-lg font-semibold text-gray-900 mb-2">Givey Verification</h3>
+              <p className="text-gray-600">Coming soon</p>
+            </CardContent>
+          </Card>
+        </div>
       </div>
     );
   }
