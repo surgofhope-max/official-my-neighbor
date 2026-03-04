@@ -410,6 +410,10 @@ export default function LiveShow() {
   }, [show?.id, activeGivey?.id, activeGivey?.ends_at, syncActiveGiveyFromDb]);
 
   useEffect(() => {
+    setGiveyEntryStatus(null);
+  }, [activeGivey?.id]);
+
+  useEffect(() => {
     if (!show?.id) return;
 
     const channel = supabase
@@ -424,6 +428,9 @@ export default function LiveShow() {
         },
         (payload) => {
           console.log("BUYER GIVEY REALTIME PAYLOAD:", payload);
+          if (payload.new && payload.new.status !== "active") {
+            setActiveGivey(null);
+          }
           syncActiveGiveyFromDb();
           syncLatestGiveyFromDb();
         }

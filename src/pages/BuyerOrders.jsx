@@ -47,6 +47,7 @@ export default function BuyerOrders() {
   const [allOrders, setAllOrders] = useState([]);
   const [sellers, setSellers] = useState([]);
   const [shows, setShows] = useState([]);
+  const [giveyWins, setGiveyWins] = useState(0);
   const [loading, setLoading] = useState(true);
 
   // Track if initial load is complete
@@ -137,6 +138,18 @@ export default function BuyerOrders() {
     }
   };
 
+  // Load Givey wins from givey_events (winner_user_id)
+  const loadGiveyWins = async () => {
+    if (!effectiveUserId) return;
+    const { count, error } = await supabase
+      .from("givey_events")
+      .select("id", { count: "exact", head: true })
+      .eq("winner_user_id", effectiveUserId);
+    if (!error) {
+      setGiveyWins(count ?? 0);
+    }
+  };
+
   // Load sellers and shows (reference data)
   const loadReferenceData = async () => {
     try {
@@ -161,10 +174,12 @@ export default function BuyerOrders() {
     // Initial load
     loadData();
     loadReferenceData();
+    loadGiveyWins();
 
     // Auto-refresh every 5 seconds
     const interval = setInterval(() => {
       loadData();
+      loadGiveyWins();
     }, 5000);
 
     return () => clearInterval(interval);
@@ -302,7 +317,6 @@ export default function BuyerOrders() {
     (sum, order) => sum + getOrderFinancials(order).total,
     0
   );
-  const giviWins = validOrders.filter(o => o.price === 0).length;
   
   // Keep batches for display grouping only
   // PHASE-1: Only show batches that have at least one visible order
@@ -642,7 +656,7 @@ export default function BuyerOrders() {
               <div className="text-center sm:flex sm:items-center sm:justify-between">
                 <div className="flex-1">
                   <p className="text-slate-600 text-xs sm:text-sm mb-1">GIVI Wins</p>
-                  <p className="text-2xl sm:text-3xl font-bold text-slate-900">{giviWins}</p>
+                  <p className="text-2xl sm:text-3xl font-bold text-slate-900">{giveyWins}</p>
                 </div>
                 <div className="hidden sm:flex w-12 h-12 bg-blue-100/60 rounded-lg items-center justify-center">
                   <Trophy className="w-6 h-6 text-slate-900" />
