@@ -49,6 +49,8 @@ export default function BuyerOrders() {
   const [shows, setShows] = useState([]);
   const [giveyWins, setGiveyWins] = useState(0);
   const [wonGiveys, setWonGiveys] = useState([]);
+  const [pastGiveys, setPastGiveys] = useState([]);
+  const [buyerView, setBuyerView] = useState("orders");
   const [loading, setLoading] = useState(true);
 
   // Track if initial load is complete
@@ -139,13 +141,14 @@ export default function BuyerOrders() {
     }
   };
 
-  // Load Givey wins from givey_events (winner_user_id)
+  // Load Givey wins from givey_events (winner_user_id) - only unclaimed
   const loadGiveyWins = async () => {
     if (!effectiveUserId) return;
     const { count, error } = await supabase
       .from("givey_events")
       .select("id", { count: "exact", head: true })
-      .eq("winner_user_id", effectiveUserId);
+      .eq("winner_user_id", effectiveUserId)
+      .is("claimed_at", null);
     if (!error) {
       setGiveyWins(count ?? 0);
     }
@@ -159,10 +162,18 @@ export default function BuyerOrders() {
       .select("id, givey_number, seller_id, claim_code, claim_expires_at, ended_at")
       .eq("winner_user_id", effectiveUserId)
       .eq("status", "winner_selected")
+      .is("claimed_at", null)
       .order("ended_at", { ascending: false });
     if (!error) {
       setWonGiveys(data ?? []);
     }
+    const { data: past } = await supabase
+      .from("givey_events")
+      .select("id, givey_number, seller_id, claimed_at")
+      .eq("winner_user_id", effectiveUserId)
+      .not("claimed_at", "is", null)
+      .order("claimed_at", { ascending: false });
+    setPastGiveys(past ?? []);
   };
 
   // Load sellers and shows (reference data)
@@ -650,6 +661,22 @@ export default function BuyerOrders() {
       </div>
 
       <div className="max-w-7xl mx-auto px-4 py-6 sm:px-6 lg:px-8">
+        {/* View Switch */}
+        <div className="flex gap-2 mb-4">
+          <Button
+            variant={buyerView === "orders" ? "default" : "outline"}
+            onClick={() => setBuyerView("orders")}
+          >
+            Orders
+          </Button>
+          <Button
+            variant={buyerView === "giveys" ? "default" : "outline"}
+            onClick={() => setBuyerView("giveys")}
+          >
+            My Giveys
+          </Button>
+        </div>
+
         {/* Stats Cards - ENHANCED with GIVI Wins */}
         <div className="grid grid-cols-2 gap-2 sm:gap-4 mb-6">
           <Card className="border-0 shadow-lg bg-gradient-to-br from-blue-100 to-blue-200">
@@ -683,48 +710,8 @@ export default function BuyerOrders() {
           </Card>
         </div>
 
-        {/* My Giveys */}
-        <Card className="border-0 shadow-lg mb-6 bg-gradient-to-br from-slate-50 to-blue-100">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-lg font-semibold text-slate-900 flex items-center gap-2">
-              <Trophy className="w-5 h-5 text-slate-700" />
-              My Giveys
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {wonGiveys.length === 0 ? (
-              <p className="text-slate-600 text-sm">No Giveys won yet</p>
-            ) : (
-              <div className="space-y-3">
-                {wonGiveys.map((g) => (
-                  <div
-                    key={g.id}
-                    className="rounded-lg border border-slate-200 bg-white p-3 sm:p-4"
-                  >
-                    <div className="flex flex-col gap-2 text-sm">
-                      <div className="font-semibold text-slate-900">
-                        Givey #{g.givey_number}
-                      </div>
-                      <div className="text-slate-600">
-                        {sellersMap[g.seller_id]?.business_name ?? "Seller"}
-                      </div>
-                      <div className="text-slate-700">
-                        <span className="text-slate-500">Claim code:</span>{" "}
-                        <span className="font-mono font-semibold">{g.claim_code ?? "—"}</span>
-                      </div>
-                      {g.claim_expires_at && (
-                        <div className="text-slate-600 text-xs">
-                          Expires: {format(new Date(g.claim_expires_at), "MMM d, yyyy h:mm a")}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
+        {buyerView === "orders" && (
+        <>
         {/* Batched Orders - ENHANCED GIVI VISIBILITY */}
         {batches.length === 0 ? (
           <Card className="border-0 shadow-lg">
@@ -782,6 +769,84 @@ export default function BuyerOrders() {
               </div>
             )}
           </div>
+        )}
+        </>
+        )}
+
+        {buyerView === "giveys" && (
+        <Card className="border-0 shadow-lg mb-6 bg-gradient-to-br from-slate-50 to-blue-100">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-lg font-semibold text-slate-900 flex items-center gap-2">
+              <Trophy className="w-5 h-5 text-slate-700" />
+              My Giveys
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {wonGiveys.length === 0 && pastGiveys.length === 0 ? (
+              <p className="text-slate-600 text-sm">No Giveys won yet</p>
+            ) : (
+              <div className="space-y-6">
+                {wonGiveys.length > 0 && (
+                  <div className="space-y-3">
+                    {wonGiveys.map((g) => (
+                      <div
+                        key={g.id}
+                        className="rounded-lg border border-slate-200 bg-white p-3 sm:p-4"
+                      >
+                        <div className="flex flex-col gap-2 text-sm">
+                          <div className="font-semibold text-slate-900">
+                            Givey #{g.givey_number}
+                          </div>
+                          <div className="text-slate-600">
+                            {sellersMap[g.seller_id]?.business_name ?? "Seller"}
+                          </div>
+                          <div className="text-slate-700">
+                            <span className="text-slate-500">Claim code:</span>{" "}
+                            <span className="font-mono font-semibold">{g.claim_code ?? "—"}</span>
+                          </div>
+                          {g.claim_expires_at && (
+                            <div className="text-slate-600 text-xs">
+                              Expires: {format(new Date(g.claim_expires_at), "MMM d, yyyy h:mm a")}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Past Giveys */}
+                {pastGiveys.length > 0 && (
+                  <div>
+                    <h3 className="text-base font-semibold text-slate-900 mb-3">Past Giveys</h3>
+                    <div className="space-y-3">
+                      {pastGiveys.map((g) => (
+                        <div
+                          key={g.id}
+                          className="rounded-lg border border-slate-200 bg-white p-3 sm:p-4"
+                        >
+                          <div className="flex flex-col gap-2 text-sm">
+                            <div className="font-semibold text-slate-900">
+                              Givey #{g.givey_number}
+                            </div>
+                            <div className="text-slate-600">
+                              {sellersMap[g.seller_id]?.business_name ?? "Seller"}
+                            </div>
+                            {g.claimed_at && (
+                              <div className="text-slate-600 text-xs">
+                                Claimed: {new Date(g.claimed_at).toLocaleString()}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
         )}
       </div>
     </div>
