@@ -4,7 +4,7 @@
  * Selects givey_events with status='active' and ends_at <= now(),
  * then calls finalize_givey_event RPC for each.
  *
- * Runs as a continuous worker loop: processes every ~1 second.
+ * Intended to be invoked by pg_cron or HTTP request.
  * Uses service role to bypass RLS.
  */
 
@@ -52,8 +52,10 @@ async function processExpiredGiveys() {
 }
 
 serve(async () => {
-  while (true) {
-    await processExpiredGiveys();
-    await new Promise((r) => setTimeout(r, 1000));
-  }
+  await processExpiredGiveys();
+
+  return new Response(
+    JSON.stringify({ status: "ok" }),
+    { headers: { "Content-Type": "application/json" } }
+  );
 });
