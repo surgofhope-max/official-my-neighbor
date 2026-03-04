@@ -98,6 +98,14 @@ export default function SellerOrders() {
   // ═══════════════════════════════════════════════════════════════════════════
   const [buyerProfiles, setBuyerProfiles] = useState({});
 
+  // Givey verification state
+  const [pendingGiveys, setPendingGiveys] = useState([]);
+  const [pastGiveys, setPastGiveys] = useState([]);
+  const [giveyLoading, setGiveyLoading] = useState(false);
+  const [verifyInput, setVerifyInput] = useState("");
+  const [verifyError, setVerifyError] = useState("");
+  const [verifying, setVerifying] = useState(false);
+
   const getOrderFinancials = (order) => {
     const subtotal =
       order.subtotal_amount != null
@@ -336,6 +344,12 @@ export default function SellerOrders() {
 
     syncOrderStatuses();
   }, [allBatches, allOrders, seller?.id]);
+
+  useEffect(() => {
+    if (view === "giveys") {
+      loadSellerGiveys();
+    }
+  }, [view, seller?.id]);
 
   const toggleBatchExpansion = (batchId) => {
     setExpandedBatches(prev => ({
@@ -583,6 +597,50 @@ export default function SellerOrders() {
     setSelectedShow(null);
     setSearchTerm("");
   };
+
+  async function loadSellerGiveys() {
+    if (!seller?.id) return;
+    setGiveyLoading(true);
+    const { data: pending } = await supabase
+      .from("givey_events")
+      .select("id, givey_number, winner_name, claim_code_last4, claim_expires_at")
+      .eq("seller_id", seller.id)
+      .eq("status", "winner_selected")
+      .is("claimed_at", null)
+      .order("ended_at", { ascending: false });
+    const { data: past } = await supabase
+      .from("givey_events")
+      .select("id, givey_number, winner_name, claimed_at")
+      .eq("seller_id", seller.id)
+      .not("claimed_at", "is", null)
+      .order("claimed_at", { ascending: false });
+    setPendingGiveys(pending ?? []);
+    setPastGiveys(past ?? []);
+    setGiveyLoading(false);
+  }
+
+  async function verifyGiveyClaim() {
+    if (!verifyInput) {
+      setVerifyError("Enter last 4 digits");
+      return;
+    }
+    setVerifying(true);
+    setVerifyError("");
+    const { error } = await supabase
+      .from("givey_events")
+      .update({ claimed_at: new Date().toISOString() })
+      .eq("seller_id", seller.id)
+      .eq("claim_code_last4", verifyInput)
+      .is("claimed_at", null)
+      .gt("claim_expires_at", new Date().toISOString());
+    if (error) {
+      setVerifyError("Verification failed");
+    } else {
+      setVerifyInput("");
+      loadSellerGiveys();
+    }
+    setVerifying(false);
+  }
 
   const statusColors = {
     pending: "bg-orange-100 text-orange-800 border-orange-200",
@@ -1452,7 +1510,7 @@ export default function SellerOrders() {
   }
 
   // ========================================
-  // VIEW 3: GIVEY VERIFICATION (placeholder)
+  // VIEW 3: GIVEY VERIFICATION
   // ========================================
   if (view === 'giveys') {
     return (
@@ -1471,13 +1529,80 @@ export default function SellerOrders() {
               <p className="text-gray-600 mt-1">{selectedShow?.title} — Givey verification</p>
             </div>
           </div>
-          <Card className="border-0 shadow-lg">
-            <CardContent className="p-8 text-center">
-              <Gift className="w-16 h-16 text-gray-400 mx-auto mb-4" />
-              <h3 className="text-lg font-semibold text-gray-900 mb-2">Givey Verification</h3>
-              <p className="text-gray-600">Coming soon</p>
-            </CardContent>
-          </Card>
+
+          {/* Pending Giveys */}
+          <div>
+            <h2 className="text-xl font-semibold text-gray-900 mb-3">Pending Giveys</h2>
+            {giveyLoading ? (
+              <p className="text-gray-600">Loading...</p>
+            ) : pendingGiveys.length === 0 ? (
+              <p className="text-gray-600">No pending giveys</p>
+            ) : (
+              <div className="space-y-3">
+                {pendingGiveys.map((g) => (
+                  <Card key={g.id} className="border-0 shadow-md">
+                    <CardContent className="p-4">
+                      <div className="space-y-2 text-sm">
+                        <div className="font-semibold text-gray-900">Givey #{g.givey_number}</div>
+                        <div className="text-gray-600">Winner: {g.winner_name || "Winner"}</div>
+                        <div className="text-gray-700">
+                          Last 4 digits: <span className="font-mono">{g.claim_code_last4}</span>
+                        </div>
+                        {g.claim_expires_at && (
+                          <div className="text-gray-600 text-xs">
+                            Expires: {new Date(g.claim_expires_at).toLocaleString()}
+                          </div>
+                        )}
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Verification Input */}
+          <div className="flex flex-col sm:flex-row gap-3 items-start">
+            <Input
+              placeholder="Enter last 4 digits"
+              value={verifyInput}
+              onChange={(e) => setVerifyInput(e.target.value.toUpperCase())}
+              className="max-w-xs"
+            />
+            <Button
+              disabled={verifying}
+              onClick={verifyGiveyClaim}
+            >
+              {verifying ? "Verifying..." : "Verify"}
+            </Button>
+          </div>
+          {verifyError && <p className="text-red-600 text-sm">{verifyError}</p>}
+
+          {/* Past Giveys */}
+          <div>
+            <h2 className="text-xl font-semibold text-gray-900 mb-3">Past Giveys</h2>
+            {pastGiveys.length === 0 ? (
+              <p className="text-gray-600">No past giveys</p>
+            ) : (
+              <div className="space-y-3">
+                {pastGiveys.map((g) => (
+                  <Card key={g.id} className="border-0 shadow-md">
+                    <CardContent className="p-4">
+                      <div className="space-y-2 text-sm">
+                        <div className="font-semibold text-gray-900">Givey #{g.givey_number}</div>
+                        <div className="text-gray-600">Winner: {g.winner_name || "Winner"}</div>
+                        {g.claimed_at && (
+                          <div className="text-gray-600 text-xs">
+                            Claimed: {new Date(g.claimed_at).toLocaleString()}
+                          </div>
+                        )}
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     );
