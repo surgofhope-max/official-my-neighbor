@@ -48,6 +48,7 @@ export default function BuyerOrders() {
   const [sellers, setSellers] = useState([]);
   const [shows, setShows] = useState([]);
   const [giveyWins, setGiveyWins] = useState(0);
+  const [wonGiveys, setWonGiveys] = useState([]);
   const [loading, setLoading] = useState(true);
 
   // Track if initial load is complete
@@ -150,6 +151,20 @@ export default function BuyerOrders() {
     }
   };
 
+  // Load won Giveys for My Giveys panel (winner_user_id, status = winner_selected)
+  const loadWonGiveys = async () => {
+    if (!effectiveUserId) return;
+    const { data, error } = await supabase
+      .from("givey_events")
+      .select("id, givey_number, seller_id, claim_code, claim_expires_at, ended_at")
+      .eq("winner_user_id", effectiveUserId)
+      .eq("status", "winner_selected")
+      .order("ended_at", { ascending: false });
+    if (!error) {
+      setWonGiveys(data ?? []);
+    }
+  };
+
   // Load sellers and shows (reference data)
   const loadReferenceData = async () => {
     try {
@@ -175,11 +190,13 @@ export default function BuyerOrders() {
     loadData();
     loadReferenceData();
     loadGiveyWins();
+    loadWonGiveys();
 
     // Auto-refresh every 5 seconds
     const interval = setInterval(() => {
       loadData();
       loadGiveyWins();
+      loadWonGiveys();
     }, 5000);
 
     return () => clearInterval(interval);
@@ -665,6 +682,48 @@ export default function BuyerOrders() {
             </CardContent>
           </Card>
         </div>
+
+        {/* My Giveys */}
+        <Card className="border-0 shadow-lg mb-6 bg-gradient-to-br from-slate-50 to-blue-100">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-lg font-semibold text-slate-900 flex items-center gap-2">
+              <Trophy className="w-5 h-5 text-slate-700" />
+              My Giveys
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {wonGiveys.length === 0 ? (
+              <p className="text-slate-600 text-sm">No Giveys won yet</p>
+            ) : (
+              <div className="space-y-3">
+                {wonGiveys.map((g) => (
+                  <div
+                    key={g.id}
+                    className="rounded-lg border border-slate-200 bg-white p-3 sm:p-4"
+                  >
+                    <div className="flex flex-col gap-2 text-sm">
+                      <div className="font-semibold text-slate-900">
+                        Givey #{g.givey_number}
+                      </div>
+                      <div className="text-slate-600">
+                        {sellersMap[g.seller_id]?.business_name ?? "Seller"}
+                      </div>
+                      <div className="text-slate-700">
+                        <span className="text-slate-500">Claim code:</span>{" "}
+                        <span className="font-mono font-semibold">{g.claim_code ?? "—"}</span>
+                      </div>
+                      {g.claim_expires_at && (
+                        <div className="text-slate-600 text-xs">
+                          Expires: {format(new Date(g.claim_expires_at), "MMM d, yyyy h:mm a")}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
         {/* Batched Orders - ENHANCED GIVI VISIBILITY */}
         {batches.length === 0 ? (
