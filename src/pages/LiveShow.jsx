@@ -400,14 +400,15 @@ export default function LiveShow() {
 
   useEffect(() => {
     if (!show?.id) return;
-    if (!activeGivey) return;
     if (activeGivey?.ends_at && new Date(activeGivey.ends_at).getTime() <= Date.now()) {
       setActiveGivey(null);
-      return;
     }
-    const interval = setInterval(() => syncActiveGiveyFromDb(), 5000);
+    const interval = setInterval(() => {
+      syncLatestGiveyFromDb();
+      syncActiveGiveyFromDb();
+    }, 5000);
     return () => clearInterval(interval);
-  }, [show?.id, activeGivey?.id, activeGivey?.ends_at, syncActiveGiveyFromDb]);
+  }, [show?.id, activeGivey?.ends_at, syncActiveGiveyFromDb, syncLatestGiveyFromDb]);
 
   useEffect(() => {
     setGiveyEntryStatus(null);
@@ -435,7 +436,17 @@ export default function LiveShow() {
           syncLatestGiveyFromDb();
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        console.log("📡 BUYER GIVEY CHANNEL STATUS:", status);
+        if (status === "SUBSCRIBED") {
+          syncActiveGiveyFromDb();
+          syncLatestGiveyFromDb();
+        }
+        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+          console.warn("⚠️ BUYER GIVEY REALTIME NOT ACTIVE:", status);
+          syncLatestGiveyFromDb();
+        }
+      });
 
     return () => {
       supabase.removeChannel(channel);
