@@ -1112,14 +1112,27 @@ export default function LiveShow() {
     );
 
   const GiveyEntryBanner = activeGivey && (
-    <div className="fixed left-1/2 -translate-x-1/2 bottom-24 z-[9999] w-[90%] max-w-md">
-      <div style={{
-        padding: "12px",
-        border: "2px solid purple",
-        borderRadius: "8px",
-        marginBottom: "12px",
-        background: "#f3e8ff"
-      }}>
+    <div
+      style={{
+        position: "absolute",
+        top: "20px",
+        left: "50%",
+        transform: "translateX(-50%)",
+        zIndex: 50,
+        width: "90%",
+        maxWidth: "28rem",
+      }}
+    >
+      <div
+        style={{
+          background: "rgba(0, 0, 0, 0.35)",
+          backdropFilter: "blur(6px)",
+          color: "white",
+          fontWeight: "bold",
+          padding: "10px 18px",
+          borderRadius: "10px",
+        }}
+      >
         <div style={{ fontWeight: "bold" }}>
           Givey #{activeGivey.givey_number} is live
         </div>
