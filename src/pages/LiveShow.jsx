@@ -399,18 +399,6 @@ export default function LiveShow() {
   }, [show?.id, syncActiveGiveyFromDb, syncLatestGiveyFromDb]);
 
   useEffect(() => {
-    if (!show?.id) return;
-    if (activeGivey?.ends_at && new Date(activeGivey.ends_at).getTime() <= Date.now()) {
-      setActiveGivey(null);
-    }
-    const interval = setInterval(() => {
-      syncLatestGiveyFromDb();
-      syncActiveGiveyFromDb();
-    }, 5000);
-    return () => clearInterval(interval);
-  }, [show?.id, activeGivey?.ends_at, syncActiveGiveyFromDb, syncLatestGiveyFromDb]);
-
-  useEffect(() => {
     setGiveyEntryStatus(null);
   }, [activeGivey?.id]);
 
@@ -429,11 +417,18 @@ export default function LiveShow() {
         },
         (payload) => {
           console.log("BUYER GIVEY REALTIME PAYLOAD:", payload);
-          if (payload.new && payload.new.status !== "active") {
+          if (!payload.new) return;
+          const status = payload.new.status;
+          if (status === "active") {
+            setActiveGivey(payload.new);
+          } else if (status === "winner_selected") {
             setActiveGivey(null);
+            setLatestGivey(payload.new);
+            setWinnerDisplayName(payload.new.winner_name ?? "Winner");
+          } else if (status === "expired") {
+            setActiveGivey(null);
+            setLatestGivey(payload.new);
           }
-          syncActiveGiveyFromDb();
-          syncLatestGiveyFromDb();
         }
       )
       .subscribe((status) => {
