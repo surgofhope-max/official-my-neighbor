@@ -4,14 +4,14 @@
  * Selects givey_events with status='active' and ends_at <= now(),
  * then calls finalize_givey_event RPC for each.
  *
- * Intended to be invoked by pg_cron every 5 seconds.
+ * Runs as a continuous worker loop: processes every ~1 second.
  * Uses service role to bypass RLS.
  */
 
 import { serve } from "https://deno.land/std/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-serve(async () => {
+async function processExpiredGiveys() {
   const supabase = createClient(
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
@@ -30,25 +30,12 @@ serve(async () => {
 
   if (fetchError) {
     console.error("Failed to fetch expired giveys", fetchError);
-    return new Response(
-      JSON.stringify({
-        processed: 0,
-        attempted: 0,
-        errors: [fetchError.message],
-      }),
-      { status: 500, headers: { "Content-Type": "application/json" } }
-    );
+    return;
   }
 
   if (!expiredGiveys || expiredGiveys.length === 0) {
-    return new Response(
-      JSON.stringify({ processed: 0, attempted: 0, errors: [] }),
-      { status: 200, headers: { "Content-Type": "application/json" } }
-    );
+    return;
   }
-
-  const errors: string[] = [];
-  let processed = 0;
 
   for (const row of expiredGiveys) {
     try {
@@ -56,21 +43,17 @@ serve(async () => {
         p_givey_event_id: row.id,
       });
       if (error) {
-        errors.push(`${row.id}: ${error.message}`);
-      } else {
-        processed++;
+        console.error(`${row.id}: ${error.message}`);
       }
     } catch (e) {
-      errors.push(`${row.id}: ${e instanceof Error ? e.message : String(e)}`);
+      console.error(`${row.id}: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
+}
 
-  return new Response(
-    JSON.stringify({
-      processed,
-      attempted: expiredGiveys.length,
-      errors,
-    }),
-    { status: 200, headers: { "Content-Type": "application/json" } }
-  );
+serve(async () => {
+  while (true) {
+    await processExpiredGiveys();
+    await new Promise((r) => setTimeout(r, 1000));
+  }
 });
