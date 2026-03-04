@@ -815,6 +815,11 @@ export default function SellerOrders() {
                 </p>
               </CardContent>
             </Card>
+            <Button
+              onClick={() => setView('giveys')}
+            >
+              Verify Giveys
+            </Button>
           </div>
 
           {/* Active Shows (Pending > 0) */}
@@ -1206,12 +1211,6 @@ export default function SellerOrders() {
               <h1 className="text-3xl font-bold text-gray-900">{selectedShow.title}</h1>
               <p className="text-gray-600 mt-1">Buyer batches from this show</p>
             </div>
-            <Button
-              className="ml-auto"
-              onClick={() => setView('giveys')}
-            >
-              Verify Giveys
-            </Button>
           </div>
 
           <div className="relative max-w-md">
