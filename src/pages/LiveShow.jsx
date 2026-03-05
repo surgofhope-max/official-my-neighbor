@@ -102,6 +102,7 @@ export default function LiveShow() {
   const [latestGivey, setLatestGivey] = useState(null);
   const [winnerDisplayName, setWinnerDisplayName] = useState(null);
   const hasTriggeredFinalizeRef = useRef(null);
+  const finalizeInFlightRef = useRef(false);
   const carouselRef = useRef(null);
   const lastSalesCountRef = useRef(null);
 
@@ -481,22 +482,35 @@ export default function LiveShow() {
 
       if (now >= endsAt) {
         if (hasTriggeredFinalizeRef.current === activeGivey.id) return;
-
-        hasTriggeredFinalizeRef.current = activeGivey.id;
+        if (finalizeInFlightRef.current) return;
 
         try {
+          finalizeInFlightRef.current = true;
           console.log("SELLER TRIGGERING FINALIZE:", activeGivey.id);
 
-          const { error } = await supabase.rpc(
+          const { data, error } = await supabase.rpc(
             "finalize_givey_event",
             { p_givey_event_id: activeGivey.id }
           );
 
           if (error) {
             console.error("FINALIZE ERROR:", error);
+            return;
+          }
+          if (data == null) {
+            console.warn("FINALIZE: no data returned");
+            return;
+          }
+          if (data.status === "winner_selected" || data.status === "expired") {
+            hasTriggeredFinalizeRef.current = activeGivey.id;
+            console.log("FINALIZE CONFIRMED:", data.status);
+          } else {
+            console.log("FINALIZE NOT YET CONFIRMED:", data.status);
           }
         } catch (err) {
           console.error("FINALIZE EXCEPTION:", err);
+        } finally {
+          finalizeInFlightRef.current = false;
         }
       }
     };
