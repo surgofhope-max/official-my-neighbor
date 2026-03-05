@@ -462,7 +462,18 @@ export default function HostConsole() {
         },
         (payload) => {
           console.log("🔥 GIVEY REALTIME UPDATE RECEIVED:", payload);
-          syncActiveGiveyFromDb();
+
+          if (!payload.new) return;
+
+          const status = payload.new.status;
+
+          if (status === "active") {
+            setActiveGivey(payload.new);
+          }
+
+          if (status === "winner_selected" || status === "expired") {
+            setActiveGivey(null);
+          }
         }
       )
       .subscribe((status) => {
