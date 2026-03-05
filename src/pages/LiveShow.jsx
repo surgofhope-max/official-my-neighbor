@@ -103,6 +103,8 @@ export default function LiveShow() {
   const [winnerDisplayName, setWinnerDisplayName] = useState(null);
   const hasTriggeredFinalizeRef = useRef(null);
   const finalizeInFlightRef = useRef(false);
+  const giveyChannelStatusRef = useRef("INIT");
+  const giveyLastPayloadAtRef = useRef(0);
   const carouselRef = useRef(null);
   const lastSalesCountRef = useRef(null);
 
@@ -417,6 +419,7 @@ export default function LiveShow() {
           filter: `show_id=eq.${show.id}`,
         },
         (payload) => {
+          giveyLastPayloadAtRef.current = Date.now();
           console.log("BUYER GIVEY REALTIME PAYLOAD:", payload);
           if (!payload.new) return;
           const status = payload.new.status;
@@ -433,7 +436,8 @@ export default function LiveShow() {
         }
       )
       .subscribe((status) => {
-        console.log("📡 BUYER GIVEY CHANNEL STATUS:", status);
+        giveyChannelStatusRef.current = status;
+        console.log("📡 BUYER GIVEY CHANNEL STATUS:", show.id, status);
         if (status === "SUBSCRIBED") {
           syncActiveGiveyFromDb();
           syncLatestGiveyFromDb();
@@ -448,6 +452,26 @@ export default function LiveShow() {
       supabase.removeChannel(channel);
     };
   }, [show?.id, syncActiveGiveyFromDb, syncLatestGiveyFromDb]);
+
+  useEffect(() => {
+    if (!show?.id) return;
+
+    const interval = setInterval(async () => {
+      if (giveyChannelStatusRef.current !== "SUBSCRIBED") return;
+      if (!activeGivey) return;
+      if (Date.now() - giveyLastPayloadAtRef.current <= 8000) return;
+
+      console.warn("[GIVEY] realtime stale >8s, reconciling from DB", {
+        showId: show.id,
+        lastPayloadMsAgo: Date.now() - giveyLastPayloadAtRef.current,
+      });
+      await syncActiveGiveyFromDb();
+      await syncLatestGiveyFromDb();
+      giveyLastPayloadAtRef.current = Date.now();
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [show?.id, activeGivey, syncActiveGiveyFromDb, syncLatestGiveyFromDb]);
 
   useEffect(() => {
     if (!activeGivey?.ends_at) {

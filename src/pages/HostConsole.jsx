@@ -115,6 +115,8 @@ export default function HostConsole() {
   const [startingGivey, setStartingGivey] = useState(false);
   const hostOverlayPanelRef = useRef(null);
   const hostChatRef = useRef(null);
+  const giveyChannelStatusRef = useRef("INIT");
+  const giveyLastPayloadAtRef = useRef(0);
 
   // ═══════════════════════════════════════════════════════════════════════════
   // DEVICE-LOCKED CLASSIFICATION (NO VIEWPORT FLIPS)
@@ -461,6 +463,7 @@ export default function HostConsole() {
           filter: `show_id=eq.${show.id}`,
         },
         (payload) => {
+          giveyLastPayloadAtRef.current = Date.now();
           console.log("🔥 GIVEY REALTIME UPDATE RECEIVED:", payload);
 
           if (!payload.new) return;
@@ -477,7 +480,8 @@ export default function HostConsole() {
         }
       )
       .subscribe((status) => {
-        console.log("📡 GIVEY CHANNEL STATUS:", status);
+        giveyChannelStatusRef.current = status;
+        console.log("📡 GIVEY CHANNEL STATUS:", show.id, status);
       });
 
     return () => {
@@ -485,6 +489,25 @@ export default function HostConsole() {
       supabase.removeChannel(channel);
     };
   }, [show?.id, syncActiveGiveyFromDb]);
+
+  useEffect(() => {
+    if (!show?.id) return;
+
+    const interval = setInterval(async () => {
+      if (giveyChannelStatusRef.current !== "SUBSCRIBED") return;
+      if (!activeGivey) return;
+      if (Date.now() - giveyLastPayloadAtRef.current <= 8000) return;
+
+      console.warn("[GIVEY] realtime stale >8s, reconciling from DB", {
+        showId: show.id,
+        lastPayloadMsAgo: Date.now() - giveyLastPayloadAtRef.current,
+      });
+      await syncActiveGiveyFromDb();
+      giveyLastPayloadAtRef.current = Date.now();
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [show?.id, activeGivey, syncActiveGiveyFromDb]);
 
   const hasTriggeredFinalizeRef = useRef(null);
 
