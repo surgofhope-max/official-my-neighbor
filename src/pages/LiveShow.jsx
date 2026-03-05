@@ -101,8 +101,9 @@ export default function LiveShow() {
   const [giveyTimeLeft, setGiveyTimeLeft] = useState(null);
   const [latestGivey, setLatestGivey] = useState(null);
   const [winnerDisplayName, setWinnerDisplayName] = useState(null);
-  const hasTriggeredFinalizeRef = useRef(null);
-  const finalizeInFlightRef = useRef(false);
+  // Givey expiration is server-authoritative.
+  // Finalization is handled by the cron → finalize-expired-giveys edge function.
+  // Clients must never trigger finalize_givey_event.
   const giveyChannelStatusRef = useRef("INIT");
   const giveyLastPayloadAtRef = useRef(0);
   const carouselRef = useRef(null);
@@ -488,62 +489,6 @@ export default function LiveShow() {
 
     return () => clearInterval(interval);
   }, [activeGivey]);
-
-  useEffect(() => {
-    console.log("DEBUG FINALIZE EFFECT RUNNING", {
-      isShowOwner,
-      activeGiveyId: activeGivey?.id,
-      endsAt: activeGivey?.ends_at
-    });
-
-    if (!activeGivey) return;
-    if (!isShowOwner) return;
-    if (!activeGivey.ends_at) return;
-
-    const checkExpiration = async () => {
-      const now = Date.now();
-      const endsAt = new Date(activeGivey.ends_at).getTime();
-
-      if (now >= endsAt) {
-        if (hasTriggeredFinalizeRef.current === activeGivey.id) return;
-        if (finalizeInFlightRef.current) return;
-
-        try {
-          finalizeInFlightRef.current = true;
-          console.log("SELLER TRIGGERING FINALIZE:", activeGivey.id);
-
-          const { data, error } = await supabase.rpc(
-            "finalize_givey_event",
-            { p_givey_event_id: activeGivey.id }
-          );
-
-          if (error) {
-            console.error("FINALIZE ERROR:", error);
-            return;
-          }
-          if (data == null) {
-            console.warn("FINALIZE: no data returned");
-            return;
-          }
-          if (data.status === "winner_selected" || data.status === "expired") {
-            hasTriggeredFinalizeRef.current = activeGivey.id;
-            console.log("FINALIZE CONFIRMED:", data.status);
-          } else {
-            console.log("FINALIZE NOT YET CONFIRMED:", data.status);
-          }
-        } catch (err) {
-          console.error("FINALIZE EXCEPTION:", err);
-        } finally {
-          finalizeInFlightRef.current = false;
-        }
-      }
-    };
-
-    const interval = setInterval(checkExpiration, 1000);
-
-    return () => clearInterval(interval);
-
-  }, [activeGivey, isShowOwner]);
 
   async function handleEnterGivey() {
     if (!show?.id || !activeGivey?.id) return;

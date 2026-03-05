@@ -509,43 +509,9 @@ export default function HostConsole() {
     return () => clearInterval(interval);
   }, [show?.id, activeGivey, syncActiveGiveyFromDb]);
 
-  const hasTriggeredFinalizeRef = useRef(null);
-
-  useEffect(() => {
-    if (!activeGivey) return;
-    if (!activeGivey.ends_at) return;
-
-    const checkExpiration = async () => {
-      const now = Date.now();
-      const endsAt = new Date(activeGivey.ends_at).getTime();
-
-      if (now >= endsAt) {
-        if (hasTriggeredFinalizeRef.current === activeGivey.id) return;
-
-        hasTriggeredFinalizeRef.current = activeGivey.id;
-
-        try {
-          console.log("🏆 HOST TRIGGERING FINALIZE:", activeGivey.id);
-
-          const { error } = await supabase.rpc(
-            "finalize_givey_event",
-            { p_givey_event_id: activeGivey.id }
-          );
-
-          if (error) {
-            console.error("FINALIZE ERROR:", error);
-          }
-        } catch (err) {
-          console.error("FINALIZE EXCEPTION:", err);
-        }
-      }
-    };
-
-    const interval = setInterval(checkExpiration, 1000);
-
-    return () => clearInterval(interval);
-
-  }, [activeGivey]);
+  // Givey expiration is server-authoritative.
+  // Finalization is handled by the cron → finalize-expired-giveys edge function.
+  // Clients must never trigger finalize_givey_event.
 
   const { data: showSeller, isLoading: sellerLoading } = useQuery({
     queryKey: ['show-seller', show?.seller_id],
