@@ -413,20 +413,10 @@ export default function HostConsole() {
     loadNextGiveyNumber();
   }, [show?.id]);
 
-  // Initial sync + polling when active givey exists
   useEffect(() => {
     if (!show?.id) return;
-
     syncActiveGiveyFromDb();
-
-    if (!activeGivey) return;
-
-    const interval = setInterval(() => {
-      syncActiveGiveyFromDb();
-    }, 5000);
-
-    return () => clearInterval(interval);
-  }, [show?.id, activeGivey, syncActiveGiveyFromDb]);
+  }, [show?.id, syncActiveGiveyFromDb]);
 
   // TEMPORARY: Audit auth.uid() vs expected seller owner (remove after verification)
   useEffect(() => {
