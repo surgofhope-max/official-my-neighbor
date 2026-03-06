@@ -512,6 +512,12 @@ export default function HostConsole() {
   useEffect(() => {
     if (!activeGivey?.id || !activeGivey?.ends_at) return;
 
+    console.log("[GIVEY WATCHER STARTED]", {
+      giveyId: activeGivey?.id,
+      endsAt: activeGivey?.ends_at,
+      now: new Date().toISOString()
+    });
+
     const giveyId = activeGivey.id;
     const endTime = new Date(activeGivey.ends_at).getTime();
 
