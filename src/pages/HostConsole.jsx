@@ -607,7 +607,6 @@ export default function HostConsole() {
     if (!error && data) {
       setActiveGivey(data);
       setNextGiveyNumber(data.givey_number + 1);
-      syncActiveGiveyFromDb();
     }
 
     setStartingGivey(false);
