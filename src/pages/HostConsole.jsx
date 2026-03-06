@@ -510,18 +510,20 @@ export default function HostConsole() {
   }, [show?.id, activeGivey, syncActiveGiveyFromDb]);
 
   useEffect(() => {
-    if (!activeGivey?.ends_at) return;
+    if (!activeGivey?.id || !activeGivey?.ends_at) return;
+
+    const giveyId = activeGivey.id;
+    const endTime = new Date(activeGivey.ends_at).getTime();
 
     const interval = setInterval(async () => {
       const now = Date.now();
-      const end = new Date(activeGivey.ends_at).getTime();
 
-      if (now >= end) {
-        console.log("[GIVEY] Host finalizing givey:", activeGivey.id);
+      if (now >= endTime) {
+        console.log("[GIVEY] Host finalizing givey:", giveyId);
 
         try {
           await supabase.rpc("finalize_givey_event", {
-            p_givey_event_id: activeGivey.id
+            p_givey_event_id: giveyId
           });
         } catch (err) {
           console.error("[GIVEY] finalize_givey_event failed:", err);
@@ -529,10 +531,10 @@ export default function HostConsole() {
 
         clearInterval(interval);
       }
-    }, 1000);
+    }, 500);
 
     return () => clearInterval(interval);
-  }, [activeGivey]);
+  }, [activeGivey?.id, activeGivey?.ends_at]);
 
   // Givey expiration is server-authoritative.
   // Finalization is handled by the cron → finalize-expired-giveys edge function.
