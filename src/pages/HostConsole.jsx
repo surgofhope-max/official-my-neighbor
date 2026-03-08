@@ -479,7 +479,6 @@ export default function HostConsole() {
 
           if (status === "winner_selected" || status === "expired") {
             setActiveGivey(null);
-            giveyLifecycleRef.current = null;
           }
         }
       )
