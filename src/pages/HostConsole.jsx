@@ -117,7 +117,6 @@ export default function HostConsole() {
   const hostChatRef = useRef(null);
   const giveyChannelStatusRef = useRef("INIT");
   const giveyLastPayloadAtRef = useRef(0);
-  const giveyLifecycleRef = useRef(null);
 
   // ═══════════════════════════════════════════════════════════════════════════
   // DEVICE-LOCKED CLASSIFICATION (NO VIEWPORT FLIPS)
@@ -392,6 +391,11 @@ export default function HostConsole() {
       .maybeSingle();
 
     if (error) {
+      console.log("[GIVEY AUDIT][SYNC_ACTIVE_ERROR_CLEAR]", {
+        time: new Date().toISOString(),
+        showId: show?.id,
+        errorMessage: error?.message,
+      });
       console.warn("🧭 GIVEY SYNC FROM DB error:", {
         message: error?.message,
         code: error?.code,
@@ -404,9 +408,19 @@ export default function HostConsole() {
     }
 
     if (row) {
+      console.log("[GIVEY AUDIT][SYNC_ACTIVE_FOUND]", {
+        time: new Date().toISOString(),
+        giveyId: row?.id,
+        endsAt: row?.ends_at,
+        status: row?.status,
+      });
       setActiveGivey(row);
       console.log("🧭 GIVEY SYNC FROM DB: active givey", row.id);
     } else {
+      console.log("[GIVEY AUDIT][SYNC_ACTIVE_MISSING_CLEAR]", {
+        time: new Date().toISOString(),
+        showId: show?.id,
+      });
       setActiveGivey(null);
       console.log("🧭 GIVEY SYNC FROM DB: no active givey");
     }
@@ -418,13 +432,6 @@ export default function HostConsole() {
     if (!show?.id) return;
     syncActiveGiveyFromDb();
   }, [show?.id, syncActiveGiveyFromDb]);
-
-  // Sync lifecycle ref from activeGivey (handles syncActiveGiveyFromDb on load; never clears ref)
-  useEffect(() => {
-    if (activeGivey?.id && activeGivey?.ends_at) {
-      giveyLifecycleRef.current = { id: activeGivey.id, endsAt: activeGivey.ends_at };
-    }
-  }, [activeGivey?.id, activeGivey?.ends_at]);
 
   // TEMPORARY: Audit auth.uid() vs expected seller owner (remove after verification)
   useEffect(() => {
@@ -470,11 +477,6 @@ export default function HostConsole() {
 
           if (status === "active") {
             setActiveGivey(payload.new);
-            giveyLifecycleRef.current = {
-              id: payload.new?.id,
-              endsAt: payload.new?.ends_at
-            };
-            console.log("[GIVEY LIFECYCLE START]", { id: payload.new?.id, endsAt: payload.new?.ends_at });
           }
 
           if (status === "winner_selected" || status === "expired") {
@@ -501,9 +503,10 @@ export default function HostConsole() {
       if (!activeGivey) return;
       if (Date.now() - giveyLastPayloadAtRef.current <= 8000) return;
 
+      const lastPayloadMsAgo = Date.now() - giveyLastPayloadAtRef.current;
       console.warn("[GIVEY] realtime stale >8s, reconciling from DB", {
         showId: show.id,
-        lastPayloadMsAgo: Date.now() - giveyLastPayloadAtRef.current,
+        lastPayloadMsAgo,
       });
       await syncActiveGiveyFromDb();
       giveyLastPayloadAtRef.current = Date.now();
@@ -511,36 +514,6 @@ export default function HostConsole() {
 
     return () => clearInterval(interval);
   }, [show?.id, activeGivey, syncActiveGiveyFromDb]);
-
-  useEffect(() => {
-    if (!show?.id) return;
-
-    const interval = setInterval(async () => {
-      if (!giveyLifecycleRef.current) return;
-
-      const { id: giveyId, endsAt } = giveyLifecycleRef.current;
-      if (!giveyId || !endsAt) return;
-
-      const endTime = new Date(endsAt).getTime();
-      const now = Date.now();
-
-      if (now >= endTime) {
-        console.log("[GIVEY FINALIZED BY HOST]", { giveyId });
-
-        try {
-          await supabase.rpc("finalize_givey_event", {
-            p_givey_event_id: giveyId
-          });
-          giveyLifecycleRef.current = null;
-        } catch (err) {
-          console.error("[GIVEY] finalize_givey_event failed:", err);
-        }
-      }
-    }, 500);
-
-    console.log("[GIVEY WATCHER ACTIVE]", { showId: show?.id });
-    return () => clearInterval(interval);
-  }, [show?.id]);
 
   // Givey expiration is server-authoritative.
   // Finalization is handled by the cron → finalize-expired-giveys edge function.
@@ -605,12 +578,13 @@ export default function HostConsole() {
     }
 
     if (!error && data) {
+      console.log("[GIVEY AUDIT][START_RPC_SUCCESS]", {
+        time: new Date().toISOString(),
+        giveyId: data?.id,
+        endsAt: data?.ends_at,
+        showId: show?.id,
+      });
       setActiveGivey(data);
-      giveyLifecycleRef.current = {
-        id: data?.id,
-        endsAt: data?.ends_at
-      };
-      console.log("[GIVEY LIFECYCLE START]", { id: data?.id, endsAt: data?.ends_at });
       setNextGiveyNumber(data.givey_number + 1);
     }
 
