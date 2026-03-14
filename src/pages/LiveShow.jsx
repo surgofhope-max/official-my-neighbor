@@ -431,9 +431,18 @@ export default function LiveShow() {
 
             setActiveGivey(payload.new);
           } else if (status === "winner_selected") {
+            // Ignore stale winner events if a new givey is already active
+            if (activeGivey && payload.new?.id !== activeGivey?.id) {
+              console.log("[GIVEY GUARD] Ignoring stale winner event", {
+                winnerGiveyId: payload.new?.id,
+                activeGiveyId: activeGivey?.id
+              });
+              return;
+            }
+
             setActiveGivey(null);
             setLatestGivey(payload.new);
-            setWinnerDisplayName(payload.new.winner_name ?? "Winner");
+            setWinnerDisplayName(payload.new.winner_name ?? null);
           } else if (status === "expired") {
             setActiveGivey(null);
             setLatestGivey(payload.new);
