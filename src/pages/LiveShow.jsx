@@ -101,6 +101,7 @@ export default function LiveShow() {
   const [giveyTimeLeft, setGiveyTimeLeft] = useState(null);
   const [latestGivey, setLatestGivey] = useState(null);
   const [winnerDisplayName, setWinnerDisplayName] = useState(null);
+  const [showGiveyWinnerBanner, setShowGiveyWinnerBanner] = useState(false);
   // Givey expiration is server-authoritative.
   // Finalization is handled by the cron → finalize-expired-giveys edge function.
   // Clients must never trigger finalize_givey_event.
@@ -442,7 +443,17 @@ export default function LiveShow() {
 
             setActiveGivey(null);
             setLatestGivey(payload.new);
-            setWinnerDisplayName(payload.new.winner_name ?? null);
+
+            const name = payload.new?.winner_name ?? null;
+            setWinnerDisplayName(name);
+
+            if (name) {
+              setShowGiveyWinnerBanner(true);
+
+              setTimeout(() => {
+                setShowGiveyWinnerBanner(false);
+              }, 3000);
+            }
           } else if (status === "expired") {
             setActiveGivey(null);
             setLatestGivey(payload.new);
@@ -1101,7 +1112,7 @@ export default function LiveShow() {
   if (isLoadingAuth) return authLoadingUI;
 
   const WinnerBanner =
-    latestGivey?.status === "winner_selected" && winnerDisplayName && (
+    showGiveyWinnerBanner && winnerDisplayName && (
       <div className="fixed top-24 left-1/2 -translate-x-1/2 z-[9999] bg-green-600 text-white px-6 py-3 rounded-xl shadow-lg">
         Winner: {winnerDisplayName}
       </div>
