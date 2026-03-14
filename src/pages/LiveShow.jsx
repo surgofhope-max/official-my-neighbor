@@ -425,6 +425,10 @@ export default function LiveShow() {
           if (!payload.new) return;
           const status = payload.new.status;
           if (status === "active") {
+            // New givey starting — clear previous winner state
+            setLatestGivey(null);
+            setWinnerDisplayName(null);
+
             setActiveGivey(payload.new);
           } else if (status === "winner_selected") {
             setActiveGivey(null);
