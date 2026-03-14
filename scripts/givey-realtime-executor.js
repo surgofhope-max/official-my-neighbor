@@ -28,6 +28,11 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
 const timers = new Map();
 
 function scheduleTimer(id, endsAt) {
+  console.log("[GIVEY EXECUTOR] scheduleTimer called", {
+    eventId: id,
+    endsAtIso: endsAt
+  });
+
   if (timers.has(id)) {
     return;
   }
@@ -36,13 +41,30 @@ function scheduleTimer(id, endsAt) {
   const nowMs = Date.now();
   const delayMs = Math.max(0, endsAtMs - nowMs);
 
+  console.log("[GIVEY EXECUTOR] timer calculation", {
+    eventId: id,
+    now: Date.now(),
+    endsAtMs,
+    delayMs
+  });
+
   const timeoutId = setTimeout(async () => {
     timers.delete(id);
-    console.log("[GIVEY EXECUTOR] finalize attempted", { id });
+    console.log("[GIVEY EXECUTOR] timer firing", {
+      eventId: id,
+      timestamp: new Date().toISOString()
+    });
 
     try {
-      const { error } = await supabase.rpc("finalize_givey_event", {
+      const { data, error } = await supabase.rpc("finalize_givey_event", {
         p_givey_event_id: id,
+      });
+
+      console.log("[GIVEY EXECUTOR] finalize result", {
+        eventId: id,
+        data,
+        error,
+        timestamp: new Date().toISOString()
       });
 
       if (error) {
@@ -52,6 +74,12 @@ function scheduleTimer(id, endsAt) {
 
       console.log("[GIVEY EXECUTOR] finalize resolved", { id });
     } catch (err) {
+      console.log("[GIVEY EXECUTOR] finalize result", {
+        eventId: id,
+        data: undefined,
+        error: err?.message ?? String(err),
+        timestamp: new Date().toISOString()
+      });
       console.log("[GIVEY EXECUTOR] finalize error", {
         id,
         error: err?.message ?? String(err),
@@ -64,6 +92,11 @@ function scheduleTimer(id, endsAt) {
 }
 
 function clearTimer(id) {
+  console.log("[GIVEY EXECUTOR] clearTimer called", {
+    eventId: id,
+    existed: timers.has(id)
+  });
+
   const entry = timers.get(id);
   if (entry) {
     clearTimeout(entry.timeoutId);
@@ -73,6 +106,8 @@ function clearTimer(id) {
 }
 
 async function loadActiveGiveys() {
+  console.log("[GIVEY EXECUTOR] loadActiveGiveys starting");
+
   const { data, error } = await supabase
     .from("givey_events")
     .select("id, ends_at")
@@ -84,10 +119,14 @@ async function loadActiveGiveys() {
   }
 
   const rows = data ?? [];
-  console.log("[GIVEY EXECUTOR] active giveys loaded", { count: rows.length });
+  console.log("[GIVEY EXECUTOR] loadActiveGiveys result", {
+    count: rows?.length ?? 0,
+    rows
+  });
 
   for (const row of rows) {
     if (row.id && row.ends_at) {
+      console.log("[GIVEY EXECUTOR] scheduling existing active givey", row);
       scheduleTimer(row.id, row.ends_at);
     }
   }
@@ -104,6 +143,12 @@ function startRealtimeSubscription() {
         table: "givey_events",
       },
       (payload) => {
+        console.log("[GIVEY EXECUTOR] INSERT payload received", payload);
+        console.log("[GIVEY EXECUTOR] INSERT guard evaluation", {
+          status: payload?.new?.status,
+          id: payload?.new?.id,
+          ends_at: payload?.new?.ends_at
+        });
         const row = payload.new;
         if (row?.status === "active" && row?.id && row?.ends_at) {
           scheduleTimer(row.id, row.ends_at);
@@ -132,7 +177,10 @@ function startRealtimeSubscription() {
       }
     )
     .subscribe((status) => {
-      console.log("[GIVEY EXECUTOR] realtime status", status);
+      console.log("[GIVEY EXECUTOR] realtime subscription status", {
+        status,
+        timestamp: new Date().toISOString()
+      });
     });
 
   return channel;
