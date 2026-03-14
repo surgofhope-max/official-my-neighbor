@@ -429,6 +429,7 @@ export default function LiveShow() {
             // New givey starting — clear previous winner state
             setLatestGivey(null);
             setWinnerDisplayName(null);
+            setShowGiveyWinnerBanner(false);
 
             setActiveGivey(payload.new);
           } else if (status === "winner_selected") {
@@ -1172,8 +1173,8 @@ export default function LiveShow() {
       <GiviTracker type="show" id={showId} />
 
       {/* GIVI Winner Banner - Gated by feature flag */}
-      {FEATURES.givi && (
-        <GIVIWinnerBanner 
+      {FEATURES.givi && !showGiveyWinnerBanner && (
+        <GIVIWinnerBanner
           show={showWinnerBanner}
           winnerName={activeGIVI?.winner_names?.[0]}
           onDismiss={() => setShowWinnerBanner(false)}
