@@ -1113,7 +1113,7 @@ export default function LiveShow() {
   if (isLoadingAuth) return authLoadingUI;
 
   const WinnerBanner =
-    showGiveyWinnerBanner && winnerDisplayName && (
+    !activeGivey && showGiveyWinnerBanner && winnerDisplayName && (
       <div className="fixed top-24 left-1/2 -translate-x-1/2 z-[9999] bg-green-600 text-white px-6 py-3 rounded-xl shadow-lg">
         Winner: {winnerDisplayName}
       </div>
