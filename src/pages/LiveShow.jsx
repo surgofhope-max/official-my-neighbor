@@ -105,6 +105,7 @@ export default function LiveShow() {
   // Givey expiration is server-authoritative.
   // Finalization is handled by the cron → finalize-expired-giveys edge function.
   // Clients must never trigger finalize_givey_event.
+  const activeGiveyRef = useRef(null);
   const giveyChannelStatusRef = useRef("INIT");
   const giveyLastPayloadAtRef = useRef(0);
   const carouselRef = useRef(null);
@@ -408,6 +409,10 @@ export default function LiveShow() {
   }, [activeGivey?.id]);
 
   useEffect(() => {
+    activeGiveyRef.current = activeGivey;
+  }, [activeGivey]);
+
+  useEffect(() => {
     if (!show?.id) return;
 
     const channel = supabase
@@ -434,10 +439,11 @@ export default function LiveShow() {
             setActiveGivey(payload.new);
           } else if (status === "winner_selected") {
             // Ignore stale winner events if a new givey is already active
-            if (activeGivey && payload.new?.id !== activeGivey?.id) {
+            const currentActiveGivey = activeGiveyRef.current;
+            if (currentActiveGivey && payload.new?.id !== currentActiveGivey?.id) {
               console.log("[GIVEY GUARD] Ignoring stale winner event", {
                 winnerGiveyId: payload.new?.id,
-                activeGiveyId: activeGivey?.id
+                activeGiveyId: currentActiveGivey?.id
               });
               return;
             }
