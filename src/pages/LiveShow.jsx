@@ -480,7 +480,10 @@ export default function LiveShow() {
         }
         if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
           console.warn("⚠️ BUYER GIVEY REALTIME NOT ACTIVE:", status);
-          syncLatestGiveyFromDb();
+          (async () => {
+            await syncActiveGiveyFromDb();
+            await syncLatestGiveyFromDb();
+          })();
         }
       });
 
@@ -494,7 +497,8 @@ export default function LiveShow() {
 
     const interval = setInterval(async () => {
       if (giveyChannelStatusRef.current !== "SUBSCRIBED") return;
-      if (!activeGivey) return;
+      const hasStaleWinnerUi = !!winnerDisplayName || showGiveyWinnerBanner;
+      if (!activeGivey && !hasStaleWinnerUi) return;
       if (Date.now() - giveyLastPayloadAtRef.current <= 8000) return;
 
       console.warn("[GIVEY] realtime stale >8s, reconciling from DB", {
