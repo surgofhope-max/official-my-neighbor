@@ -395,6 +395,10 @@ export default function LiveShow() {
         .maybeSingle();
 
       setWinnerDisplayName(userData?.display_name ?? "Winner");
+    } else {
+      // CRITICAL FIX — clear stale winner state
+      setWinnerDisplayName(null);
+      setShowGiveyWinnerBanner(false);
     }
   }, [show?.id]);
 
