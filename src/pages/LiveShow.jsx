@@ -109,6 +109,7 @@ export default function LiveShow() {
   const giveyChannelStatusRef = useRef("INIT");
   const giveyLastPayloadAtRef = useRef(0);
   const lastHandledWinnerGiveyIdRef = useRef(null);
+  const bannerTimeoutRef = useRef(null);
   const carouselRef = useRef(null);
   const lastSalesCountRef = useRef(null);
 
@@ -399,9 +400,15 @@ export default function LiveShow() {
         .maybeSingle();
 
       setWinnerDisplayName(userData?.display_name ?? "Winner");
+      if (bannerTimeoutRef.current) {
+        clearTimeout(bannerTimeoutRef.current);
+      }
+
       setShowGiveyWinnerBanner(true);
-      setTimeout(() => {
+
+      bannerTimeoutRef.current = setTimeout(() => {
         setShowGiveyWinnerBanner(false);
+        bannerTimeoutRef.current = null;
       }, 3000);
     } else {
       // CRITICAL FIX — clear stale winner state
@@ -469,14 +476,6 @@ export default function LiveShow() {
             const name = payload.new?.winner_name ?? null;
             lastHandledWinnerGiveyIdRef.current = payload.new?.id ?? null;
             setWinnerDisplayName(name);
-
-            if (name) {
-              setShowGiveyWinnerBanner(true);
-
-              setTimeout(() => {
-                setShowGiveyWinnerBanner(false);
-              }, 3000);
-            }
           } else if (status === "expired") {
             setActiveGivey(null);
             setLatestGivey(payload.new);
