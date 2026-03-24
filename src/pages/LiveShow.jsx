@@ -389,6 +389,9 @@ export default function LiveShow() {
     setLatestGivey(data ?? null);
 
     if (data?.status === "winner_selected" && data?.winner_user_id) {
+      if (data.id === lastHandledWinnerGiveyIdRef.current) return;
+      lastHandledWinnerGiveyIdRef.current = data.id;
+
       const { data: userData } = await supabase
         .from("users")
         .select("display_name")
@@ -396,6 +399,10 @@ export default function LiveShow() {
         .maybeSingle();
 
       setWinnerDisplayName(userData?.display_name ?? "Winner");
+      setShowGiveyWinnerBanner(true);
+      setTimeout(() => {
+        setShowGiveyWinnerBanner(false);
+      }, 3000);
     } else {
       // CRITICAL FIX — clear stale winner state
       setWinnerDisplayName(null);
