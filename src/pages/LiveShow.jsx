@@ -108,6 +108,7 @@ export default function LiveShow() {
   const activeGiveyRef = useRef(null);
   const giveyChannelStatusRef = useRef("INIT");
   const giveyLastPayloadAtRef = useRef(0);
+  const lastHandledWinnerGiveyIdRef = useRef(null);
   const carouselRef = useRef(null);
   const lastSalesCountRef = useRef(null);
 
@@ -436,6 +437,7 @@ export default function LiveShow() {
           const status = payload.new.status;
           if (status === "active") {
             // New givey starting — clear previous winner state
+            lastHandledWinnerGiveyIdRef.current = null;
             setLatestGivey(null);
             setWinnerDisplayName(null);
             setShowGiveyWinnerBanner(false);
@@ -452,10 +454,13 @@ export default function LiveShow() {
               return;
             }
 
+            if (payload.new?.id === lastHandledWinnerGiveyIdRef.current) return;
+
             setActiveGivey(null);
             setLatestGivey(payload.new);
 
             const name = payload.new?.winner_name ?? null;
+            lastHandledWinnerGiveyIdRef.current = payload.new?.id ?? null;
             setWinnerDisplayName(name);
 
             if (name) {
