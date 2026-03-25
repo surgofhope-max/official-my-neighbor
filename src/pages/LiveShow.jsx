@@ -553,13 +553,13 @@ export default function LiveShow() {
 
       return {
         giveyId: latestGivey.id,
-        winnerName: winnerDisplayName || latestGivey.winner_name || "Winner",
+        winnerName: latestGivey.winner_name || "Winner",
       };
     })();
 
     void bannerTick;
     return banner;
-  }, [latestGivey, winnerDisplayName, bannerTick]);
+  }, [latestGivey, bannerTick]);
 
   async function handleEnterGivey() {
     if (!show?.id || !activeGivey?.id) return;
