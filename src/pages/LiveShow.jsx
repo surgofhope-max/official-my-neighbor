@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { supabase } from "@/lib/supabase/supabaseClient";
 import { useQuery } from "@tanstack/react-query";
 import { getProductById } from "@/api/products";
@@ -101,15 +101,13 @@ export default function LiveShow() {
   const [giveyTimeLeft, setGiveyTimeLeft] = useState(null);
   const [latestGivey, setLatestGivey] = useState(null);
   const [winnerDisplayName, setWinnerDisplayName] = useState(null);
-  const [showGiveyWinnerBanner, setShowGiveyWinnerBanner] = useState(false);
+  const [bannerTick, setBannerTick] = useState(0);
   // Givey expiration is server-authoritative.
   // Finalization is handled by the cron → finalize-expired-giveys edge function.
   // Clients must never trigger finalize_givey_event.
   const activeGiveyRef = useRef(null);
   const giveyChannelStatusRef = useRef("INIT");
   const giveyLastPayloadAtRef = useRef(0);
-  const lastHandledWinnerGiveyIdRef = useRef(null);
-  const bannerTimeoutRef = useRef(null);
   const carouselRef = useRef(null);
   const lastSalesCountRef = useRef(null);
 
@@ -390,9 +388,6 @@ export default function LiveShow() {
     setLatestGivey(data ?? null);
 
     if (data?.status === "winner_selected" && data?.winner_user_id) {
-      if (data.id === lastHandledWinnerGiveyIdRef.current) return;
-      lastHandledWinnerGiveyIdRef.current = data.id;
-
       const { data: userData } = await supabase
         .from("users")
         .select("display_name")
@@ -400,20 +395,9 @@ export default function LiveShow() {
         .maybeSingle();
 
       setWinnerDisplayName(userData?.display_name ?? "Winner");
-      if (bannerTimeoutRef.current) {
-        clearTimeout(bannerTimeoutRef.current);
-      }
-
-      setShowGiveyWinnerBanner(true);
-
-      bannerTimeoutRef.current = setTimeout(() => {
-        setShowGiveyWinnerBanner(false);
-        bannerTimeoutRef.current = null;
-      }, 3000);
     } else {
       // CRITICAL FIX — clear stale winner state
       setWinnerDisplayName(null);
-      setShowGiveyWinnerBanner(false);
     }
   }, [show?.id]);
 
@@ -451,10 +435,7 @@ export default function LiveShow() {
           const status = payload.new.status;
           if (status === "active") {
             // New givey starting — clear previous winner state
-            lastHandledWinnerGiveyIdRef.current = null;
             setLatestGivey(null);
-            setWinnerDisplayName(null);
-            setShowGiveyWinnerBanner(false);
 
             setActiveGivey(payload.new);
           } else if (status === "winner_selected") {
@@ -468,14 +449,8 @@ export default function LiveShow() {
               return;
             }
 
-            if (payload.new?.id === lastHandledWinnerGiveyIdRef.current) return;
-
             setActiveGivey(null);
             setLatestGivey(payload.new);
-
-            const name = payload.new?.winner_name ?? null;
-            lastHandledWinnerGiveyIdRef.current = payload.new?.id ?? null;
-            setWinnerDisplayName(name);
           } else if (status === "expired") {
             setActiveGivey(null);
             setLatestGivey(payload.new);
@@ -508,7 +483,7 @@ export default function LiveShow() {
 
     const interval = setInterval(async () => {
       if (giveyChannelStatusRef.current !== "SUBSCRIBED") return;
-      const hasStaleWinnerUi = !!winnerDisplayName || showGiveyWinnerBanner;
+      const hasStaleWinnerUi = !!winnerDisplayName;
       if (!activeGivey && !hasStaleWinnerUi) return;
       if (Date.now() - giveyLastPayloadAtRef.current <= 8000) return;
 
@@ -539,6 +514,52 @@ export default function LiveShow() {
 
     return () => clearInterval(interval);
   }, [activeGivey]);
+
+  useEffect(() => {
+    if (!latestGivey?.ended_at || latestGivey.status !== "winner_selected") return undefined;
+    let rafId;
+    let cancelled = false;
+    const loop = () => {
+      if (cancelled) return;
+      const endedAt = new Date(latestGivey.ended_at).getTime();
+      const diff = Date.now() - endedAt;
+      setBannerTick((x) => x + 1);
+      if (diff < 3000) {
+        rafId = requestAnimationFrame(loop);
+      }
+    };
+    rafId = requestAnimationFrame(loop);
+    return () => {
+      cancelled = true;
+      if (rafId) cancelAnimationFrame(rafId);
+    };
+  }, [latestGivey?.id, latestGivey?.status, latestGivey?.ended_at]);
+
+  const giveyWinnerBanner = useMemo(() => {
+    const now = Date.now();
+
+    const banner = (() => {
+      if (!latestGivey) return null;
+
+      if (latestGivey.status !== "winner_selected") return null;
+
+      if (!latestGivey.ended_at) return null;
+
+      const endedAt = new Date(latestGivey.ended_at).getTime();
+
+      const diff = now - endedAt;
+
+      if (diff < 0 || diff > 3000) return null;
+
+      return {
+        giveyId: latestGivey.id,
+        winnerName: winnerDisplayName || latestGivey.winner_name || "Winner",
+      };
+    })();
+
+    void bannerTick;
+    return banner;
+  }, [latestGivey, winnerDisplayName, bannerTick]);
 
   async function handleEnterGivey() {
     if (!show?.id || !activeGivey?.id) return;
@@ -1137,13 +1158,6 @@ export default function LiveShow() {
 
   if (isLoadingAuth) return authLoadingUI;
 
-  const WinnerBanner =
-    !activeGivey && showGiveyWinnerBanner && winnerDisplayName && (
-      <div className="fixed top-24 left-1/2 -translate-x-1/2 z-[9999] bg-green-600 text-white px-6 py-3 rounded-xl shadow-lg">
-        Winner: {winnerDisplayName}
-      </div>
-    );
-
   const GiveyEntryBanner = activeGivey && (
     <div
       style={{
@@ -1198,7 +1212,7 @@ export default function LiveShow() {
       <GiviTracker type="show" id={showId} />
 
       {/* GIVI Winner Banner - Gated by feature flag */}
-      {FEATURES.givi && !showGiveyWinnerBanner && (
+      {FEATURES.givi && !giveyWinnerBanner && (
         <GIVIWinnerBanner
           show={showWinnerBanner}
           winnerName={activeGIVI?.winner_names?.[0]}
@@ -1233,7 +1247,11 @@ export default function LiveShow() {
       {/* Pickup Instructions Bubble */}
       <PickupInstructionsBubble pickupInstructions={show.pickup_instructions} isIOS={isIOS} />
 
-      {WinnerBanner}
+      {giveyWinnerBanner && (
+        <div className="fixed top-24 left-1/2 -translate-x-1/2 z-[9999] bg-green-600 text-white px-6 py-3 rounded-xl shadow-lg">
+          Winner: {giveyWinnerBanner.winnerName}
+        </div>
+      )}
       {GiveyEntryBanner}
 
       {/* MOBILE VIEW - Original Layout */}
